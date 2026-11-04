@@ -77,6 +77,10 @@ class Document {
   [[nodiscard]] std::string_view text_data(NodeId id) const;
   [[nodiscard]] std::span<const Attribute> attributes(NodeId id) const;
   [[nodiscard]] std::string_view attribute(NodeId id, std::string_view name) const;
+  /// True when the attribute is present even with an empty value (`<input checked>`).
+  [[nodiscard]] bool has_attribute(NodeId id, std::string_view name) const;
+  /// Removes `name` from the element's attribute list (no-op when absent).
+  void remove_attribute(NodeId id, std::string_view name);
   [[nodiscard]] bool has_class(NodeId id, std::string_view class_name) const;
 
   [[nodiscard]] NodeId parent(NodeId id) const;

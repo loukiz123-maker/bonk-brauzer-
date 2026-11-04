@@ -69,6 +69,113 @@ int parse_font_weight(std::string_view text) {
   return static_cast<int>(std::clamp(number, 100.0f, 900.0f));
 }
 
+namespace {
+
+/// `justify-content: space-between` etc. Unknown keywords fall back to flex-start.
+JustifyContent parse_justify_content(std::string_view value) {
+  if (detail::equals_keyword(value, "center")) return JustifyContent::Center;
+  if (detail::equals_keyword(value, "flex-end") || detail::equals_keyword(value, "end")) return JustifyContent::FlexEnd;
+  if (detail::equals_keyword(value, "space-between")) return JustifyContent::SpaceBetween;
+  if (detail::equals_keyword(value, "space-around")) return JustifyContent::SpaceAround;
+  if (detail::equals_keyword(value, "space-evenly")) return JustifyContent::SpaceEvenly;
+  return JustifyContent::FlexStart;
+}
+
+AlignContent parse_align_content(std::string_view value) {
+  if (detail::equals_keyword(value, "center")) return AlignContent::Center;
+  if (detail::equals_keyword(value, "flex-end") || detail::equals_keyword(value, "end")) return AlignContent::FlexEnd;
+  if (detail::equals_keyword(value, "stretch")) return AlignContent::Stretch;
+  if (detail::equals_keyword(value, "space-between")) return AlignContent::SpaceBetween;
+  if (detail::equals_keyword(value, "space-around")) return AlignContent::SpaceAround;
+  if (detail::equals_keyword(value, "space-evenly")) return AlignContent::SpaceEvenly;
+  return AlignContent::FlexStart;
+}
+
+/// Gap accepts a length without units only as 0 ("gap: 0").
+bool parse_gap_value(std::string_view text, float& out) {
+  const std::string_view word = detail::trim_view(text);
+  if (word == "0") {
+    out = 0.0f;
+    return true;
+  }
+  css::Length length;
+  if (!detail::parse_length_value(word, length)) return false;
+  if (!length.is_absolute()) return false;  // percentage gaps need the container width; unsupported
+  out = detail::absolute_to_px(length);
+  return true;
+}
+
+bool parse_number_value(std::string_view text, float& out) {
+  const std::string_view word = detail::trim_view(text);
+  if (word.empty()) return false;
+  // Keep the buffer alive: `end` points into it, so a temporary would dangle.
+  const std::string text_copy(word);
+  char* end = nullptr;
+  const double value = std::strtod(text_copy.c_str(), &end);
+  if (end == nullptr || *end != '\0') return false;
+  out = static_cast<float>(value);
+  return true;
+}
+
+/// "1fr 2fr 200px auto" / "repeat(3, 1fr)" -> track list.
+std::vector<GridTrack> parse_grid_tracks(std::string_view value) {
+  std::vector<GridTrack> tracks;
+  const std::string_view text = detail::trim_view(value);
+  if (text.empty() || detail::equals_keyword(text, "none")) return tracks;
+
+  // repeat(N, <track-list>) — expanded before parsing the individual tracks.
+  std::string expanded;
+  std::string_view rest = text;
+  while (!rest.empty()) {
+    const std::size_t repeat_at = rest.find("repeat(");
+    if (repeat_at == std::string_view::npos) {
+      expanded.append(rest);
+      break;
+    }
+    expanded.append(rest.substr(0, repeat_at));
+    const std::size_t close = rest.find(')', repeat_at);
+    if (close == std::string_view::npos) break;
+    const std::string inner(rest.substr(repeat_at + 7, close - repeat_at - 7));
+    const std::size_t comma = inner.find(',');
+    if (comma == std::string::npos) break;
+    const int count = std::atoi(inner.substr(0, comma).c_str());
+    const std::string pattern = inner.substr(comma + 1);
+    for (int i = 0; i < std::max(0, std::min(count, 32)); ++i) {
+      expanded += ' ';
+      expanded += pattern;
+    }
+    rest = rest.substr(close + 1);
+  }
+
+  for (const std::string_view piece : detail::split_top_level(expanded, ' ')) {
+    const std::string_view word = detail::trim_view(piece);
+    if (word.empty()) continue;
+    GridTrack track;
+    if (detail::equals_keyword(word, "auto")) {
+      track.unit = GridTrack::Unit::Auto;
+    } else if (word.size() > 2 && word.substr(word.size() - 2) == "fr") {
+      track.unit = GridTrack::Unit::Fr;
+      track.value = std::strtof(std::string(word.substr(0, word.size() - 2)).c_str(), nullptr);
+    } else {
+      css::Length length;
+      if (!detail::parse_length_value(word, length)) continue;
+      if (length.unit == css::Length::Unit::Percent) {
+        track.unit = GridTrack::Unit::Percent;
+        track.value = length.value;
+      } else if (length.is_absolute()) {
+        track.unit = GridTrack::Unit::Px;
+        track.value = detail::absolute_to_px(length);
+      } else {
+        track.unit = GridTrack::Unit::Auto;
+      }
+    }
+    tracks.push_back(track);
+  }
+  return tracks;
+}
+
+}  // namespace
+
 class StyleComputer {
  public:
   StyleComputer(const dom::Document& document, float viewport_width, Diagnostics* diagnostics)
@@ -393,7 +500,8 @@ class StyleComputer {
       if (parse_color(value, color)) style.border_color = color;
       return;
     }
-    if (property == "width" || property == "height" || property == "min-height" || property == "min-width") {
+    if (property == "width" || property == "height" || property == "min-height" || property == "min-width" ||
+        property == "max-width") {
       Length length;
       if (!detail::parse_length_value(value, length)) return;
       if (property == "width") {
@@ -402,11 +510,139 @@ class StyleComputer {
         style.height = length;
       } else if (property == "min-height") {
         style.min_height = detail::absolute_to_px(length);
+      } else if (property == "min-width") {
+        style.min_width = detail::absolute_to_px(length);
+      } else if (property == "max-width") {
+        style.max_width = detail::absolute_to_px(length);
       }
       return;
     }
     if (property == "list-style" || property == "list-style-type") {
       style.list_item = true;
+      return;
+    }
+    // --- flexbox -----------------------------------------------------------
+    if (property == "flex-direction") {
+      if (detail::equals_keyword(value, "row")) style.flex_direction = FlexDirection::Row;
+      else if (detail::equals_keyword(value, "row-reverse")) style.flex_direction = FlexDirection::RowReverse;
+      else if (detail::equals_keyword(value, "column")) style.flex_direction = FlexDirection::Column;
+      else if (detail::equals_keyword(value, "column-reverse")) style.flex_direction = FlexDirection::ColumnReverse;
+      return;
+    }
+    if (property == "flex-wrap") {
+      if (detail::equals_keyword(value, "nowrap")) style.flex_wrap = FlexWrap::NoWrap;
+      else if (detail::equals_keyword(value, "wrap")) style.flex_wrap = FlexWrap::Wrap;
+      else if (detail::equals_keyword(value, "wrap-reverse")) style.flex_wrap = FlexWrap::WrapReverse;
+      return;
+    }
+    if (property == "flex-flow") {
+      for (const std::string_view piece : detail::split_top_level(value, ' ')) {
+        const std::string_view word = detail::trim_view(piece);
+        if (word.empty()) continue;
+        if (detail::equals_keyword(word, "row")) style.flex_direction = FlexDirection::Row;
+        else if (detail::equals_keyword(word, "row-reverse")) style.flex_direction = FlexDirection::RowReverse;
+        else if (detail::equals_keyword(word, "column")) style.flex_direction = FlexDirection::Column;
+        else if (detail::equals_keyword(word, "column-reverse")) style.flex_direction = FlexDirection::ColumnReverse;
+        else if (detail::equals_keyword(word, "wrap")) style.flex_wrap = FlexWrap::Wrap;
+        else if (detail::equals_keyword(word, "nowrap")) style.flex_wrap = FlexWrap::NoWrap;
+      }
+      return;
+    }
+    if (property == "justify-content") {
+      style.justify_content = parse_justify_content(value);
+      return;
+    }
+    if (property == "align-items") {
+      if (detail::equals_keyword(value, "stretch")) style.align_items = AlignItems::Stretch;
+      else if (detail::equals_keyword(value, "flex-start") || detail::equals_keyword(value, "start")) style.align_items = AlignItems::FlexStart;
+      else if (detail::equals_keyword(value, "center")) style.align_items = AlignItems::Center;
+      else if (detail::equals_keyword(value, "flex-end") || detail::equals_keyword(value, "end")) style.align_items = AlignItems::FlexEnd;
+      return;
+    }
+    if (property == "align-content") {
+      style.align_content = parse_align_content(value);
+      return;
+    }
+    if (property == "gap" || property == "grid-gap") {
+      std::vector<std::string_view> pieces = detail::split_top_level(value, ' ');
+      float first = 0.0f;
+      float second = 0.0f;
+      if (parse_gap_value(pieces.empty() ? value : pieces[0], first)) {
+        second = first;
+        if (pieces.size() > 1) (void)parse_gap_value(pieces[1], second);
+        style.row_gap = first;
+        style.column_gap = second;
+        style.gap = first;  // flex containers use one value
+      }
+      return;
+    }
+    if (property == "row-gap" || property == "grid-row-gap") {
+      float gap_px = 0.0f;
+      if (parse_gap_value(value, gap_px)) style.row_gap = gap_px;
+      return;
+    }
+    if (property == "column-gap" || property == "grid-column-gap") {
+      float gap_px = 0.0f;
+      if (parse_gap_value(value, gap_px)) {
+        style.column_gap = gap_px;
+        style.gap = gap_px;
+      }
+      return;
+    }
+    if (property == "flex-grow") {
+      float grow = 0.0f;
+      if (parse_number_value(value, grow)) style.flex_grow = std::max(0.0f, grow);
+      return;
+    }
+    if (property == "flex-shrink") {
+      float shrink = 1.0f;
+      if (parse_number_value(value, shrink)) style.flex_shrink = std::max(0.0f, shrink);
+      return;
+    }
+    if (property == "flex-basis") {
+      Length basis;
+      if (detail::equals_keyword(value, "auto")) {
+        style.flex_basis = Length::auto_value();
+      } else if (detail::parse_length_value(value, basis)) {
+        style.flex_basis = basis;
+      }
+      return;
+    }
+    if (property == "flex") {
+      // `flex: <grow> [<shrink>] [<basis>]`, `flex: auto`, `flex: none`, `flex: 1 1 0%`.
+      if (detail::equals_keyword(value, "auto")) {
+        style.flex_grow = 1.0f;
+        style.flex_shrink = 1.0f;
+        style.flex_basis = Length::auto_value();
+      } else if (detail::equals_keyword(value, "none")) {
+        style.flex_grow = 0.0f;
+        style.flex_shrink = 0.0f;
+        style.flex_basis = Length::auto_value();
+      } else {
+        std::vector<std::string_view> pieces = detail::split_top_level(value, ' ');
+        std::size_t number_count = 0;
+        for (const std::string_view piece : pieces) {
+          const std::string_view word = detail::trim_view(piece);
+          if (word.empty()) continue;
+          float number = 0.0f;
+          if (number_count < 2 && parse_number_value(word, number)) {
+            if (number_count == 0) style.flex_grow = std::max(0.0f, number);
+            else style.flex_shrink = std::max(0.0f, number);
+            ++number_count;
+            continue;
+          }
+          Length basis;
+          if (detail::equals_keyword(word, "auto")) style.flex_basis = Length::auto_value();
+          else if (detail::parse_length_value(word, basis)) style.flex_basis = basis;
+        }
+      }
+      return;
+    }
+    // --- grid --------------------------------------------------------------
+    if (property == "grid-template-columns" || property == "grid-template-rows") {
+      std::vector<GridTrack> tracks = parse_grid_tracks(value);
+      if (property == "grid-template-columns") style.grid_columns = std::move(tracks);
+      else style.grid_rows = std::move(tracks);
       return;
     }
     // Unknown or unsupported property: silently ignored, exactly like a browser

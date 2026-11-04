@@ -1,0 +1,24 @@
+<!doctype html>
+<html><head><title>flex</title>
+<style>
+ body { margin: 0; font-family: sans-serif; }
+ .nav { display: flex; justify-content: space-between; align-items: center;
+        background: #203040; color: #ffffff; padding: 12px 20px; }
+ .nav a { color: #ffffff; margin-right: 16px; }
+ .cards { display: flex; gap: 12px; padding: 16px; }
+ .card { flex: 1; border: 1px solid #999999; padding: 10px; }
+ .grid { display: grid; grid-template-columns: 1fr 2fr 1fr; gap: 10px; padding: 16px; }
+ .grid > div { border: 1px solid #4488aa; padding: 8px; }
+</style></head>
+<body>
+  <div class="nav"><span>Bonk</span><span><a>Docs</a><a>Source</a><a>About</a></span></div>
+  <div class="cards">
+    <div class="card">first card</div>
+    <div class="card">second card</div>
+    <div class="card">third card</div>
+  </div>
+  <div class="grid">
+    <div>one</div><div>two (wider)</div><div>three</div>
+    <div>four</div><div>five</div><div>six</div>
+  </div>
+</body></html>

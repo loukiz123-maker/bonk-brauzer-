@@ -16,7 +16,7 @@ head, title, meta, link, base, script, style, template, noscript {
   display: none;
 }
 span, a, b, i, u, s, em, strong, code, small, big, sub, sup, label, abbr,
-cite, q, mark, time, font, br, img, input, button, select, textarea {
+cite, q, mark, time, font, br, img {
   display: inline;
 }
 
@@ -102,6 +102,43 @@ hr {
 }
 img {
   display: inline-block;
+}
+/* Form controls: atomic inline-blocks with a light chrome, so text typed into
+   them (materialized from value/checked attributes by the bindings) has a box. */
+input, select, textarea, button {
+  display: inline-block;
+  border-width: 1px;
+  border-color: #767676;
+  background-color: #ffffff;
+  color: #000000;
+  padding: 2px 4px;
+  margin: 2px 0 6px 0;
+  min-width: 150px;
+  min-height: 18px;
+}
+label {
+  color: #333333;
+}
+textarea {
+  min-height: 56px;
+}
+select {
+  min-width: 90px;
+}
+input[type="hidden"] {
+  display: none;
+}
+input[type="checkbox"], input[type="radio"] {
+  min-width: 13px;
+  min-height: 13px;
+  padding: 0;
+}
+input[type="submit"], input[type="button"], input[type="reset"], button {
+  min-width: 84px;
+  background-color: #e8e8e8;
+}
+option {
+  display: none;
 }
 small {
   font-size: 0.83em;

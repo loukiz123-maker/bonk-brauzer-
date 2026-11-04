@@ -1,0 +1,74 @@
+<html>
+<head>
+<title>Forms demo</title>
+<style>
+  body { margin: 0; font-family: sans-serif; background: #f4f5f7; color: #1c2430; }
+  .page { padding: 24px 28px; }
+  h1 { font-size: 24px; margin: 0 0 4px 0; }
+  .lead { margin: 0 0 20px 0; color: #55606e; }
+  fieldset { border: 1px solid #c9ced6; background: #ffffff; padding: 14px 16px; margin: 0 0 18px 0; }
+  legend { font-weight: 700; padding: 0 6px; }
+  label { display: block; margin: 10px 0 3px 0; font-size: 13px; color: #3a4452; }
+  .row { display: flex; gap: 14px; }
+  .row > div { flex: 1; }
+  .note { font-size: 12px; color: #6b7280; margin-top: 6px; }
+  #state { background: #eef2ff; border: 1px solid #c7d2fe; padding: 10px 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<div class="page">
+  <h1>Bonk Brauzer — forms &amp; storage</h1>
+  <p class="lead">Everything below is drawn by the engine: styled inline-block controls, a select, a textarea and a submit button.</p>
+
+  <form id="signup" action="/welcome" method="get">
+    <fieldset>
+      <legend>Account</legend>
+      <div class="row">
+        <div>
+          <label for="user">User name</label>
+          <input id="user" type="text" name="user" value="bonk" style="width: 220px">
+        </div>
+        <div>
+          <label for="email">E-mail</label>
+          <input id="email" type="text" name="email" value="hi@example.com" style="width: 260px">
+        </div>
+      </div>
+      <label for="pass">Password</label>
+      <input id="pass" type="password" name="pass" value="hunter22" style="width: 220px">
+      <label for="role">Role</label>
+      <select id="role" name="role">
+        <option value="dev">Developer</option>
+        <option value="ops" selected>Operations</option>
+        <option value="qa">Quality</option>
+      </select>
+      <label for="bio">Short bio</label>
+      <textarea id="bio" name="bio" style="width: 340px">Draws boxes; likes pixels.</textarea>
+      <label><input type="checkbox" name="news" checked> Send me the release notes</label>
+      <label><input type="radio" name="plan" checked> Free plan</label>
+      <label><input type="radio" name="plan"> Paid plan</label>
+      <div class="note">Submit sends a GET request with the encoded form body.</div>
+      <input type="submit" value="Create account">
+    </fieldset>
+  </form>
+
+  <fieldset>
+    <legend>Storage state</legend>
+    <div id="state">…</div>
+  </fieldset>
+</div>
+<!-- The storage panel is filled by the engine own JS: localStorage persists only
+     when the browser runs with --profile DIR. -->
+<script>
+  var visits = Number(localStorage.getItem('visits') || '0') + 1;
+  localStorage.setItem('visits', String(visits));
+  var form = document.getElementById('signup');
+  form.addEventListener('submit', function (event) {
+    if (document.getElementById('user').value === '') event.preventDefault();
+  });
+  document.getElementById('state').textContent =
+    'localStorage.visits = ' + localStorage.getItem('visits') +
+    ' | form.elements.length = ' + form.elements.length +
+    ' | user.value = ' + document.getElementById('user').value;
+</script>
+</body>
+</html>

@@ -1,0 +1,32 @@
+<html><head><title>canvas</title>
+<style> body { margin: 12px; font-family: sans-serif } canvas { border: 1px solid #888 } </style>
+</head><body>
+<h3>Canvas 2D</h3>
+<canvas id="c" width="320" height="160"></canvas>
+<script>
+  var ctx = document.getElementById('c').getContext('2d');
+  ctx.fillStyle = '#1f6feb';
+  ctx.fillRect(0, 0, 320, 40);
+  ctx.fillStyle = '#ffffff';
+  ctx.fillText('canvas 2d in bonk', 12, 28);
+
+  ctx.fillStyle = '#f0b400';
+  for (var i = 0; i < 6; i++) ctx.fillRect(20 + i * 45, 60, 30, 30);
+
+  ctx.strokeStyle = '#e5533d';
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+  ctx.moveTo(20, 140);
+  ctx.lineTo(120, 100);
+  ctx.lineTo(220, 145);
+  ctx.lineTo(300, 105);
+  ctx.stroke();
+
+  ctx.fillStyle = 'rgba(40,160,90,0.75)';
+  ctx.beginPath();
+  ctx.moveTo(240, 55);
+  ctx.lineTo(300, 65);
+  ctx.lineTo(270, 95);
+  ctx.fill();
+</script>
+</body></html>

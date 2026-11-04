@@ -64,7 +64,7 @@ int run_js(const bonk::CliOptions& options) {
 
 int run_view(const bonk::CliOptions& options) {
   bonk::shell::Session session(static_cast<float>(options.width), static_cast<float>(options.height),
-                               options.font_path);
+                               options.font_path, options.profile_dir);
   const bonk::Status navigated = session.navigate(options.input);
   if (navigated.is_error()) {
     std::fprintf(stderr, "bonk: %s\n", navigated.error().to_string().c_str());

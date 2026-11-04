@@ -3,10 +3,10 @@
 // Implemented: DNS via getaddrinfo, TCP with connect/send/receive timeouts,
 // request serialisation, status line + header parsing, Content-Length bodies,
 // chunked transfer decoding, `Connection: close`, redirect following (301/302/
-// 303/307/308, max 5 hops, relative Location resolution).
-// Not implemented yet (explicit errors, never silent hangs): HTTPS (TLS is the
-// next net milestone), gzip/deflate content encoding (we ask for `identity`),
-// keep-alive connection pooling, HTTP/2.
+// 303/307/308, max 5 hops, relative Location resolution), gzip/deflate decoding,
+// HTTPS through our own TLS 1.3 client, cookies (see net/cookie.hpp), and
+// request bodies for form POSTs.
+// Not implemented yet: keep-alive connection pooling, HTTP/2.
 #pragma once
 
 #include <string>
@@ -16,6 +16,7 @@
 
 #include "bonk/core/diag.hpp"
 #include "bonk/core/result.hpp"
+#include "bonk/net/cookie.hpp"
 #include "bonk/net/url.hpp"
 
 namespace bonk::net {
@@ -24,6 +25,11 @@ struct HttpRequest {
   Url url;
   std::string method = "GET";
   std::vector<std::pair<std::string, std::string>> headers;
+  /// Request body (form submissions, POST). Sent with Content-Length.
+  std::string body;
+  std::string content_type;
+  /// Optional cookie jar: sends stored cookies and records `Set-Cookie` replies.
+  CookieJar* cookie_jar = nullptr;
   int timeout_ms = 5000;
   int max_redirects = 5;
 };
@@ -45,6 +51,9 @@ struct HttpResponse {
 
 /// Full control version, used by tests and by `http_get`.
 [[nodiscard]] Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagnostics = nullptr);
+
+/// Serialises a request into the wire bytes (exposed for unit tests).
+[[nodiscard]] std::string build_request(const HttpRequest& request);
 
 /// Raw HTTP body decoding helpers (exposed for unit tests).
 [[nodiscard]] Result<std::string> decode_chunked(std::string_view body);

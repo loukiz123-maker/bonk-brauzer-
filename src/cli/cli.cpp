@@ -114,6 +114,11 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.font_path = args[++i];
       continue;
     }
+    if (arg == "--profile") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--profile requires a directory"));
+      options.profile_dir = args[++i];
+      continue;
+    }
     if (arg == "--css") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--css requires a path"));
       options.css_path = args[++i];
@@ -227,6 +232,7 @@ std::string cli_help_text() {
   out += "                    --screenshot out.png  render headlessly instead\n";
   out += "                    --scroll N            start scrolled down N pixels\n";
   out += "                    --click X,Y           click before screenshotting\n";
+  out += "                    --profile DIR         persist localStorage in DIR\n";
   out += "  js <file.js|code> run a script in the engine (own lexer, parser, interpreter)\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";

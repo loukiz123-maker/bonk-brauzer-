@@ -1,13 +1,15 @@
 // Bonk Brauzer — layout.
 //
-// Stage-2 scope, fully implemented: block formatting context (with vertical
-// margin collapsing), inline formatting context (line boxes, word wrapping,
-// text-align), box model with em/rem/%/auto resolution, list markers, and
-// inline-block images as atomic inlines.
+// Implemented: block formatting context (with vertical margin collapsing), inline
+// formatting context (line boxes, word wrapping, text-align), box model with
+// em/rem/%/auto resolution, list markers, inline-block images and canvases as
+// atomic inlines, and (stage 5) flexbox + grid containers.
 //
-// Not implemented yet (documented, stage 5): flexbox, grid, floats, absolute
-// positioning, tables, and bidirectional text. Elements with those properties
-// fall back to block/inline behaviour instead of disappearing.
+// Flexbox: row/column and their reverse, nowrap/wrap, justify-content, align-items,
+// gap, flex-grow/shrink/basis. Grid: explicit `grid-template-columns/rows` with
+// px/%/fr/auto and `repeat()`, auto-placement row by row, row/column gaps.
+// Not implemented yet: floats, absolute/fixed positioning, tables, bidi text,
+// grid areas / explicit placement (grid-column/grid-row).
 #pragma once
 
 #include <string>
@@ -65,9 +67,18 @@ struct Box {
   [[nodiscard]] float content_height() const noexcept { return content_box.height; }
 };
 
+/// A <canvas> bitmap provided by the bindings layer: layout treats the element as a
+/// replaced inline (like <img>) and paint blits the pixels.
+struct CanvasBitmap {
+  dom::NodeId node;
+  const image::Image* image = nullptr;
+};
+
 struct LayoutViewport {
   float width = 1024.0f;
   float height = 768.0f;
+  /// Canvas bitmaps for the page being laid out (may be null).
+  const std::vector<CanvasBitmap>* canvases = nullptr;
 };
 
 struct LayoutResult {

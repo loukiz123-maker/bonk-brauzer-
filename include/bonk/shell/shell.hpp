@@ -18,6 +18,8 @@
 #include "bonk/image/image.hpp"
 #include "bonk/js/js.hpp"
 #include "bonk/layout/layout.hpp"
+#include "bonk/net/cookie.hpp"
+#include "bonk/net/http.hpp"
 #include "bonk/paint/canvas.hpp"
 #include "bonk/paint/render.hpp"
 #include "bonk/text/font.hpp"
@@ -48,7 +50,9 @@ struct Tab {
 /// One tab's worth of state plus the engine objects for the page it shows.
 class Session {
  public:
-  explicit Session(float viewport_width, float viewport_height, std::string font_path = {});
+  /// `profile_dir` enables persistent storage (cookies live in memory only).
+  explicit Session(float viewport_width, float viewport_height, std::string font_path = {},
+                   std::string profile_dir = {});
   ~Session();
   Session(const Session&) = delete;
   Session& operator=(const Session&) = delete;
@@ -86,6 +90,16 @@ class Session {
   /// Maximum scroll offset that still shows content (0 when the page fits).
   [[nodiscard]] float max_scroll() const noexcept;
 
+  /// The page's DOM / script bindings (null before the first load).
+  [[nodiscard]] const dom::Document* document() const noexcept { return document_.get(); }
+  [[nodiscard]] bindings::Bindings* bindings() noexcept { return bindings_.get(); }
+
+  /// First box laid out for `node` (nullptr when the node is not rendered).
+  [[nodiscard]] const layout::Box* box_of(dom::NodeId node) const;
+
+  /// Cookies for the current browsing session (shared by every page in the tab).
+  [[nodiscard]] net::CookieJar& cookies() noexcept { return cookies_; }
+
   /// JavaScript side of the loaded page (empty until a page is loaded).
   [[nodiscard]] const std::vector<bindings::ScriptRun>& script_runs() const noexcept;
   [[nodiscard]] const std::vector<js::ConsoleEntry>& js_console() const noexcept;
@@ -93,13 +107,25 @@ class Session {
 
  private:
   Status load(std::string_view target, std::string_view base_for_relative);
+  /// Tail of `load`: builds document/CSS/JS objects for already-fetched HTML.
+  Status load_html(std::string html_bytes, std::string base, std::string display_url);
+  /// Sends a form to the network (POST) and renders the reply.
+  Status load_posted(const bindings::FormSubmission& submission, const std::string& action);
+  /// Fires `submit`, then navigates with GET (query string) or POST.
+  Status submit_form(const bindings::FormSubmission& submission);
+  /// Drains submissions queued by scripts; true when one was submitted.
+  bool drain_pending_submissions();
   Status rebuild_layout();
+  /// Re-reads `<title>` into the tab (scripts may change it after load).
+  void refresh_title();
   [[nodiscard]] std::string resolve_target(std::string_view target) const;
 
   float viewport_width_ = 1024.0f;
   float viewport_height_ = 768.0f;
   std::string font_path_;
   std::string font_name_;
+  std::string profile_dir_;
+  net::CookieJar cookies_;
 
   text::Font font_;
   Tab tab_;
@@ -110,6 +136,7 @@ class Session {
   std::unique_ptr<layout::LayoutResult> layout_;
   std::unique_ptr<js::Context> js_context_;
   std::unique_ptr<bindings::Bindings> bindings_;
+  std::vector<layout::CanvasBitmap> canvas_bitmaps_;
   std::size_t node_count_ = 0;
 };
 

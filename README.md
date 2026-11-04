@@ -8,7 +8,8 @@ Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 зависимостей — включая тест-фреймворк, inflate/PNG-кодек, парсер шрифтов, оконный backend
 (протокол X11 реализован напрямую, вместо SDL2/Xlib), **TLS 1.3 с собственной криптографией**
 (SHA-256, HMAC, HKDF, ChaCha20-Poly1305, X25519) и **JavaScript-движок со своим парсером
-и интерпретатором**.
+и интерпретатором**, flexbox и grid, Canvas 2D, формы с отправкой GET/POST,
+cookies и `localStorage`.
 
 ![Страница, отрисованная движком](docs/screenshot.png)
 
@@ -25,7 +26,7 @@ HTML был разобран, стилизован, разложен и раст
 | 3 | `shell`: сессия, история, скролл, клики + собственный X11-клиент (без Xlib/SDL) | **сделано ядро**, см. [`docs/STAGE-03.md`](docs/STAGE-03.md) |
 | 2b | `crypto` + `net::tls` + `x509` + gzip: настоящий `https://` | **сделано ядро**, см. [`docs/STAGE-02B.md`](docs/STAGE-02B.md) |
 | 4 | `js` (лексер, парсер, интерпретатор, встроенные объекты) + `bindings` (window/document/элементы/события) | **сделано ядро**, см. [`docs/STAGE-04.md`](docs/STAGE-04.md) |
-| 5 | flexbox/grid, Canvas 2D, формы, cookies, storage | — |
+| 5 | flexbox/grid, Canvas 2D, формы (GET/POST), cookies, storage | **сделано ядро**, см. [`docs/STAGE-05.md`](docs/STAGE-05.md) |
 | 6 | security, процесс на вкладку, devtools, оптимизация | — |
 | 7 | conformance: html5lib-tests, test262, WPT, Acid2 | — |
 
@@ -53,7 +54,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 271 юнит-тест
+$ make test               # 299 юнит-тестов
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
 $ make SAN=address,undefined test   # ASan + UBSan

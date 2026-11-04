@@ -51,7 +51,21 @@ struct Length {
   [[nodiscard]] std::string to_string() const;
 };
 
-enum class Display { Inline, Block, InlineBlock, Flex, ListItem, None, Table, TableRow, TableCell };
+enum class Display { Inline, Block, InlineBlock, Flex, Grid, ListItem, None, Table, TableRow, TableCell };
+
+// --- flexbox / grid (stage 5) -------------------------------------------------
+enum class FlexDirection { Row, RowReverse, Column, ColumnReverse };
+enum class FlexWrap { NoWrap, Wrap, WrapReverse };
+enum class JustifyContent { FlexStart, Center, FlexEnd, SpaceBetween, SpaceAround, SpaceEvenly };
+enum class AlignItems { Stretch, FlexStart, Center, FlexEnd };
+enum class AlignContent { FlexStart, Center, FlexEnd, Stretch, SpaceBetween, SpaceAround, SpaceEvenly };
+
+/// One explicit grid track: a length, a fraction of the free space, or auto.
+struct GridTrack {
+  enum class Unit { Px, Percent, Fr, Auto };
+  Unit unit = Unit::Auto;
+  float value = 0.0f;
+};
 enum class TextAlign { Left, Right, Center, Justify };
 enum class TextDecoration { None, Underline };
 
@@ -79,8 +93,30 @@ struct ComputedStyle {
   Length width = Length::auto_value();   // CSS initial value
   Length height = Length::auto_value();  // CSS initial value
   float min_height = 0.0f;
+  float min_width = 0.0f;   // content box
+  float max_width = -1.0f;  // -1 = none
   bool list_item = false;
   float opacity = 1.0f;
+
+  // Flexbox container / item properties.
+  FlexDirection flex_direction = FlexDirection::Row;
+  FlexWrap flex_wrap = FlexWrap::NoWrap;
+  JustifyContent justify_content = JustifyContent::FlexStart;
+  AlignItems align_items = AlignItems::Stretch;
+  AlignContent align_content = AlignContent::FlexStart;
+  float gap = 0.0f;          // `gap` / `row-gap` / `column-gap` (single value)
+  float flex_grow = 0.0f;
+  float flex_shrink = 1.0f;
+  Length flex_basis = Length::auto_value();
+
+  // Grid container properties (explicit tracks only; auto-placement row by row).
+  std::vector<GridTrack> grid_columns;
+  std::vector<GridTrack> grid_rows;
+  float row_gap = 0.0f;
+  float column_gap = 0.0f;
+
+  [[nodiscard]] bool is_flex_container() const noexcept { return display == Display::Flex; }
+  [[nodiscard]] bool is_grid_container() const noexcept { return display == Display::Grid; }
 
   [[nodiscard]] float effective_line_height() const noexcept {
     return line_height > 0.0f ? line_height : font_size * 1.2f;

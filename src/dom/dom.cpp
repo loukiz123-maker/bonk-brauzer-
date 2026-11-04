@@ -246,6 +246,24 @@ void Document::set_attribute(NodeId element, std::string_view name, std::string_
   node.attr_head = record;
 }
 
+void Document::remove_attribute(NodeId id, std::string_view name) {
+  if (!id.valid()) return;
+  Node& node = node_ref(id);
+  std::uint32_t previous = kNoNode;
+  for (std::uint32_t i = node.attr_head; i != kNoNode; i = attrs_[i].next) {
+    if (string_of(attrs_[i].name) != name) {
+      previous = i;
+      continue;
+    }
+    if (previous == kNoNode) {
+      node.attr_head = attrs_[i].next;
+    } else {
+      attrs_[previous].next = attrs_[i].next;
+    }
+    return;
+  }
+}
+
 void Document::append_text(NodeId parent_id, std::string_view text) {
   if (text.empty()) return;
   Node& parent = node_ref(parent_id);
@@ -289,6 +307,14 @@ std::string_view Document::attribute(NodeId id, std::string_view name) const {
     if (string_of(attrs_[i].name) == name) return string_of(attrs_[i].value);
   }
   return std::string_view{};
+}
+
+bool Document::has_attribute(NodeId id, std::string_view name) const {
+  if (!id.valid()) return false;
+  for (std::uint32_t i = node_ref(id).attr_head; i != kNoNode; i = attrs_[i].next) {
+    if (string_of(attrs_[i].name) == name) return true;
+  }
+  return false;
 }
 
 bool Document::has_class(NodeId id, std::string_view class_name) const {
