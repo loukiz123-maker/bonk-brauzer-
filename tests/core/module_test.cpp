@@ -48,7 +48,9 @@ BONK_TEST(module, stage_zero_only_core_is_done) {
 BONK_TEST(module, stages_one_and_two_are_in_progress) {
   for (const ModuleInfo& module : modules()) {
     if (module.stage == 1 || module.stage == 2) CHECK_EQ(module.status, ModuleStatus::InProgress);
-    if (module.stage >= 3) CHECK_EQ(module.status, ModuleStatus::Planned);
+    // Stage 3 started with the shell + X11 backend; everything later is still planned.
+    if (module.stage == 3 && module.id == "shell") CHECK_EQ(module.status, ModuleStatus::InProgress);
+    if (module.stage >= 4) CHECK_EQ(module.status, ModuleStatus::Planned);
   }
 }
 

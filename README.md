@@ -5,7 +5,8 @@ layout, свой растеризатор и (впереди) свой JavaScrip
 Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 
 Зависимости: **только стандартная библиотека C++20**. Сегодня в проекте ровно ноль внешних
-зависимостей — включая тест-фреймворк, inflate/PNG-кодек и парсер шрифтов.
+зависимостей — включая тест-фреймворк, inflate/PNG-кодек, парсер шрифтов и даже оконный
+backend (протокол X11 реализован напрямую, вместо SDL2/Xlib).
 
 ![Страница, отрисованная движком](docs/screenshot.png)
 
@@ -19,7 +20,8 @@ HTML был разобран, стилизован, разложен и раст
 | 0 | Каркас, сборка, CI, контракты, план | **готово** |
 | 1 | `net` (URL, HTTP/1.1), `html` (токенайзер + дерево), `dom` (узлы, `querySelector`) | **сделано ядро**, см. [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) |
 | 2 | `css` (селекторы, каскад), `text` (TrueType), `image` (inflate + PNG), `layout` (block/inline), `paint` (растеризация + PNG) | **сделано ядро** |
-| 3 | `shell`: окно, вкладки, адресная строка, клики, скролл | следующий |
+| 3 | `shell`: сессия, история, скролл, клики + собственный X11-клиент (без Xlib/SDL) | **сделано ядро**, см. [`docs/STAGE-03.md`](docs/STAGE-03.md) |
+| 2b | TLS 1.3 + gzip: `https://`-сайты (выбранный приоритет после этапа 3) | следующий |
 | 4 | `js` + `bindings`: интерактивность, события, `fetch` | — |
 | 5 | flexbox/grid, Canvas 2D, формы, cookies, storage | — |
 | 6 | security, процесс на вкладку, devtools, оптимизация | — |
@@ -49,7 +51,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 171 юнит-тест
+$ make test               # 187 юнит-тестов
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
 $ make SAN=address,undefined test   # ASan + UBSan
@@ -76,6 +78,8 @@ rendered tests/fixtures/sample.html -> page.png (900x640, nodes=70, css-rules=10
 ### Остальные команды
 
 ```console
+$ bonk view page.html         # открыть страницу в окне X11 (свой X11-клиент)
+$ bonk view page.html --screenshot view.png --scroll 120 --click 40,60   # headless
 $ bonk dom page.html          # разобранное DOM-дерево в консоль
 $ bonk fetch http://host/     # HTTP/1.1 GET: статус, заголовки, размер тела
 $ bonk modules --stage 2      # что входит в этап
@@ -98,9 +102,10 @@ include/bonk/          публичные заголовки по модулям
   image/               image (свой inflate RFC 1951/1950 + PNG-декодер, хранилище картинок)
   layout/              layout (block/inline, box model)
   paint/               canvas (RGBA8 + PNG/PPM), render (боксы → пиксели)
+  shell/               shell (сессия, история, скролл, клики), x11 (свой клиент X11-протокола)
   apps/                pipeline (HTML → PNG за один вызов), cli, main
 src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
-tests/                 свой фреймворк + 171 тест + tests/fixtures/
+tests/                 свой фреймворк + 187 тестов + tests/fixtures/
 docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
 .github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
 ```
@@ -112,6 +117,7 @@ docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, genera
 
 - [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, контракты, модель памяти, потоки.
 - [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) — что именно работает в сети/HTML/CSS/layout/paint и чего нет.
+- [`docs/STAGE-03.md`](docs/STAGE-03.md) — оболочка: сессия, навигация, скролл, клики и свой X11-протокол.
 - [`docs/STAGE-00.md`](docs/STAGE-00.md) — фундамент и инфраструктура.
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — этапы 0–7 с критериями выхода.
 - [`docs/modules.generated.md`](docs/modules.generated.md) — таблица модулей из кода.

@@ -17,6 +17,8 @@ struct RenderOptions {
   css::Color page_background{255, 255, 255, 255};
   /// Draws 1px outlines around every block box (debugging aid: `--debug-boxes`).
   bool debug_boxes = false;
+  /// Vertical scroll offset in CSS pixels; painted content is shifted up by this much.
+  float scroll_y = 0.0f;
 };
 
 void render_layout(Canvas& canvas, const layout::Box& root, const text::Font& font, const RenderOptions& options);

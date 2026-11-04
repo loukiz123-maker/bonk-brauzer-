@@ -10,7 +10,7 @@
 | `css` | 2 | in-progress | dom | Tokenizer, parser, selectors, cascade, inheritance, computed values |
 | `layout` | 2 | in-progress | css, dom, text | Box model, block/inline, floats, positioning, flexbox, grid |
 | `paint` | 2 | in-progress | layout, text | CPU rasterizer, images, clipping, stacking contexts, layers |
-| `shell` | 3 | planned | dom, paint, net | Window, tabs, address bar, history, bookmarks, downloads, settings |
+| `shell` | 3 | in-progress | dom, paint, net | Session/tab state, navigation, history, scrolling, clicks + own X11 client |
 | `js` | 4 | planned | core | Lexer, parser, bytecode, VM, GC, event loop, builtins |
 | `bindings` | 4 | planned | js, dom, net | window, document, console, fetch, XHR, storage, History, Canvas 2D |
 | `security` | 6 | planned | net, bindings, shell | SOP, CORS, CSP, mixed content, process-per-tab sandbox, HTTPS UI |

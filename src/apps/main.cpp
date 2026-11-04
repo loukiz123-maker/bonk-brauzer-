@@ -15,6 +15,9 @@
 #include "bonk/core/selftest.hpp"
 #include "bonk/core/version.hpp"
 #include "bonk/net/http.hpp"
+#include "bonk/shell/shell.hpp"
+#include "bonk/shell/x11.hpp"
+#include "bonk/paint/canvas.hpp"
 
 namespace {
 
@@ -25,6 +28,106 @@ int print_diagnostics(const bonk::Diagnostics& diagnostics) {
   const std::string formatted = bonk::format_diagnostics(diagnostics);
   std::fwrite(formatted.data(), 1, formatted.size(), stderr);
   return 0;
+}
+
+int run_view(const bonk::CliOptions& options) {
+  bonk::shell::Session session(static_cast<float>(options.width), static_cast<float>(options.height),
+                               options.font_path);
+  const bonk::Status navigated = session.navigate(options.input);
+  if (navigated.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", navigated.error().to_string().c_str());
+    return 1;
+  }
+  session.set_scroll(options.scroll);
+  if (options.click_x >= 0 && options.click_y >= 0) {
+    const bonk::shell::ClickOutcome outcome =
+        session.click(static_cast<float>(options.click_x), static_cast<float>(options.click_y));
+    if (outcome.followed_link) {
+      std::fprintf(stderr, "bonk: followed %s\n", outcome.href.c_str());
+    }
+  }
+
+  if (!options.screenshot.empty()) {
+    const bonk::Status written = session.render_to_png(options.screenshot);
+    if (written.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", written.error().to_string().c_str());
+      return 1;
+    }
+    std::printf("viewed %s -> %s (%dx%d, title=\"%s\", nodes=%zu, scroll=%.0f)\n", options.input.c_str(),
+                options.screenshot.c_str(), options.width, options.height, session.tab().title.c_str(),
+                session.node_count(), static_cast<double>(session.scroll_y()));
+    return 0;
+  }
+
+  if (!bonk::shell::x11::display_available()) {
+    std::fprintf(stderr,
+                 "bonk: no X11 display found ($DISPLAY is unset or the socket is missing).\n"
+                 "      Use `bonk view %s --screenshot out.png` for a headless render.\n",
+                 options.input.c_str());
+    return 1;
+  }
+
+  bonk::Result<std::unique_ptr<bonk::shell::x11::Window>> window =
+      bonk::shell::x11::Window::open(options.width, options.height, session.tab().title);
+  if (window.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", window.error().to_string().c_str());
+    return 1;
+  }
+
+  bonk::paint::Canvas canvas(options.width, options.height);
+  (void)session.render(canvas);
+  (void)window.value()->present(canvas);
+
+  for (;;) {
+    const bonk::shell::x11::Event event = window.value()->poll(500);
+    switch (event.type) {
+      case bonk::shell::x11::EventType::Close:
+        return 0;
+      case bonk::shell::x11::EventType::Expose:
+        (void)session.render(canvas);
+        (void)window.value()->present(canvas);
+        break;
+      case bonk::shell::x11::EventType::ButtonPress:
+        if (event.button == 4 || event.button == 5) {
+          session.scroll_by(event.button == 4 ? -60.0f : 60.0f);
+        } else if (event.button == 1) {
+          (void)session.click(static_cast<float>(event.x), static_cast<float>(event.y));
+        } else {
+          break;
+        }
+        (void)session.render(canvas);
+        (void)window.value()->present(canvas);
+        break;
+      case bonk::shell::x11::EventType::KeyPress:
+        switch (event.keysym) {
+          case 0xFF54:  // Down
+            session.scroll_by(40.0f);
+            break;
+          case 0xFF52:  // Up
+            session.scroll_by(-40.0f);
+            break;
+          case 0xFF56:  // Page_Down
+            session.scroll_by(static_cast<float>(options.height) * 0.9f);
+            break;
+          case 0xFF55:  // Page_Up
+            session.scroll_by(-static_cast<float>(options.height) * 0.9f);
+            break;
+          case 0xFF50:  // Home
+            session.set_scroll(0.0f);
+            break;
+          case 0xFF57:  // End
+            session.set_scroll(session.max_scroll());
+            break;
+          default:
+            break;
+        }
+        (void)session.render(canvas);
+        (void)window.value()->present(canvas);
+        break;
+      default:
+        break;
+    }
+  }
 }
 
 int run_render(const bonk::CliOptions& options) {
@@ -207,6 +310,9 @@ int main(int argc, char** argv) {
 
     case bonk::Command::DumpDom:
       return run_dump_dom(options);
+
+    case bonk::Command::View:
+      return run_view(options);
 
     case bonk::Command::Fetch:
       return run_fetch(options);

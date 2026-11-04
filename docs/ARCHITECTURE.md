@@ -167,6 +167,16 @@ const Image* ImageStore::find(std::string_view src) const;
 LayoutResult layout_document(const dom::Document&, const css::StyleMap&, const text::Font&,
                              const LayoutViewport&);
 
+// shell — этап 3
+shell::Session session(width, height);              // без окна: тестируется headless
+Status session.navigate("page.html");               // file:, http:, https: (пока ошибка)
+ClickOutcome session.click(x, y);                   // hit_test → <a href> → навигация
+session.render_to_png(path);                        // тот же кадр, что в окне
+
+// shell::x11 — свой клиент протокола X11 (без Xlib): Setup, CreateWindow, PutImage, события
+auto window = shell::x11::Window::open(w, h, title);
+window->present(canvas); window->poll(timeout_ms);
+
 // paint — этап 2
 void render_layout(Canvas&, const layout::Box& root, const text::Font&, const RenderOptions&);
 bool Canvas::write_png(std::string_view path) const;

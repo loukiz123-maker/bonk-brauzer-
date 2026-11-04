@@ -5,19 +5,28 @@
 namespace bonk::paint {
 namespace {
 
-paint::Rect to_paint_rect(const layout::Rect& rect) { return Rect{rect.x, rect.y, rect.width, rect.height}; }
+/// Adds the current scroll offset: everything below is painted in viewport space.
+struct Offset {
+  float x = 0.0f;
+  float y = 0.0f;
+};
 
-void paint_marker(Canvas& canvas, const layout::Box& box, const text::Font& font) {
-  if (!box.has_marker || box.style == nullptr) return;
-  const float baseline = box.border_box.y + box.style->font_size;
-  canvas.draw_text(font, "\xE2\x80\xA2", box.marker_x, baseline, box.style->font_size * 0.8f, box.style->color);
+paint::Rect to_paint_rect(const layout::Rect& rect, const Offset& offset) {
+  return Rect{rect.x + offset.x, rect.y + offset.y, rect.width, rect.height};
 }
 
-void paint_border(Canvas& canvas, const layout::Box& box) {
+void paint_marker(Canvas& canvas, const layout::Box& box, const text::Font& font, const Offset& offset) {
+  if (!box.has_marker || box.style == nullptr) return;
+  const float baseline = box.border_box.y + offset.y + box.style->font_size;
+  canvas.draw_text(font, "\xE2\x80\xA2", box.marker_x + offset.x, baseline, box.style->font_size * 0.8f,
+                   box.style->color);
+}
+
+void paint_border(Canvas& canvas, const layout::Box& box, const Offset& offset) {
   if (box.style == nullptr) return;
   const css::Color color = box.style->border_color;
   if (color.a == 0) return;
-  const Rect outer = to_paint_rect(box.border_box);
+  const Rect outer = to_paint_rect(box.border_box, offset);
   if (box.border[0] > 0.0f) canvas.fill_rect(Rect{outer.x, outer.y, outer.width, box.border[0]}, color);
   if (box.border[2] > 0.0f) {
     canvas.fill_rect(Rect{outer.x, outer.y + outer.height - box.border[2], outer.width, box.border[2]}, color);
@@ -28,35 +37,38 @@ void paint_border(Canvas& canvas, const layout::Box& box) {
   }
 }
 
-void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options) {
+void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
+               const Offset& offset) {
   switch (box.kind) {
     case layout::BoxKind::Block: {
       if (box.style != nullptr) {
         if (box.style->background_color.a > 0) {
-          canvas.fill_rect(to_paint_rect(box.border_box), box.style->background_color);
+          canvas.fill_rect(to_paint_rect(box.border_box, offset), box.style->background_color);
         }
-        paint_border(canvas, box);
-        paint_marker(canvas, box, font);
+        paint_border(canvas, box, offset);
+        paint_marker(canvas, box, font, offset);
         if (options.debug_boxes) {
-          canvas.stroke_rect(to_paint_rect(box.border_box), css::Color{255, 0, 200, 90}, 1.0f);
+          canvas.stroke_rect(to_paint_rect(box.border_box, offset), css::Color{255, 0, 200, 90}, 1.0f);
         }
       }
-      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options);
+      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
       return;
     }
     case layout::BoxKind::Text: {
       if (box.style == nullptr) return;
-      const float baseline = box.border_box.y + box.baseline;
-      const float pen = canvas.draw_text(font, box.text, box.border_box.x, baseline, box.font_size, box.style->color);
+      const float baseline = box.border_box.y + offset.y + box.baseline;
+      const float pen =
+          canvas.draw_text(font, box.text, box.border_box.x + offset.x, baseline, box.font_size, box.style->color);
       if (box.style->text_decoration == css::TextDecoration::Underline) {
         const float thickness = std::max(1.0f, box.font_size / 14.0f);
-        canvas.fill_rect(Rect{box.border_box.x, baseline + box.font_size * 0.12f, pen - box.border_box.x, thickness},
+        canvas.fill_rect(Rect{box.border_box.x + offset.x, baseline + box.font_size * 0.12f,
+                              pen - box.border_box.x - offset.x, thickness},
                          box.style->color);
       }
       return;
     }
     case layout::BoxKind::Image: {
-      const Rect rect = to_paint_rect(box.border_box);
+      const Rect rect = to_paint_rect(box.border_box, offset);
       if (box.image != nullptr && !box.image->empty() && rect.width > 0.5f && rect.height > 0.5f) {
         // Nearest-neighbour scaling: fast, deterministic, and honest about the
         // missing resampling filters (stage 6 work).
@@ -83,9 +95,9 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
     }
     case layout::BoxKind::InlineBox: {
       if (box.style != nullptr && box.style->background_color.a > 0) {
-        canvas.fill_rect(to_paint_rect(box.border_box), box.style->background_color);
+        canvas.fill_rect(to_paint_rect(box.border_box, offset), box.style->background_color);
       }
-      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options);
+      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
       return;
     }
   }
@@ -95,7 +107,7 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
 
 void render_layout(Canvas& canvas, const layout::Box& root, const text::Font& font, const RenderOptions& options) {
   canvas.clear(options.page_background);
-  paint_box(canvas, root, font, options);
+  paint_box(canvas, root, font, options, Offset{0.0f, -options.scroll_y});
 }
 
 }  // namespace bonk::paint

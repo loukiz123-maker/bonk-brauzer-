@@ -1,5 +1,7 @@
 // Bonk Brauzer — command line front end (parser + help text).
 //
+//   bonk view page.html                open the page in an X11 window (own X11 client)
+//   bonk view page.html --screenshot p.png --scroll 200 --click 40,60
 //   bonk render page.html -o page.png --width 800 --height 600
 //   bonk dom page.html                 dump the parsed DOM tree
 //   bonk modules --stage 2             roadmap introspection
@@ -19,7 +21,7 @@
 
 namespace bonk {
 
-enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch };
+enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View };
 
 std::string_view command_name(Command command);
 
@@ -39,6 +41,12 @@ struct CliOptions {
   bool debug_boxes = false;
   bool dump_layout = false;
   bool show_diagnostics = false;
+
+  // view
+  std::string screenshot;   // non-empty: render headlessly instead of opening a window
+  float scroll = 0.0f;      // initial scroll offset (CSS px)
+  int click_x = -1;         // >= 0 together with click_y: click before screenshotting
+  int click_y = -1;
 
   std::vector<std::string> positionals;
 };

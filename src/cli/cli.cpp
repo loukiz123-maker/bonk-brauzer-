@@ -26,7 +26,7 @@ struct CommandEntry {
 const CommandEntry kCommands[] = {
     {"help", Command::Help},         {"version", Command::Version}, {"modules", Command::Modules},
     {"selftest", Command::SelfTest}, {"render", Command::Render},   {"dom", Command::DumpDom},
-    {"fetch", Command::Fetch},
+    {"fetch", Command::Fetch},       {"view", Command::View},
 };
 
 }  // namespace
@@ -119,6 +119,36 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.css_path = args[++i];
       continue;
     }
+    if (arg == "--screenshot") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--screenshot requires a path"));
+      options.screenshot = args[++i];
+      continue;
+    }
+    if (arg == "--scroll") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--scroll requires a value"));
+      int value = 0;
+      if (!parse_int_arg(args[i + 1], value) || value < 0) {
+        return Result<CliOptions>::failure(usage_error("--scroll expects a non-negative integer"));
+      }
+      options.scroll = static_cast<float>(value);
+      ++i;
+      continue;
+    }
+    if (arg == "--click") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--click requires X,Y"));
+      const std::string& spec = args[i + 1];
+      const std::size_t comma = spec.find(',');
+      int x = 0;
+      int y = 0;
+      if (comma == std::string::npos || !parse_int_arg(spec.substr(0, comma), x) ||
+          !parse_int_arg(spec.substr(comma + 1), y)) {
+        return Result<CliOptions>::failure(usage_error("--click expects X,Y (e.g. --click 40,60)"));
+      }
+      options.click_x = x;
+      options.click_y = y;
+      ++i;
+      continue;
+    }
     if (arg == "--stage") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--stage requires a value"));
       int value = 0;
@@ -154,10 +184,10 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
 
   if (!command_seen) options.command = Command::Help;
 
-  const std::size_t wanted_positionals =
-      (options.command == Command::Render || options.command == Command::DumpDom || options.command == Command::Fetch)
-          ? 1
-          : 0;
+  const std::size_t wanted_positionals = (options.command == Command::Render || options.command == Command::DumpDom ||
+                                          options.command == Command::Fetch || options.command == Command::View)
+                                             ? 1
+                                             : 0;
   if (options.positionals.size() != wanted_positionals) {
     if (wanted_positionals == 1) {
       return Result<CliOptions>::failure(usage_error("`bonk " + std::string(command_name(options.command)) +
@@ -192,6 +222,10 @@ std::string cli_help_text() {
   out += "                    parse, style, lay out and rasterise a local page to PNG\n";
   out += "  dom <file.html>   print the parsed DOM tree\n";
   out += "  fetch <url>       HTTP/1.1 GET and print the response head (TLS is not ready yet)\n";
+  out += "  view <page>       open the page in an X11 window (own X11 client, no Xlib)\n";
+  out += "                    --screenshot out.png  render headlessly instead\n";
+  out += "                    --scroll N            start scrolled down N pixels\n";
+  out += "                    --click X,Y           click before screenshotting\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";
   out += "  selftest          run fast runtime invariant checks\n";
