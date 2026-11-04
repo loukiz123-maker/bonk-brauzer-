@@ -4,6 +4,7 @@
 #include <cstring>
 
 #include "bonk/core/strings.hpp"
+#include "bonk/net/tls.hpp"
 
 #if defined(_WIN32)
 #include <winsock2.h>
@@ -199,11 +200,8 @@ Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagn
   int redirects = 0;
 
   for (;;) {
-    if (current.scheme == "https" || current.scheme == "wss") {
-      return Result<HttpResponse>::failure(
-          net_error("net.tls_not_implemented", "TLS is not implemented yet; use an http:// URL for now"));
-    }
-    if (current.scheme != "http" && current.scheme != "ws") {
+    const bool secure = current.scheme == "https" || current.scheme == "wss";
+    if (!secure && current.scheme != "http" && current.scheme != "ws") {
       return Result<HttpResponse>::failure(
           net_error("net.unsupported_scheme", "scheme '" + current.scheme + "' is not supported"));
     }
@@ -214,21 +212,50 @@ Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagn
     HttpRequest current_request = request;
     current_request.url = current;
 
-    Result<SocketHandle> socket = connect_to(current.host, current.effective_port(), request.timeout_ms);
-    if (socket.is_error()) return Result<HttpResponse>::failure(socket.error());
-    SocketGuard guard{socket.value()};
-
     const std::string wire = build_request(current_request);
-    std::size_t sent = 0;
-    while (sent < wire.size()) {
-      const auto written = ::send(guard.handle, wire.data() + sent, static_cast<int>(wire.size() - sent), 0);
-      if (written <= 0) {
-        return Result<HttpResponse>::failure(net_error("net.send_failed", "could not send the request"));
-      }
-      sent += static_cast<std::size_t>(written);
-    }
+    Result<std::string> raw = Result<std::string>::failure(net_error("net.internal", "no transport"));
 
-    Result<std::string> raw = read_all(guard.handle, diagnostics);
+    if (secure) {
+      // HTTPS: our own TLS 1.3 client (src/net/tls.cpp).
+      Result<std::unique_ptr<TlsConnection>> tls =
+          TlsConnection::connect(current.host, current.effective_port(), request.timeout_ms);
+      if (tls.is_error()) return Result<HttpResponse>::failure(tls.error());
+      if (diagnostics != nullptr) {
+        const TlsPeerInfo& peer = tls.value()->peer();
+        diagnostics->add(Severity::Hint, SourcePos{},
+                         "net.tls: " + peer.negotiated_version + " " + peer.cipher_suite + " " + peer.key_exchange +
+                             (peer.chain_verified ? " (chain verified)" : " (certificate chain NOT verified yet)"));
+      }
+      const Status sent_status = tls.value()->write(wire);
+      if (sent_status.is_error()) return Result<HttpResponse>::failure(sent_status.error());
+
+      std::string accumulated;
+      for (;;) {
+        Result<std::string> chunk = tls.value()->read(request.timeout_ms);
+        if (chunk.is_error()) {
+          if (chunk.error().code == "net.tls_timeout" && !accumulated.empty()) break;  // server keeps the socket open
+          return Result<HttpResponse>::failure(chunk.error());
+        }
+        if (chunk.value().empty()) break;
+        accumulated += chunk.value();
+        if (accumulated.size() > 64u * 1024u * 1024u) break;
+      }
+      raw = Result<std::string>::success(std::move(accumulated));
+    } else {
+      Result<SocketHandle> socket = connect_to(current.host, current.effective_port(), request.timeout_ms);
+      if (socket.is_error()) return Result<HttpResponse>::failure(socket.error());
+      SocketGuard guard{socket.value()};
+
+      std::size_t sent = 0;
+      while (sent < wire.size()) {
+        const auto written = ::send(guard.handle, wire.data() + sent, static_cast<int>(wire.size() - sent), 0);
+        if (written <= 0) {
+          return Result<HttpResponse>::failure(net_error("net.send_failed", "could not send the request"));
+        }
+        sent += static_cast<std::size_t>(written);
+      }
+      raw = read_all(guard.handle, diagnostics);
+    }
     if (raw.is_error()) return Result<HttpResponse>::failure(raw.error());
 
     const std::string& response = raw.value();
@@ -307,9 +334,20 @@ Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagn
 
     if (const std::string_view content_encoding = parsed.header("content-encoding");
         !content_encoding.empty() && !equals_ci(content_encoding, "identity")) {
-      return Result<HttpResponse>::failure(Error::make(
-          "net.content_encoding_unsupported",
-          "server sent '" + std::string(content_encoding) + "' although identity was requested"));
+      Result<std::string> decoded_body = Result<std::string>::success(std::string{});
+      if (equals_ci(content_encoding, "gzip") || equals_ci(content_encoding, "x-gzip")) {
+        decoded_body = decode_gzip(parsed.body);
+      } else if (equals_ci(content_encoding, "deflate")) {
+        decoded_body = decode_zlib(parsed.body);
+      } else {
+        return Result<HttpResponse>::failure(Error::make(
+            "net.content_encoding_unsupported", "server sent '" + std::string(content_encoding) + "'"));
+      }
+      if (decoded_body.is_error()) return Result<HttpResponse>::failure(decoded_body.error());
+      if (diagnostics != nullptr) {
+        diagnostics->add(Severity::Hint, SourcePos{}, "net.decoded: content-encoding " + std::string(content_encoding));
+      }
+      parsed.body = std::move(decoded_body.value());
     }
 
     return Result<HttpResponse>::success(std::move(parsed));

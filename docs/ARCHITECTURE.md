@@ -158,6 +158,17 @@ StyleMap compute_styles(const dom::Document&, const StyleSheet&, float viewport_
 Result<Font> Font::load_file(std::string_view path);
 const GlyphBitmap& Font::glyph(char32_t code_point, float pixel_size) const;  // кэш
 
+// crypto — этап 2b
+std::array<std::uint8_t, 32> sha256(std::string_view);
+Bytes hkdf_expand_label_with_context(std::string_view secret, std::string_view label, std::string_view ctx, size_t n);
+Bytes chacha20_poly1305_seal(...); bool chacha20_poly1305_open(...);
+std::array<std::uint8_t, 32> x25519(std::string_view private_key, std::string_view peer_public);
+
+// net::tls — этап 2b
+auto tls = TlsConnection::connect("example.com", 443);  // TLS 1.3, ChaCha20-Poly1305, x25519
+tls->write("GET / HTTP/1.1\r\n..."); while (auto chunk = tls->read()) { ... }
+tls->peer().finished_verified; tls->peer().chain_verified;  // второй пока всегда false
+
 // image — этап 2
 Result<Image> decode_png(std::string_view bytes);   // свой inflate + PNG
 Result<Image> load_image(std::string_view path);

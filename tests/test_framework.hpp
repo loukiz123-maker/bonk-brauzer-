@@ -61,6 +61,9 @@ std::string show(const T& value) {
 }
 
 // --- failure recording ---------------------------------------------------
+/// Prints an informative line without failing the test (used for skipped live tests).
+inline void record_note(std::string_view message) { std::printf("         note: %s\n", std::string(message).c_str()); }
+
 inline void record_failure(std::string_view file, int line, std::string message) {
   std::string frame = std::string(file) + ":" + std::to_string(line) + ": " + std::move(message);
   current_failures().push_back(std::move(frame));

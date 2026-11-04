@@ -10,11 +10,12 @@ using namespace bonk;
 
 BONK_TEST(module, registry_contents) {
   const std::vector<ModuleInfo>& all = modules();
-  CHECK_EQ(all.size(), std::size_t{14});
+  CHECK_EQ(all.size(), std::size_t{15});
 
   // Every module from the specification is present exactly once.
-  const char* expected[] = {"core",  "net",   "html",   "dom",      "css",  "layout", "paint",
-                            "text",  "image", "js",     "bindings", "shell", "security", "devtools"};
+  const char* expected[] = {"core", "crypto", "net",      "html",     "dom",      "css",     "layout",
+                            "paint", "text",  "image",    "js",       "bindings", "shell",   "security",
+                            "devtools"};
   for (const char* id : expected) CHECK(find_module(id) != nullptr);
 
   std::set<std::string_view> ids;
@@ -60,7 +61,7 @@ BONK_TEST(module, available_at_stage_is_cumulative) {
   CHECK_EQ(stage0[0]->id, std::string_view("core"));
 
   const auto stage1 = modules_available_at(1);
-  CHECK_EQ(stage1.size(), std::size_t{4});
+  CHECK_EQ(stage1.size(), std::size_t{5});
 
   const auto stage7 = modules_available_at(7);
   CHECK_EQ(stage7.size(), modules().size());
@@ -75,7 +76,7 @@ BONK_TEST(module, render_table_is_aligned_and_deterministic) {
   CHECK_EQ(std::string(table.substr(0, 2)), std::string("id"));
 
   // Header + separator + 13 rows + trailing empty line.
-  CHECK_EQ(lines.size(), std::size_t{17});
+  CHECK_EQ(lines.size(), std::size_t{18});
   REQUIRE(lines[1].size() > 40);
   const std::string_view separator = lines[1];
   CHECK(separator.find_first_not_of('-') == std::string_view::npos);  // separator is a dashed rule

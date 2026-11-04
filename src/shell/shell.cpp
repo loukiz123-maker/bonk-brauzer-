@@ -107,9 +107,6 @@ Status Session::load(std::string_view target, std::string_view /*base_for_relati
   if (resolved.starts_with("http://") || resolved.starts_with("https://")) {
     const Result<net::Url> url = net::parse_url(resolved);
     if (url.is_error()) return Status::failure(url.error());
-    if (url.value().scheme == "https") {
-      return io_failure("net.tls_not_implemented", "HTTPS is not implemented yet (see docs/ROADMAP.md, stage 2b)");
-    }
     Diagnostics diagnostics;
     Result<net::HttpResponse> response = net::http_get(url.value(), &diagnostics);
     if (response.is_error()) return Status::failure(response.error());

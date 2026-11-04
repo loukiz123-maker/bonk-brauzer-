@@ -101,11 +101,14 @@ BONK_TEST(shell, missing_file_reports_an_error) {
   CHECK_EQ(status.error().code, std::string("io.open_failed"));
 }
 
-BONK_TEST(shell, https_is_reported_as_not_implemented) {
+BONK_TEST(shell, https_uses_the_tls_stack) {
+  // Either the network works and the page loads, or the failure comes from the TLS
+  // transport — never from a "not implemented" stub.
   shell::Session session(400.0f, 300.0f);
-  const Status status = session.navigate("https://example.com/");
+  const Status status = session.navigate("https://127.0.0.1:1/");
   REQUIRE(status.is_error());
-  CHECK_EQ(status.error().code, std::string("net.tls_not_implemented"));
+  CHECK(status.error().code != std::string("net.tls_not_implemented"));
+  CHECK(status.error().code.starts_with("net."));
 }
 
 BONK_TEST(shell, renders_a_png_for_the_viewport) {

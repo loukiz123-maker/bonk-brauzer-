@@ -34,8 +34,11 @@
 DOM на индексных пулах с генерационными `NodeId`, `querySelector` с атрибутными и
 псевдо-селекторами. Подробности и пробелы — [`STAGE-01-02.md`](STAGE-01-02.md).
 
-**Осталось до выхода с этапа**: TLS (свой TLS 1.3 или документированный системный бэкенд),
-gzip, cookies/кэш/keep-alive, foster parenting + adoption agency, события и MutationObserver,
+**Сделано (2b)**: свой TLS 1.3 (ChaCha20-Poly1305 + x25519) на собственном криптоядре,
+X.509 (SAN/срок/имя хоста), gzip/deflate — `https://` работает.
+
+**Осталось до выхода с этапа**: проверка подписи сертификатов и цепочки доверия,
+cookies/кэш/keep-alive, foster parenting + adoption agency, события и MutationObserver,
 прогон html5lib-tests.
 
 ## Этап 2 — css + text + layout + paint

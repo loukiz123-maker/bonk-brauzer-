@@ -11,6 +11,8 @@ namespace {
 // modules it depends on, which lets the UI/CI consume the list top-down.
 const ModuleInfo kModules[] = {
     {"core", "Core utilities", "Result/Status, UTF-8, Arena, diagnostics, module registry", 0, ModuleStatus::Done, ""},
+    {"crypto", "Cryptography", "Own SHA-256/HMAC/HKDF, ChaCha20-Poly1305, X25519 for TLS 1.3", 1,
+     ModuleStatus::InProgress, "core"},
     {"net", "Networking", "WHATWG URL, DNS, TCP, HTTP/1.1, TLS, cookies, cache, streaming", 1,
      ModuleStatus::InProgress, "core"},
     {"html", "HTML parser", "WHATWG tokenizer + tree builder (insertion modes, entities)", 1,

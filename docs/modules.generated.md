@@ -2,6 +2,7 @@
 | Module | Stage | Status | Depends on | Summary |
 |---|---|---|---|---|
 | `core` | 0 | done | — | Result/Status, UTF-8, Arena, diagnostics, module registry |
+| `crypto` | 1 | in-progress | core | Own SHA-256/HMAC/HKDF, ChaCha20-Poly1305, X25519 for TLS 1.3 |
 | `net` | 1 | in-progress | core | WHATWG URL, DNS, TCP, HTTP/1.1, TLS, cookies, cache, streaming |
 | `html` | 1 | in-progress | core | WHATWG tokenizer + tree builder (insertion modes, entities) |
 | `dom` | 1 | in-progress | core, html | Node/Element/Text, querySelector, events, MutationObserver, innerHTML |

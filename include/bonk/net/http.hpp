@@ -48,5 +48,8 @@ struct HttpResponse {
 
 /// Raw HTTP body decoding helpers (exposed for unit tests).
 [[nodiscard]] Result<std::string> decode_chunked(std::string_view body);
+/// Content-Encoding decoders built on our own inflate (src/net/gzip.cpp).
+[[nodiscard]] Result<std::string> decode_gzip(std::string_view body);
+[[nodiscard]] Result<std::string> decode_zlib(std::string_view body);
 
 }  // namespace bonk::net

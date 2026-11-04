@@ -82,11 +82,13 @@ BONK_TEST(http, chunked_decoding) {
 }
 
 BONK_TEST(http, rejects_unsupported_schemes) {
-  const Result<Url> https_url = parse_url("https://example.com/");
+  const Result<Url> https_url = parse_url("https://127.0.0.1:1/");  // closed port: offline-safe
   REQUIRE(https_url.is_ok());
   const Result<HttpResponse> secure = http_get(https_url.value());
   REQUIRE(secure.is_error());
-  CHECK_EQ(secure.error().code, std::string("net.tls_not_implemented"));
+  // https is supported now; the failure must come from the transport, not from a
+  // "not implemented" stub. Port 1 is closed, so the connect fails.
+  CHECK(secure.error().code != std::string("net.tls_not_implemented"));
 
   const Result<Url> ftp_url = parse_url("ftp://example.com/x");
   REQUIRE(ftp_url.is_ok());
