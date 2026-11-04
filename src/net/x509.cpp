@@ -271,7 +271,9 @@ std::string current_utc_timestamp() {
 #else
   gmtime_r(&now, &utc);
 #endif
-  char buffer[32];
+  // 4+1+2+1+2+1+2+1+2+1+2+1 = 20 characters plus NUL; 64 leaves room for a
+  // widened year field without a -Wformat-truncation warning.
+  char buffer[64];
   std::snprintf(buffer, sizeof(buffer), "%04d-%02d-%02dT%02d:%02d:%02dZ", utc.tm_year + 1900, utc.tm_mon + 1,
                 utc.tm_mday, utc.tm_hour, utc.tm_min, utc.tm_sec);
   return buffer;

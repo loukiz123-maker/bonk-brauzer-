@@ -385,10 +385,9 @@ class LayoutEngine {
 
         float height = 0.0f;
         if (has_block_children(child)) {
+          // Mixed content: layout_block_children() already appends the element's
+          // loose inline content after its block children (see the comment there).
           height = layout_block_children(child_box, content_x_child, child_box.content_box.y, inner_width);
-          // inline content mixed with blocks: lay out after the blocks
-          height = std::max(height, layout_inline_if_needed(child_box, content_x_child,
-                                                            child_box.content_box.y + height, inner_width));
         } else {
           height = layout_inline(child_box, content_x_child, child_box.content_box.y, inner_width);
         }
@@ -417,8 +416,9 @@ class LayoutEngine {
         continue;
       }
 
-      // Inline-level sibling: it belongs to the parent's inline formatting context,
-      // which is laid out once after all block children (see below).
+      // Inline-level sibling: it belongs to the parent's inline formatting context.
+      // Approximation: one context for all loose inline children, laid out after
+      // the block children instead of being split into anonymous blocks.
       has_inline_content = true;
     }
 
@@ -426,25 +426,6 @@ class LayoutEngine {
       y += layout_inline(box, content_x, y, content_width);
     }
     return y - start_y;
-  }
-
-  float layout_inline_if_needed(Box& box, float content_x, float y, float content_width) {
-    // Only used when a block has both block children and loose inline content.
-    bool has_inline = false;
-    for (const dom::NodeId child : document_.children(box.node)) {
-      const dom::NodeType type = document_.type(child);
-      if (type == dom::NodeType::Text) {
-        if (!trim(document_.text_data(child)).empty()) has_inline = true;
-        continue;
-      }
-      if (type == dom::NodeType::Element) {
-        const css::ComputedStyle& style = styles_.get(document_, child);
-        if (style.display == css::Display::None) continue;
-        if (!is_block_level(style) || style.display == css::Display::InlineBlock) has_inline = true;
-      }
-    }
-    if (!has_inline) return 0.0f;
-    return layout_inline(box, content_x, y, content_width);
   }
 
   [[nodiscard]] bool has_block_children(dom::NodeId node) const {

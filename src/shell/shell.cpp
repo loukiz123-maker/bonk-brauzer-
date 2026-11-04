@@ -135,17 +135,27 @@ Status Session::load(std::string_view target, std::string_view /*base_for_relati
   Status parsed = html::parse_html(html_bytes, *document, &diagnostics);
   if (parsed.is_error()) return parsed;
 
-  // Page CSS: <style> blocks plus local <link rel="stylesheet"> files.
+  // Page CSS is collected *after* scripts run, so a script that inserts a
+  // <style> element or changes a class is reflected in the same paint.
+  document_ = std::move(document);
+
+  js_context_ = std::make_unique<js::Context>();
+  bindings_ = std::make_unique<bindings::Bindings>(*js_context_, *document_);
+  bindings_->install();
+  bindings_->run_scripts();
+  (void)bindings_->dispatch(document_->root(), "DOMContentLoaded");
+  (void)bindings_->dispatch(document_->root(), "load");
+
   std::string css_text;
-  for (const dom::NodeId node : document->get_elements_by_tag_name("style")) {
-    css_text += document->text_content(node);
+  for (const dom::NodeId node : document_->get_elements_by_tag_name("style")) {
+    css_text += document_->text_content(node);
     css_text += "\n";
   }
-  for (const dom::NodeId node : document->get_elements_by_tag_name("link")) {
-    const std::string_view rel = document->attribute(node, "rel");
+  for (const dom::NodeId node : document_->get_elements_by_tag_name("link")) {
+    const std::string_view rel = document_->attribute(node, "rel");
     if (rel.find("stylesheet") == std::string_view::npos) continue;
-    const std::string_view href = document->attribute(node, "href");
-    if (href.empty() || has_scheme(href)) continue;  // remote stylesheets need TLS/HTTP plumbing
+    const std::string_view href = document_->attribute(node, "href");
+    if (href.empty() || has_scheme(href)) continue;  // remote stylesheets need a fetch loop
     std::string path = base;
     if (!path.empty()) path += '/';
     path.append(href);
@@ -160,14 +170,13 @@ Status Session::load(std::string_view target, std::string_view /*base_for_relati
 
   // Images: local sources only; failures become placeholder boxes.
   image::ImageStore images;
-  for (const dom::NodeId node : document->get_elements_by_tag_name("img")) {
-    const std::string_view src = document->attribute(node, "src");
+  for (const dom::NodeId node : document_->get_elements_by_tag_name("img")) {
+    const std::string_view src = document_->attribute(node, "src");
     if (src.empty() || has_scheme(src)) continue;
     std::string error;
     (void)images.add_from_file(src, base, error);
   }
 
-  document_ = std::move(document);
   sheet_ = std::move(sheet.value());
   images_ = std::move(images);
 
@@ -256,8 +265,17 @@ ClickOutcome Session::click(float x, float y) {
   const layout::Box* hit = layout::hit_test(layout_->root, x, y + tab_.scroll_y);
   if (hit == nullptr) return outcome;
 
-  // Walk up the box tree (each box keeps its DOM node) looking for a link.
   dom::NodeId node = hit->node;
+  if (bindings_ != nullptr) {
+    const bool prevented = bindings_->dispatch(node, "click", js::Value::undefined());
+    // Listeners may have changed the DOM: re-lay out so the next paint is honest.
+    (void)rebuild_layout();
+    set_scroll(tab_.scroll_y);
+    if (prevented) return outcome;
+    if (!document_->is_alive(node)) return outcome;
+  }
+
+  // Walk up the box tree (each box keeps its DOM node) looking for a link.
   while (node.valid() && document_->is_alive(node)) {
     if (document_->tag_name(node) == "a") {
       const std::string_view href = document_->attribute(node, "href");
@@ -288,6 +306,20 @@ void Session::reload() {
   if (tab_.url.empty()) return;
   const std::string url = tab_.url;
   (void)load(url, "reload");
+}
+
+const std::vector<bindings::ScriptRun>& Session::script_runs() const noexcept {
+  static const std::vector<bindings::ScriptRun> empty;
+  return bindings_ == nullptr ? empty : bindings_->script_runs();
+}
+
+const std::vector<js::ConsoleEntry>& Session::js_console() const noexcept {
+  static const std::vector<js::ConsoleEntry> empty;
+  return js_context_ == nullptr ? empty : js_context_->console();
+}
+
+bool Session::dispatch_event(dom::NodeId target, std::string_view type) {
+  return bindings_ != nullptr && bindings_->dispatch(target, type);
 }
 
 bool Session::render(paint::Canvas& canvas) const {

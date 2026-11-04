@@ -4,6 +4,8 @@
 // Scripts and CI rely on them, so they are covered by tests/cli_test.cpp.
 
 #include <cstdio>
+#include <fstream>
+#include <iterator>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +16,7 @@
 #include "bonk/core/module.hpp"
 #include "bonk/core/selftest.hpp"
 #include "bonk/core/version.hpp"
+#include "bonk/js/js.hpp"
 #include "bonk/net/http.hpp"
 #include "bonk/shell/shell.hpp"
 #include "bonk/shell/x11.hpp"
@@ -27,6 +30,35 @@ int print_diagnostics(const bonk::Diagnostics& diagnostics) {
   if (diagnostics.size() == 0) return 0;
   const std::string formatted = bonk::format_diagnostics(diagnostics);
   std::fwrite(formatted.data(), 1, formatted.size(), stderr);
+  return 0;
+}
+
+/// `bonk js <file.js|code>`: the CLI face of the stage-4 engine.
+int run_js(const bonk::CliOptions& options) {
+  std::string source;
+  {
+    std::ifstream file{options.input, std::ios::binary};
+    if (file) {
+      source.assign(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>());
+    } else {
+      source = options.input;  // inline code
+    }
+  }
+
+  bonk::js::Context context;
+  const bonk::js::ExecutionResult result = context.evaluate(source, "<cli>");
+
+  for (const bonk::js::ConsoleEntry& entry : context.console()) {
+    const char* level = entry.level == bonk::js::ConsoleEntry::Level::Error
+                            ? "error"
+                            : (entry.level == bonk::js::ConsoleEntry::Level::Warn ? "warn" : "log");
+    std::fprintf(stderr, "%s: %s\n", level, entry.message.c_str());
+  }
+  if (!result.ok) {
+    std::fprintf(stderr, "bonk: uncaught %s\n", result.message.c_str());
+    return 1;
+  }
+  if (!result.value.is_undefined()) std::printf("%s\n", bonk::js::to_string(result.value).c_str());
   return 0;
 }
 
@@ -316,6 +348,9 @@ int main(int argc, char** argv) {
 
     case bonk::Command::Fetch:
       return run_fetch(options);
+
+    case bonk::Command::Js:
+      return run_js(options);
   }
   return 0;
 }

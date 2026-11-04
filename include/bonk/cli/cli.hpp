@@ -4,6 +4,7 @@
 //   bonk view page.html --screenshot p.png --scroll 200 --click 40,60
 //   bonk render page.html -o page.png --width 800 --height 600
 //   bonk dom page.html                 dump the parsed DOM tree
+//   bonk js script.js                  run JavaScript in the engine (file or inline code)
 //   bonk modules --stage 2             roadmap introspection
 //   bonk version --full                version + toolchain
 //   bonk selftest                      runtime invariants
@@ -21,7 +22,7 @@
 
 namespace bonk {
 
-enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View };
+enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View, Js };
 
 std::string_view command_name(Command command);
 

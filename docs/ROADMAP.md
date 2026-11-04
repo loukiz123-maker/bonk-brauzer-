@@ -73,14 +73,19 @@ computed values с `em/rem`; TrueType-парсер и растеризация �
 
 ## Этап 4 — js + bindings
 
-- `js`: лексер, парсер ES2015+ в AST, байткод, VM, объектная модель (прототипы, замыкания,
-  классы), `Promise`/`async`/генераторы, `Map/Set/JSON/RegExp/Date/Math`, mark-and-sweep GC,
-  event loop (микро/макротаски, `setTimeout`, `requestAnimationFrame`).
-- `bindings`: `window`, `document`, `console`, `fetch`, `XMLHttpRequest`, `localStorage`,
-  History API, Canvas 2D.
+- `js`: лексер, парсер в AST, tree-walking интерпретатор, объектная модель (прототипы,
+  замыкания, accessor-свойства), `Object/Array/String/Number/Math/JSON/console/Error`,
+  `setTimeout`. **Сделано ядро** (`src/js/{parse,interp}.cpp`, `include/bonk/js/js.hpp`).
+- `bindings`: `window`, `document`, обёртки элементов (`textContent`, `innerHTML`, `classList`,
+  `style`, `appendChild`, …), события с всплытием, инлайновые `<script>`.
+  **Сделано ядро** (`src/bindings/bindings.cpp`).
+- Впереди (этап 5–7): `class`, `switch`, regex, `Promise`/`async`, `Map/Set/Date`, байткод,
+  tracing GC, `fetch`/`XHR`/`localStorage`, Canvas 2D, микро- и макротаски.
 
 **Критерий выхода**: проходит подмножество test262 (базовый синтаксис + встроенные объекты),
 страница со счётчиком на `addEventListener` и `fetch` работает.
+Сейчас: счётчик на `addEventListener` работает (`tests/bindings/bindings_test.cpp`,
+`docs/demo/js-demo-click.png`), test262 и `fetch` — впереди.
 
 ## Этап 5 — flexbox/grid, Canvas, формы, cookies, storage
 

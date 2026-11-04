@@ -12,7 +12,7 @@
 | `layout` | 2 | in-progress | css, dom, text | Box model, block/inline, floats, positioning, flexbox, grid |
 | `paint` | 2 | in-progress | layout, text | CPU rasterizer, images, clipping, stacking contexts, layers |
 | `shell` | 3 | in-progress | dom, paint, net | Session/tab state, navigation, history, scrolling, clicks + own X11 client |
-| `js` | 4 | planned | core | Lexer, parser, bytecode, VM, GC, event loop, builtins |
-| `bindings` | 4 | planned | js, dom, net | window, document, console, fetch, XHR, storage, History, Canvas 2D |
+| `js` | 4 | in-progress | core | Own lexer, recursive-descent parser, AST, tree-walking interpreter, builtins |
+| `bindings` | 4 | in-progress | js, dom | window, document, element wrappers, events, inline scripts, storage (stage 5) |
 | `security` | 6 | planned | net, bindings, shell | SOP, CORS, CSP, mixed content, process-per-tab sandbox, HTTPS UI |
 | `devtools` | 6 | planned | dom, js, net, paint | Console, DOM/CSS inspector, network panel |

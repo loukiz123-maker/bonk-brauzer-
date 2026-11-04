@@ -126,8 +126,6 @@ void xor_nonce(std::array<std::uint8_t, 12>& nonce, std::uint64_t sequence) {
   }
 }
 
-std::string null_bytes(std::size_t count) { return std::string(count, '\0'); }
-
 }  // namespace
 
 TlsConnection::~TlsConnection() { close(); }
@@ -646,7 +644,7 @@ Status TlsConnection::handshake(std::string_view host) {
     } else if (type == 15) {
       // CertificateVerify: parsed, signature verification arrives with the chain
       // builder (stage 6). Recorded in peer_.chain_verified == false.
-      peer_.leaf.dns_names.size();
+      (void)peer_.leaf.dns_names.size();
     }
     transcript_ += message;
   }

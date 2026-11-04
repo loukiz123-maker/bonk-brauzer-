@@ -26,7 +26,7 @@ struct CommandEntry {
 const CommandEntry kCommands[] = {
     {"help", Command::Help},         {"version", Command::Version}, {"modules", Command::Modules},
     {"selftest", Command::SelfTest}, {"render", Command::Render},   {"dom", Command::DumpDom},
-    {"fetch", Command::Fetch},       {"view", Command::View},
+    {"fetch", Command::Fetch},       {"view", Command::View},      {"js", Command::Js},
 };
 
 }  // namespace
@@ -185,7 +185,8 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
   if (!command_seen) options.command = Command::Help;
 
   const std::size_t wanted_positionals = (options.command == Command::Render || options.command == Command::DumpDom ||
-                                          options.command == Command::Fetch || options.command == Command::View)
+                                          options.command == Command::Fetch || options.command == Command::View ||
+                                          options.command == Command::Js)
                                              ? 1
                                              : 0;
   if (options.positionals.size() != wanted_positionals) {
@@ -226,6 +227,7 @@ std::string cli_help_text() {
   out += "                    --screenshot out.png  render headlessly instead\n";
   out += "                    --scroll N            start scrolled down N pixels\n";
   out += "                    --click X,Y           click before screenshotting\n";
+  out += "  js <file.js|code> run a script in the engine (own lexer, parser, interpreter)\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";
   out += "  selftest          run fast runtime invariant checks\n";

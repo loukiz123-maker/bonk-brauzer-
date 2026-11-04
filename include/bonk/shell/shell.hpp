@@ -11,10 +11,12 @@
 #include <string_view>
 #include <vector>
 
+#include "bonk/bindings/bindings.hpp"
 #include "bonk/core/result.hpp"
 #include "bonk/css/css.hpp"
 #include "bonk/dom/dom.hpp"
 #include "bonk/image/image.hpp"
+#include "bonk/js/js.hpp"
 #include "bonk/layout/layout.hpp"
 #include "bonk/paint/canvas.hpp"
 #include "bonk/paint/render.hpp"
@@ -84,6 +86,11 @@ class Session {
   /// Maximum scroll offset that still shows content (0 when the page fits).
   [[nodiscard]] float max_scroll() const noexcept;
 
+  /// JavaScript side of the loaded page (empty until a page is loaded).
+  [[nodiscard]] const std::vector<bindings::ScriptRun>& script_runs() const noexcept;
+  [[nodiscard]] const std::vector<js::ConsoleEntry>& js_console() const noexcept;
+  [[nodiscard]] bool dispatch_event(dom::NodeId target, std::string_view type);
+
  private:
   Status load(std::string_view target, std::string_view base_for_relative);
   Status rebuild_layout();
@@ -101,6 +108,8 @@ class Session {
   css::StyleMap styles_;
   image::ImageStore images_;
   std::unique_ptr<layout::LayoutResult> layout_;
+  std::unique_ptr<js::Context> js_context_;
+  std::unique_ptr<bindings::Bindings> bindings_;
   std::size_t node_count_ = 0;
 };
 
