@@ -166,7 +166,7 @@ css::Color Canvas::pixel_at(int x, int y) const {
   return css::Color{pixels_[index], pixels_[index + 1], pixels_[index + 2], pixels_[index + 3]};
 }
 
-bool Canvas::write_png(std::string_view path) const {
+std::string Canvas::encode_png() const {
   // Raw scanlines: filter byte 0 followed by RGBA pixels.
   std::string raw;
   raw.reserve(static_cast<std::size_t>(height_) * (static_cast<std::size_t>(width_) * 4 + 1));
@@ -188,7 +188,11 @@ bool Canvas::write_png(std::string_view path) const {
   append_chunk(png, "IHDR", ihdr);
   append_chunk(png, "IDAT", zlib_stored(raw));
   append_chunk(png, "IEND", {});
+  return png;
+}
 
+bool Canvas::write_png(std::string_view path) const {
+  const std::string png = encode_png();
   std::ofstream file{std::string(path), std::ios::binary};
   if (!file) return false;
   file.write(png.data(), static_cast<std::streamsize>(png.size()));

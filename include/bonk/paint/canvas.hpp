@@ -48,6 +48,9 @@ class Canvas {
                   css::Color color);
   [[nodiscard]] css::Color pixel_at(int x, int y) const;
 
+  /// PNG bytes from our own encoder (used by `write_png` and by the isolated
+  /// tab process, which ships the frame over a pipe instead of a file).
+  [[nodiscard]] std::string encode_png() const;
   [[nodiscard]] bool write_png(std::string_view path) const;
   [[nodiscard]] bool write_ppm(std::string_view path) const;
 

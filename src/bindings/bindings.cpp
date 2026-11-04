@@ -12,6 +12,7 @@
 #include <utility>
 #include <vector>
 
+#include "bonk/core/strings.hpp"
 #include "bonk/core/version.hpp"
 #include "bonk/html/html.hpp"
 #include "bonk/paint/canvas.hpp"
@@ -330,7 +331,10 @@ struct Bindings::Impl {
   const text::Font* font = nullptr;
   text::Font fallback_font;
   net::CookieJar* cookies = nullptr;
+  security::CspPolicy csp;
+  NetworkHandler network;
   js::Value local_storage_object;
+  js::Value xhr_constructor;
   js::Value session_storage_object;
   Storage local_storage;
   Storage session_storage;
@@ -1495,6 +1499,96 @@ void Bindings::Impl::install_window() {
     getter(storage_object, "length", [storage]() { return Value::number_of(static_cast<double>(storage->size())); });
     return Value::object_of(storage_object);
   };
+
+  // --- XMLHttpRequest (synchronous) ---------------------------------------
+  //
+  // Our engine has no event loop and no Promises yet, so the classic
+  // `open(method, url, false); send();` form is the one that makes sense: it
+  // returns after the response arrived. The transport is the shell's; policy
+  // (CORS/CSP) is applied there, and failures land in `status == 0`.
+  {
+    const auto make_xhr = [this]() {
+      struct XhrState {
+        std::string method = "GET";
+        std::string url;
+        std::vector<std::pair<std::string, std::string>> headers;
+        NetworkResponse response;
+        bool sent = false;
+      };
+      auto state = std::make_shared<XhrState>();
+      auto xhr_object = std::make_shared<Object>();
+
+      auto method = [&](const std::string& name, Function::Native native) {
+        auto function = std::make_shared<Function>();
+        function->name = name;
+        function->native = std::move(native);
+        xhr_object->properties[name] = Property{Value::function_of(std::move(function))};
+      };
+      method("open", [state, this](const std::vector<Value>& arguments, Value) {
+        if (arguments.size() >= 2) {
+          state->method = js::to_string(arguments[0]);
+          for (char& c : state->method) c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+          state->url = resolved_url(js::to_string(arguments[1]));
+        }
+        state->sent = false;
+        state->response = NetworkResponse{};
+        return Value::undefined();
+      });
+      method("setRequestHeader", [state](const std::vector<Value>& arguments, Value) {
+        if (arguments.size() >= 2) {
+          state->headers.emplace_back(js::to_string(arguments[0]), js::to_string(arguments[1]));
+        }
+        return Value::undefined();
+      });
+      method("send", [state, this](const std::vector<Value>& arguments, Value) {
+        NetworkRequest request;
+        request.method = state->method;
+        request.url = state->url;
+        request.headers = state->headers;
+        if (!arguments.empty() && !arguments[0].is_undefined()) request.body = js::to_string(arguments[0]);
+        state->sent = true;
+        state->response = network == nullptr ? NetworkResponse{} : network(request);
+        if (!state->response.ok && !state->response.error.empty()) {
+          context.runtime().log(js::ConsoleEntry::Level::Error,
+                      "XMLHttpRequest " + state->response.error + ": " + request.url);
+        }
+        return Value::undefined();
+      });
+      method("abort", [](const std::vector<Value>&, Value) { return Value::undefined(); });
+      method("getResponseHeader", [state](const std::vector<Value>& arguments, Value) {
+        if (arguments.empty()) return Value::null();
+        const std::string name = js::to_string(arguments[0]);
+        for (const auto& [key, value] : state->response.headers) {
+          if (::bonk::equals_ci(key, name)) return Value::string_of(value);
+        }
+        return Value::null();
+      });
+      method("getAllResponseHeaders", [state](const std::vector<Value>&, Value) {
+        std::string out;
+        for (const auto& [key, value] : state->response.headers) {
+          out += key;
+          out += ": ";
+          out += value;
+          out += "\r\n";
+        }
+        return Value::string_of(out);
+      });
+
+      getter(xhr_object, "status", [state]() { return Value::number_of(static_cast<double>(state->response.status)); });
+      getter(xhr_object, "statusText", [state]() { return Value::string_of(state->response.status_text); });
+      getter(xhr_object, "responseText", [state]() { return Value::string_of(state->response.body); });
+      getter(xhr_object, "responseURL", [state]() { return Value::string_of(state->url); });
+      getter(xhr_object, "readyState", [state]() { return Value::number_of(state->sent ? 4.0 : 1.0); });
+      getter(xhr_object, "error", [state]() { return Value::string_of(state->response.error); });
+      return Value::object_of(xhr_object);
+    };
+
+    auto constructor = std::make_shared<Function>();
+    constructor->name = "XMLHttpRequest";
+    constructor->native = [make_xhr](const std::vector<Value>&, Value) { return make_xhr(); };
+    object->properties["XMLHttpRequest"] = Property{Value::function_of(constructor)};
+    xhr_constructor = Value::function_of(constructor);
+  }
   local_storage_object = make_storage(&local_storage);
   session_storage_object = make_storage(&session_storage);
   object->properties["localStorage"] = Property{local_storage_object};
@@ -1528,6 +1622,7 @@ void Bindings::install() {
   context_->set_global("document", impl_->document_object);
   context_->set_global("location", impl_->location_object);
   context_->set_global("navigator", impl_->window.object->properties.at("navigator").value);
+  context_->set_global("XMLHttpRequest", impl_->xhr_constructor);
   context_->set_global("localStorage", impl_->local_storage_object);
   context_->set_global("sessionStorage", impl_->session_storage_object);
   // The engine's own console writes into the context buffer; window.console mirrors it.
@@ -1537,6 +1632,12 @@ void Bindings::install() {
 void Bindings::set_font(const text::Font* font) { impl_->font = font; }
 
 void Bindings::set_cookie_jar(net::CookieJar* jar) { impl_->cookies = jar; }
+
+void Bindings::set_csp(security::CspPolicy policy) { impl_->csp = std::move(policy); }
+
+const security::CspPolicy& Bindings::csp() const noexcept { return impl_->csp; }
+
+void Bindings::set_network_handler(NetworkHandler handler) { impl_->network = std::move(handler); }
 
 Storage& Bindings::local_storage() noexcept { return impl_->local_storage; }
 Storage& Bindings::session_storage() noexcept { return impl_->session_storage; }
@@ -1559,6 +1660,7 @@ const std::vector<CanvasImage>& Bindings::canvas_images() const noexcept { retur
 
 void Bindings::run_scripts() {
   impl_->runs.clear();
+  const bool inline_allowed = impl_->csp.allows_inline_script();
   std::size_t index = 0;
   for (const NodeId node : document_->get_elements_by_tag_name("script")) {
     ++index;
@@ -1575,6 +1677,13 @@ void Bindings::run_scripts() {
     if (!document_->attribute(node, "src").empty()) {
       run.skipped = true;
       run.message = "skipped: external scripts are not fetched yet";
+      impl_->runs.push_back(std::move(run));
+      continue;
+    }
+    if (!inline_allowed) {
+      run.ok = false;
+      run.skipped = true;
+      run.message = "blocked by Content-Security-Policy (script-src without 'unsafe-inline')";
       impl_->runs.push_back(std::move(run));
       continue;
     }

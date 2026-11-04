@@ -106,9 +106,17 @@ Flexbox и Grid в `layout`, Canvas 2D в `paint`+`bindings`, формы (`input
 
 Same-Origin Policy, CORS, CSP (базово), mixed content, индикатор HTTPS, процесс на вкладку +
 IPC, devtools (консоль, инспектор DOM/CSS, сеть), профилирование и оптимизация.
+Подробности: [`docs/STAGE-06.md`](STAGE-06.md), решение по изоляции —
+[`docs/adr/0008-process-per-tab-ipc.md`](adr/0008-process-per-tab-ipc.md).
 
 **Критерий выхода**: кросс-доменный `fetch` без CORS-заголовков блокируется; падение вкладки
 не убивает браузер; devtools показывает сетевой waterfall.
+Сейчас: cross-origin `XMLHttpRequest` без `Access-Control-Allow-Origin` блокируется
+(`status 0`, `cors.allow_origin_missing`), с заголовком — читается; CSP из `<meta>` и из
+HTTP-заголовка останавливает инлайн-скрипты; `bonk devtools` показывает консоль, сеть,
+CSP и стили элемента; `shell::render_isolated()` рендерит вкладку в дочернем процессе и
+переживает её падение (`shell.tab_crashed`). Preflight, `fetch`/`Promise`, `SameSite` и
+GUI-devtools — впереди.
 
 ## Этап 7 — конформность
 

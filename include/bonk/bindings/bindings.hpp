@@ -21,6 +21,7 @@
 #include "bonk/image/image.hpp"
 #include "bonk/js/js.hpp"
 #include "bonk/net/cookie.hpp"
+#include "bonk/security/security.hpp"
 #include "bonk/text/font.hpp"
 
 namespace bonk::bindings {
@@ -68,6 +69,26 @@ struct FormSubmission {
   std::string body;
 };
 
+/// One script-driven network request (the shell performs it, bindings never talk
+/// to sockets: it keeps the JS layer testable and the policy in one place).
+struct NetworkRequest {
+  std::string method = "GET";
+  std::string url;
+  std::vector<std::pair<std::string, std::string>> headers;
+  std::string body;
+};
+
+struct NetworkResponse {
+  bool ok = false;
+  int status = 0;
+  std::string status_text;
+  std::vector<std::pair<std::string, std::string>> headers;
+  std::string body;
+  std::string error;  // "cors.blocked", "csp.blocked", "net.timeout", …
+};
+
+using NetworkHandler = std::function<NetworkResponse(const NetworkRequest&)>;
+
 /// Outcome of one <script> element.
 struct ScriptRun {
   std::string url;    // document URL + script index
@@ -103,6 +124,13 @@ class Bindings {
 
   /// Cookie jar backing `document.cookie` (null = cookies disabled).
   void set_cookie_jar(net::CookieJar* jar);
+
+  /// Content-Security-Policy for this document (empty policy = no restrictions).
+  void set_csp(security::CspPolicy policy);
+  [[nodiscard]] const security::CspPolicy& csp() const noexcept;
+
+  /// Installs the transport used by `XMLHttpRequest` (the shell owns the network).
+  void set_network_handler(NetworkHandler handler);
 
   /// Storage objects exposed as `localStorage` / `sessionStorage`.
   [[nodiscard]] Storage& local_storage() noexcept;

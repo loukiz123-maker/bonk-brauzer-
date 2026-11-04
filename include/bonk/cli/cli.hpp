@@ -5,6 +5,7 @@
 //   bonk render page.html -o page.png --width 800 --height 600
 //   bonk dom page.html                 dump the parsed DOM tree
 //   bonk js script.js                  run JavaScript in the engine (file or inline code)
+//   bonk devtools page.html --selector "#main"   console, network, security, inspector
 //   bonk modules --stage 2             roadmap introspection
 //   bonk version --full                version + toolchain
 //   bonk selftest                      runtime invariants
@@ -22,7 +23,7 @@
 
 namespace bonk {
 
-enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View, Js };
+enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View, Js, DevTools };
 
 std::string_view command_name(Command command);
 
@@ -39,6 +40,8 @@ struct CliOptions {
   int height = 768;
   std::string font_path;                // empty = auto-detect
   std::string profile_dir;              // view/localStorage directory (empty = memory only)
+  std::string selector;                 // devtools --selector: node to inspect
+  bool isolated = false;                // view --isolated: render in a child process
   std::string css_path;                 // extra stylesheet
   bool debug_boxes = false;
   bool dump_layout = false;

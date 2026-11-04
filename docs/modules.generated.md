@@ -14,5 +14,5 @@
 | `shell` | 3 | in-progress | dom, paint, net | Session/tab state, navigation, history, scrolling, clicks + own X11 client |
 | `js` | 4 | in-progress | core | Own lexer, recursive-descent parser, AST, tree-walking interpreter, builtins |
 | `bindings` | 4 | in-progress | js, dom | window, document, elements, events, forms, Canvas 2D, storage (stage 5) |
-| `security` | 6 | planned | net, bindings, shell | SOP, CORS, CSP, mixed content, process-per-tab sandbox, HTTPS UI |
-| `devtools` | 6 | planned | dom, js, net, paint | Console, DOM/CSS inspector, network panel |
+| `security` | 6 | in-progress | net, bindings, shell | Origin/SOP, CORS, CSP, mixed content, per-origin storage, HTTPS UI |
+| `devtools` | 6 | in-progress | dom, js, net, paint | Console, DOM/CSS inspector, network panel |

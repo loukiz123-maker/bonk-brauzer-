@@ -1,4 +1,5 @@
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <string>
 
@@ -214,7 +215,11 @@ BONK_TEST(forms, document_cookie_round_trip) {
 
 BONK_TEST(forms, local_storage_survives_a_reload) {
   const std::string dir = "/tmp/bonk-forms-profile";
-  std::remove((dir + "/local-storage.txt").c_str());
+  {
+    // Storage is origin-scoped now: clear whatever a previous run left behind.
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+  }
   const std::string path = write_page("storage.html",
                                       "<html><body><script>"
                                       "var hits = localStorage.getItem('hits');"
@@ -231,5 +236,8 @@ BONK_TEST(forms, local_storage_survives_a_reload) {
     REQUIRE(session.navigate(path).is_ok());
     CHECK_EQ(session.tab().title, std::string("hits=2"));
   }
-  std::remove((dir + "/local-storage.txt").c_str());
+  {
+    std::error_code ignored;
+    std::filesystem::remove_all(dir, ignored);
+  }
 }

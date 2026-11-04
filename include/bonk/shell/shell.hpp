@@ -12,6 +12,7 @@
 #include <vector>
 
 #include "bonk/bindings/bindings.hpp"
+#include "bonk/core/diag.hpp"
 #include "bonk/core/result.hpp"
 #include "bonk/css/css.hpp"
 #include "bonk/dom/dom.hpp"
@@ -22,11 +23,38 @@
 #include "bonk/net/http.hpp"
 #include "bonk/paint/canvas.hpp"
 #include "bonk/paint/render.hpp"
+#include "bonk/security/security.hpp"
 #include "bonk/text/font.hpp"
 
 namespace bonk::shell {
 
 enum class LoadState { Empty, Loading, Ready, Failed };
+
+/// One entry of the devtools network panel.
+struct NetworkEntry {
+  std::string method;
+  std::string url;
+  int status = 0;
+  std::size_t request_bytes = 0;
+  std::size_t response_bytes = 0;
+  double duration_ms = 0.0;
+  std::string blocked;  // "cors.*" / "csp.*" when the request never completed
+};
+
+/// Everything the devtools panel shows for a page.
+struct DevToolsSnapshot {
+  std::string url;
+  std::string title;
+  security::SecurityState security = security::SecurityState::None;
+  std::string csp;
+  std::string origin;
+  std::size_t node_count = 0;
+  std::size_t scripts_run = 0;
+  std::size_t scripts_blocked = 0;
+  std::vector<bindings::ScriptRun> scripts;
+  std::vector<js::ConsoleEntry> console;
+  std::vector<NetworkEntry> network;
+};
 
 struct ClickOutcome {
   bool followed_link = false;
@@ -42,6 +70,8 @@ struct Tab {
   std::string error;    // last failure, human readable
   float scroll_y = 0.0f;
   float content_height = 0.0f;
+  security::SecurityState security = security::SecurityState::None;
+  std::string origin;  // serialised origin ("null" for local files)
 
   std::vector<std::string> history;
   std::size_t history_index = 0;
@@ -97,6 +127,12 @@ class Session {
   /// First box laid out for `node` (nullptr when the node is not rendered).
   [[nodiscard]] const layout::Box* box_of(dom::NodeId node) const;
 
+  /// Computed styles of the current page (for the devtools inspector).
+  [[nodiscard]] const css::StyleMap& styles() const noexcept { return styles_; }
+
+  /// Devtools view of the current page (console, network, CSP, security state).
+  [[nodiscard]] DevToolsSnapshot devtools() const;
+
   /// Cookies for the current browsing session (shared by every page in the tab).
   [[nodiscard]] net::CookieJar& cookies() noexcept { return cookies_; }
 
@@ -108,7 +144,12 @@ class Session {
  private:
   Status load(std::string_view target, std::string_view base_for_relative);
   /// Tail of `load`: builds document/CSS/JS objects for already-fetched HTML.
-  Status load_html(std::string html_bytes, std::string base, std::string display_url);
+  Status load_html(std::string html_bytes, std::string base, std::string display_url,
+                   const std::vector<std::pair<std::string, std::string>>& response_headers = {});
+  /// Transport for `XMLHttpRequest`: CORS/CSP checks, cookies, devtools logging.
+  bindings::NetworkResponse perform_xhr(const bindings::NetworkRequest& request);
+  /// Blocks a subresource (`img`, `link`, `script`) that policy forbids.
+  bool allow_subresource(std::string_view kind, std::string_view url, Diagnostics* diagnostics);
   /// Sends a form to the network (POST) and renders the reply.
   Status load_posted(const bindings::FormSubmission& submission, const std::string& action);
   /// Fires `submit`, then navigates with GET (query string) or POST.
@@ -138,6 +179,8 @@ class Session {
   std::unique_ptr<bindings::Bindings> bindings_;
   std::vector<layout::CanvasBitmap> canvas_bitmaps_;
   std::size_t node_count_ = 0;
+  std::vector<NetworkEntry> network_log_;
+  std::size_t scripts_blocked_ = 0;
 };
 
 }  // namespace bonk::shell

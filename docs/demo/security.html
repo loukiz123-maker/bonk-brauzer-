@@ -1,0 +1,63 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <title>Security demo</title>
+  <!-- The engine applies this policy: the inline script below never runs. -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'self'; script-src 'self'; img-src 'self' data:; connect-src 'self'">
+  <style>
+    body { margin: 0; font-family: sans-serif; background: #f6f7f9; color: #1b2430; }
+    .page { padding: 24px 28px; max-width: 720px; }
+    h1 { font-size: 24px; margin: 0 0 6px 0; }
+    .lead { margin: 0 0 18px 0; color: #55606e; }
+    .card { background: #ffffff; border: 1px solid #d5dae2; padding: 14px 16px; margin: 0 0 14px 0; }
+    .badge { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+    .blocked { background: #ffe2e0; color: #8c1d18; border: 1px solid #f0b8b4; }
+    .ok { background: #e3f5e8; color: #1b5e33; border: 1px solid #b6dfc4; }
+    code { font-family: monospace; background: #eef1f5; padding: 1px 4px; }
+    ul { margin: 8px 0 0 18px; padding: 0; }
+    li { margin: 4px 0; }
+  </style>
+</head>
+<body>
+  <div class="page">
+    <h1>Security model</h1>
+    <p class="lead">Same-Origin Policy, CORS for <code>XMLHttpRequest</code>, Content-Security-Policy,
+      mixed-content blocking and an opaque origin for local files.</p>
+
+    <div class="card">
+      <span class="badge blocked">blocked</span>
+      <strong>Inline script under <code>script-src 'self'</code></strong>
+      <ul>
+        <li>The script that would replace this heading never executes.</li>
+        <li>The devtools panel lists it as <em>blocked by Content-Security-Policy</em>.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <span class="badge blocked">blocked</span>
+      <strong>Cross-origin read without <code>Access-Control-Allow-Origin</code></strong>
+      <ul>
+        <li>The request is refused before the body is exposed to the page.</li>
+        <li>Reason code surfaces as <code>cors.allow_origin_missing</code>.</li>
+      </ul>
+    </div>
+
+    <div class="card">
+      <span class="badge ok">opaque</span>
+      <strong>This page is <code>file://</code></strong>
+      <ul>
+        <li>Its origin is <code>null</code>: no cookies, no cross-origin reads.</li>
+        <li><code>localStorage</code> is scoped to this directory only.</li>
+      </ul>
+    </div>
+  </div>
+
+  <script>
+    // Never runs: the CSP in the head forbids inline scripts.
+    document.title = 'script ran (CSP failed)';
+    document.querySelectorAll('.badge.blocked')[0].textContent = 'executed';
+  </script>
+</body>
+</html>

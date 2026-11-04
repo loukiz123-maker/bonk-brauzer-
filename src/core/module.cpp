@@ -35,9 +35,9 @@ const ModuleInfo kModules[] = {
      ModuleStatus::InProgress, "core"},
     {"bindings", "JS <-> DOM bridge", "window, document, elements, events, forms, Canvas 2D, storage (stage 5)",
      4, ModuleStatus::InProgress, "js, dom"},
-    {"security", "Security", "SOP, CORS, CSP, mixed content, process-per-tab sandbox, HTTPS UI", 6,
-     ModuleStatus::Planned, "net, bindings, shell"},
-    {"devtools", "DevTools", "Console, DOM/CSS inspector, network panel", 6, ModuleStatus::Planned,
+    {"security", "Security", "Origin/SOP, CORS, CSP, mixed content, per-origin storage, HTTPS UI", 6,
+     ModuleStatus::InProgress, "net, bindings, shell"},
+    {"devtools", "DevTools", "Console, DOM/CSS inspector, network panel", 6, ModuleStatus::InProgress,
      "dom, js, net, paint"},
 };
 

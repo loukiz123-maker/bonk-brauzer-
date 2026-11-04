@@ -27,6 +27,7 @@ const CommandEntry kCommands[] = {
     {"help", Command::Help},         {"version", Command::Version}, {"modules", Command::Modules},
     {"selftest", Command::SelfTest}, {"render", Command::Render},   {"dom", Command::DumpDom},
     {"fetch", Command::Fetch},       {"view", Command::View},      {"js", Command::Js},
+    {"devtools", Command::DevTools},
 };
 
 }  // namespace
@@ -114,6 +115,15 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.font_path = args[++i];
       continue;
     }
+    if (arg == "--isolated") {
+      options.isolated = true;
+      continue;
+    }
+    if (arg == "--selector") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--selector requires a CSS selector"));
+      options.selector = args[++i];
+      continue;
+    }
     if (arg == "--profile") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--profile requires a directory"));
       options.profile_dir = args[++i];
@@ -191,7 +201,7 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
 
   const std::size_t wanted_positionals = (options.command == Command::Render || options.command == Command::DumpDom ||
                                           options.command == Command::Fetch || options.command == Command::View ||
-                                          options.command == Command::Js)
+                                          options.command == Command::Js || options.command == Command::DevTools)
                                              ? 1
                                              : 0;
   if (options.positionals.size() != wanted_positionals) {
@@ -233,7 +243,11 @@ std::string cli_help_text() {
   out += "                    --scroll N            start scrolled down N pixels\n";
   out += "                    --click X,Y           click before screenshotting\n";
   out += "                    --profile DIR         persist localStorage in DIR\n";
+  out += "                    --isolated            render in a child process (process-per-tab)\n";
   out += "  js <file.js|code> run a script in the engine (own lexer, parser, interpreter)\n";
+  out += "  devtools <page>   console, network log, security state and a CSS inspector\n";
+  out += "                    --selector CSS        inspect one element (e.g. \"#main\")\n";
+  out += "                    --profile DIR         persist per-origin localStorage in DIR\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";
   out += "  selftest          run fast runtime invariant checks\n";

@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "bonk/apps/pipeline.hpp"
+#include "bonk/shell/isolate.hpp"
 #include "bonk/cli/cli.hpp"
 #include "bonk/core/diag.hpp"
 #include "bonk/core/module.hpp"
@@ -62,7 +63,151 @@ int run_js(const bonk::CliOptions& options) {
   return 0;
 }
 
+
+std::string format_bytes(std::size_t value) {
+  if (value < 1024) return std::to_string(value) + " B";
+  char buffer[32];
+  std::snprintf(buffer, sizeof(buffer), "%.1f kB", static_cast<double>(value) / 1024.0);
+  return buffer;
+}
+
+std::string inspect_selector(const bonk::shell::Session& session, const std::string& selector) {
+  const bonk::dom::Document* document = session.document();
+  if (document == nullptr) return "  (no document)\n";
+  const bonk::dom::NodeId node = document->query_selector(document->root(), selector);
+  if (!node.valid()) return "  " + selector + ": not found\n";
+
+  std::string tag(document->tag_name(node));
+  const std::string id(document->attribute(node, "id"));
+  const std::string classes(document->attribute(node, "class"));
+  if (!id.empty()) tag += "#" + id;
+  if (!classes.empty()) tag += "." + classes;
+
+  const bonk::css::ComputedStyle& style = session.styles().get(*document, node);
+  std::string out = "  element  " + tag + "\n";
+  if (const bonk::layout::Box* box = session.box_of(node); box != nullptr) {
+    char geometry[128];
+    std::snprintf(geometry, sizeof(geometry), "x=%.0f y=%.0f w=%.0f h=%.0f",
+                  static_cast<double>(box->border_box.x), static_cast<double>(box->border_box.y),
+                  static_cast<double>(box->border_box.width), static_cast<double>(box->border_box.height));
+    out += "  box      ";
+    out += geometry;
+    out += "\n";
+  } else {
+    out += "  box      (not rendered)\n";
+  }
+  out += "  style    display:";
+  out += bonk::css::to_string(style.display);
+  out += "  color:";
+  out += style.color.to_string();
+  out += "  background:";
+  out += style.background_color.is_transparent() ? std::string("transparent") : style.background_color.to_string();
+  out += "  font-size:";
+  out += std::to_string(static_cast<int>(style.font_size));
+  out += "px  weight:" + std::to_string(style.font_weight);
+  out += "  margin:" + style.margin[0].to_string() + "/" + style.margin[3].to_string();
+  out += "  padding:" + style.padding[0].to_string() + "/" + style.padding[3].to_string();
+  out += "\n";
+  if (!style.width.is_auto()) out += "  width    " + style.width.to_string() + "\n";
+  if (!style.height.is_auto()) out += "  height   " + style.height.to_string() + "\n";
+  return out;
+}
+
+int run_devtools(const bonk::CliOptions& options) {
+  bonk::shell::Session session(static_cast<float>(options.width), static_cast<float>(options.height),
+                               options.font_path, options.profile_dir);
+  const bonk::Status navigated = session.navigate(options.input);
+  if (navigated.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", navigated.error().to_string().c_str());
+    return 1;
+  }
+  const bonk::shell::DevToolsSnapshot tools = session.devtools();
+
+  std::string out;
+  out += "url       " + tools.url + "\n";
+  out += "title     " + tools.title + "\n";
+  out += "origin    " + tools.origin + "\n";
+  out += "security  " + std::string(bonk::security::to_string(tools.security));
+  if (tools.security == bonk::security::SecurityState::Secure) out += " (TLS, certificate chain verified)";
+  if (tools.security == bonk::security::SecurityState::None) out += " (local file, opaque origin)";
+  out += "\n";
+  out += "csp       " + (tools.csp.empty() ? std::string("none") : tools.csp) + "\n";
+  out += "dom       nodes=" + std::to_string(tools.node_count) + "\n";
+
+  out += "scripts   " + std::to_string(tools.scripts_run) + " run, " + std::to_string(tools.scripts_blocked) +
+         " blocked\n";
+  for (const bonk::bindings::ScriptRun& run : tools.scripts) {
+    out += "  ";
+    if (run.message.rfind("blocked", 0) == 0) {
+      out += "blocked ";
+    } else {
+      out += run.skipped ? "skipped " : (run.ok ? "ok      " : "error   ");
+    }
+    out += run.message.empty() ? std::string("(no output)") : run.message;
+    out += "\n";
+  }
+
+  out += "console   " + std::to_string(tools.console.size()) + " entr" +
+         (tools.console.size() == 1 ? "y" : "ies") + "\n";
+  for (const bonk::js::ConsoleEntry& entry : tools.console) {
+    const char* level = entry.level == bonk::js::ConsoleEntry::Level::Error    ? "[error]"
+                        : entry.level == bonk::js::ConsoleEntry::Level::Warn   ? "[warn] "
+                                                                            : "[log]  ";
+    out += std::string("  ") + level + " " + entry.message + "\n";
+  }
+
+  out += "network   " + std::to_string(tools.network.size()) + " request" +
+         (tools.network.size() == 1 ? "" : "s") + "\n";
+  for (const bonk::shell::NetworkEntry& entry : tools.network) {
+    out += "  " + entry.method + " ";
+    out += entry.blocked.empty() ? std::to_string(entry.status) : std::string("BLOCKED");
+    out += "  " + format_bytes(entry.response_bytes);
+    char timing[64];
+    std::snprintf(timing, sizeof(timing), "  %7.2f ms", entry.duration_ms);
+    out += timing;
+    out += "  " + entry.url;
+    if (!entry.blocked.empty()) out += "  (" + entry.blocked + ")";
+    out += "\n";
+  }
+
+  if (!options.selector.empty()) {
+    out += "inspector " + options.selector + "\n";
+    out += inspect_selector(session, options.selector);
+  }
+  std::fputs(out.c_str(), stdout);
+  return 0;
+}
+
+int run_view_isolated(const bonk::CliOptions& options) {
+  bonk::shell::IsolatedRequest request;
+  request.target = options.input;
+  request.width = options.width;
+  request.height = options.height;
+  request.font_path = options.font_path;
+  request.scroll = options.scroll;
+  request.profile_dir = options.profile_dir;
+  const bonk::shell::IsolatedResult result = bonk::shell::render_isolated(request);
+  if (result.crashed) {
+    std::fprintf(stderr, "bonk: tab crashed in the renderer process: %s\n", result.error.c_str());
+    return 1;
+  }
+  if (!result.ok) {
+    std::fprintf(stderr, "bonk: %s\n", result.error.empty() ? "render failed" : result.error.c_str());
+    return 1;
+  }
+  std::ofstream file(options.screenshot, std::ios::binary);
+  if (!file) {
+    std::fprintf(stderr, "bonk: cannot write '%s'\n", options.screenshot.c_str());
+    return 1;
+  }
+  file.write(reinterpret_cast<const char*>(result.png.data()), static_cast<std::streamsize>(result.png.size()));
+  std::printf("viewed %s -> %s (%dx%d, title=\"%s\", isolated pid, %.0f ms)\n", options.input.c_str(),
+              options.screenshot.c_str(), options.width, options.height, result.title.c_str(), result.duration_ms);
+  return 0;
+}
+
 int run_view(const bonk::CliOptions& options) {
+  if (options.isolated) return run_view_isolated(options);
   bonk::shell::Session session(static_cast<float>(options.width), static_cast<float>(options.height),
                                options.font_path, options.profile_dir);
   const bonk::Status navigated = session.navigate(options.input);
@@ -85,9 +230,10 @@ int run_view(const bonk::CliOptions& options) {
       std::fprintf(stderr, "bonk: %s\n", written.error().to_string().c_str());
       return 1;
     }
-    std::printf("viewed %s -> %s (%dx%d, title=\"%s\", nodes=%zu, scroll=%.0f)\n", options.input.c_str(),
-                options.screenshot.c_str(), options.width, options.height, session.tab().title.c_str(),
-                session.node_count(), static_cast<double>(session.scroll_y()));
+    std::printf("viewed %s -> %s (%dx%d, title=\"%s\", nodes=%zu, scroll=%.0f, security=%s)\n",
+                options.input.c_str(), options.screenshot.c_str(), options.width, options.height,
+                session.tab().title.c_str(), session.node_count(), static_cast<double>(session.scroll_y()),
+                std::string(bonk::security::to_string(session.tab().security)).c_str());
     return 0;
   }
 
@@ -351,6 +497,9 @@ int main(int argc, char** argv) {
 
     case bonk::Command::Js:
       return run_js(options);
+
+    case bonk::Command::DevTools:
+      return run_devtools(options);
   }
   return 0;
 }
