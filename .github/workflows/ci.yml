@@ -1,0 +1,68 @@
+name: CI
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Canonical build: GNU make, two compilers, both build modes.
+  make:
+    name: make (${{ matrix.cxx }}, ${{ matrix.mode }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        cxx: [g++, clang++]
+        mode: [debug, release]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
+      - name: Build
+        run: make -j"$(nproc)" CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
+      - name: Unit tests
+        run: make test CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
+      - name: Self test
+        run: make selftest CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
+
+  # Memory safety: the engine is a parser-heavy codebase, so leaks/UB are
+  # checked on every push rather than "later".
+  sanitizers:
+    name: sanitizers (asan+ubsan)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test under ASan + UBSan
+        run: make SAN=address,undefined MODE=debug test
+      - name: Self test under ASan + UBSan
+        run: make SAN=address,undefined MODE=debug selftest
+
+  # Warnings are errors in CI; the local default keeps them visible but not fatal.
+  warnings:
+    name: warnings-as-errors
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make WARN="-Wall -Wextra -Wpedantic -Wshadow -Werror" -j"$(nproc)"
+
+  cmake:
+    name: cmake + ctest
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
+      - run: cmake --build build-cmake -j"$(nproc)"
+      - run: ctest --test-dir build-cmake --output-on-failure
+
+  # The module table lives in code; the docs copy must not drift.
+  docs:
+    name: generated docs in sync
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: make docs-check

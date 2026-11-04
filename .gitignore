@@ -1,0 +1,27 @@
+# Build outputs
+build/
+build-*/
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+Testing/
+
+# Objects / binaries
+*.o
+*.d
+*.a
+*.so
+*.exe
+*.pdb
+*.ilk
+
+# Editors / OS
+.vscode/
+.idea/
+.cache/
+*.swp
+.DS_Store
+
+# Local scratch
+/tmp/
+*.log
