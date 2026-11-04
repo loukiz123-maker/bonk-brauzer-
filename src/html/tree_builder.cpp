@@ -13,11 +13,20 @@ namespace {
 const char* const kVoid[] = {"area", "base", "br",  "col",   "embed", "hr",   "img",  "input",
                              "link", "meta", "param", "source", "track", "wbr"};
 
-const char* const kCloseParagraph[] = {"address", "article", "aside",  "blockquote", "details", "div",
-                                       "dl",      "fieldset", "figcaption", "figure",  "footer",  "form",
-                                       "h1",      "h2",     "h3",     "h4",         "h5",      "h6",
-                                       "header",  "hr",     "main",   "nav",        "ol",      "p",
-                                       "pre",     "section", "table", "ul"};
+// Start tags that close an open <p> (WHATWG "in body", the "close a p element"
+// clause). Getting this list right is most of what makes real pages lay out the
+// way their authors expect.
+const char* const kCloseParagraph[] = {"address", "article", "aside",  "blockquote", "center", "details",
+                                       "dialog",  "dir",     "div",    "dl",         "fieldset", "figcaption",
+                                       "figure",  "footer",  "form",   "h1",         "h2",       "h3",
+                                       "h4",      "h5",      "h6",     "header",     "hgroup",   "hr",
+                                       "listing", "main",    "menu",   "nav",        "ol",       "p",
+                                       "plaintext", "pre",   "section", "summary",   "table",    "ul",
+                                       "xmp"};
+
+// Start tags that may stay inside the table structure instead of being fostered out.
+const char* const kTableAllowed[] = {"caption", "colgroup", "col", "tbody", "tfoot",  "thead", "tr",
+                                     "td",      "th",       "style", "script", "template", "table", "form"};
 
 const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link", "meta", "title", "style",
                                      "script", "noscript"};
@@ -120,8 +129,26 @@ class TreeBuilder {
     return false;
   }
 
+  /// Indices are stack positions; "in scope" means "above the nearest scope
+  /// boundary", which is what stops `<button><p><div>` from closing the outer <p>.
+  [[nodiscard]] bool p_in_scope() const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view tag = document_.tag_name(stack_[i - 1]);
+      if (tag == "p") return true;
+      if (tag == "button" || tag == "table" || tag == "td" || tag == "th" || tag == "caption" ||
+          tag == "marquee" || tag == "object" || tag == "applet" || tag == "template" || tag == "html") {
+        return false;
+      }
+    }
+    return false;
+  }
+
   void implied_end_tags(std::string_view next) {
-    if (contains(kCloseParagraph, next) && current_is("p")) close_open("p");
+    // A block start tag closes the nearest open <p>, even when other phrasing
+    // elements are open in between (`<p><b>x<div>`), but never across a scope
+    // boundary such as <button>.
+    if (contains(kCloseParagraph, next) && p_in_scope()) close_open("p");
+    if (next == "button" && has_open("button")) close_open("button");
 
     if (next == "li") {
       close_open("li");
@@ -145,6 +172,52 @@ class TreeBuilder {
     }
   }
 
+  [[nodiscard]] dom::NodeId nearest_table() const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      if (document_.tag_name(stack_[i - 1]) == "table") return stack_[i - 1];
+    }
+    return dom::NodeId{};
+  }
+
+  /// True when text or a stray element here must be foster-parented (i.e. moved
+  /// before the enclosing <table>), per the "in table" insertion mode.
+  [[nodiscard]] bool table_context() const {
+    if (stack_.empty()) return false;
+    const std::string_view top = document_.tag_name(stack_.back());
+    return top == "table" || top == "tbody" || top == "thead" || top == "tfoot" || top == "tr";
+  }
+
+  /// Inserts a node just before the innermost open table, merging text with the
+  /// node that already sits there.
+  void foster_insert(dom::NodeId child, bool text) {
+    const dom::NodeId table = nearest_table();
+    const dom::NodeId parent = table.valid() ? document_.parent(table) : current();
+    if (!parent.valid()) {
+      document_.append_child(current(), child);
+      return;
+    }
+    if (text) {
+      const dom::NodeId previous = previous_sibling_of(table);
+      if (previous.valid() && document_.type(previous) == dom::NodeType::Text) {
+        document_.append_text(previous, document_.text_data(child));
+        return;
+      }
+    }
+    document_.insert_before(parent, child, table);
+  }
+
+  [[nodiscard]] dom::NodeId previous_sibling_of(dom::NodeId node) const {
+    if (!node.valid()) return dom::NodeId{};
+    const dom::NodeId parent = document_.parent(node);
+    if (!parent.valid()) return dom::NodeId{};
+    dom::NodeId previous;
+    for (const dom::NodeId child : document_.children(parent)) {
+      if (child == node) return previous;
+      previous = child;
+    }
+    return dom::NodeId{};
+  }
+
   void insert_element(const Token& token, bool push) {
     const dom::NodeId element = document_.create_element(token.name);
     for (const auto& [name, value] : token.attributes) document_.set_attribute(element, name, value);
@@ -154,6 +227,10 @@ class TreeBuilder {
 
   void append_text(std::string_view text) {
     if (text.empty()) return;
+    if (table_context() && !trim(text).empty()) {  // text inside a table is moved out
+      foster_insert(document_.create_text(text), true);
+      return;
+    }
     document_.append_text(current(), text);
   }
 
@@ -166,12 +243,18 @@ class TreeBuilder {
   void process(const Token& token) {
     switch (token.type) {
       case TokenType::Doctype:
+        // Only the first doctype, before any element, counts; later ones are ignored.
+        if (document_element_seen_) return;
         document_.append_child(document_.root(), document_.create_doctype(token.data));
         return;
       case TokenType::Comment: {
-        // Comments before <html> belong to the document, later ones to the current node.
+        // Before <html> a comment belongs to the document; between <html> and <head>/<body>
+        // it is a child of <html>; afterwards it goes to the current node.
         dom::NodeId target = document_.root();
-        if (html_.valid() && (head_created() || body_created())) target = current();
+        if (html_.valid()) {
+          target = current();
+          if (!head_created() && !body_created()) target = html_;
+        }
         document_.append_child(target, document_.create_comment(token.data));
         return;
       }
@@ -206,6 +289,7 @@ class TreeBuilder {
 
   void handle_start_tag(const Token& token) {
     const std::string_view name = token.name;
+    document_element_seen_ = true;
 
     if (name == "html") {
       if (!html_.valid()) {
@@ -242,7 +326,46 @@ class TreeBuilder {
       return;
     }
 
+    if (name == "plaintext") {  // swallows the rest of the document
+      if (!body_created()) ensure_body();
+      implied_end_tags(name);
+      insert_element(token, true);
+      tokenizer_->enter_plain_text();
+      return;
+    }
+
     if (!body_created()) ensure_body();
+
+    // --- table fixes: implicit <tbody>/<tr>/<colgroup> -------------------
+    if ((name == "td" || name == "th" || name == "tr" || name == "col" || name == "colgroup") &&
+        nearest_table().valid()) {
+      // "Clear the stack back to a table context": drop fostered elements that sit
+      // above the table, but keep the table/tbody/tr chain that is already there.
+      while (!stack_.empty()) {
+        const std::string_view top = document_.tag_name(stack_.back());
+        if (top == "table" || top == "tbody" || top == "thead" || top == "tfoot" || top == "tr") break;
+        stack_.pop_back();
+      }
+      if (name == "col" && current_is("table")) {
+        insert_element(Token{TokenType::StartTag, "colgroup", {}, {}, false}, true);
+      } else if (name == "td" || name == "th" || name == "tr") {
+        if (current_is("table")) insert_element(Token{TokenType::StartTag, "tbody", {}, {}, false}, true);
+        if ((name == "td" || name == "th") && !current_is("tr")) {
+          insert_element(Token{TokenType::StartTag, "tr", {}, {}, false}, true);
+        }
+      } else if (name == "colgroup" && current_is("table")) {
+        // allowed directly inside <table>
+      }
+    }
+
+    // Elements that cannot live inside a table are foster-parented before it.
+    if (table_context() && !contains(kTableAllowed, name)) {
+      const dom::NodeId element = document_.create_element(token.name);
+      for (const auto& [key, value] : token.attributes) document_.set_attribute(element, key, value);
+      foster_insert(element, false);
+      if (!contains(kVoid, name)) stack_.push_back(element);
+      return;
+    }
 
     implied_end_tags(name);
     const bool is_void = contains(kVoid, name);
@@ -288,6 +411,7 @@ class TreeBuilder {
   ParseOptions options_;
   std::unique_ptr<Tokenizer> tokenizer_;
 
+  bool document_element_seen_ = false;
   std::vector<dom::NodeId> stack_;
   dom::NodeId html_;
   dom::NodeId head_;
@@ -297,6 +421,12 @@ class TreeBuilder {
 }  // namespace
 
 Status parse_html(std::string_view bytes, dom::Document& document, Diagnostics* diagnostics, ParseOptions options) {
+  // A leading UTF-8 BOM belongs to the encoding layer: drop it here so the
+  // tokenizer itself stays byte-exact (which is what the conformance corpus checks).
+  if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xEF &&
+      static_cast<unsigned char>(bytes[1]) == 0xBB && static_cast<unsigned char>(bytes[2]) == 0xBF) {
+    bytes.remove_prefix(3);
+  }
   TreeBuilder builder(document, diagnostics, options);
   builder.run(bytes);
   return Status::success();

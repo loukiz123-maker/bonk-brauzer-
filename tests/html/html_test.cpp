@@ -104,10 +104,23 @@ BONK_TEST(tokenizer, entities_are_decoded_in_rcdata_but_not_rawtext) {
   CHECK_EQ(raw.data, std::string("a &amp; b"));
 }
 
-BONK_TEST(tokenizer, newlines_are_normalised_and_bom_stripped) {
-  const std::vector<Token> tokens = tokenize_all("\xEF\xBB\xBF" "a\r\nb\rc");
+BONK_TEST(tokenizer, newlines_are_normalised) {
+  const std::vector<Token> tokens = tokenize_all("a\r\nb\rc");
   REQUIRE(!tokens.empty());
   CHECK_EQ(tokens[0].data, std::string("a\nb\nc"));
+}
+
+// A leading BOM is removed by the document loader, not by the tokenizer: the
+// tokenizer must hand through exactly the bytes it is given (html5lib corpus).
+BONK_TEST(tokenizer, bom_is_passed_through) {
+  const std::vector<Token> tokens = tokenize_all("\xEF\xBB\xBF" "a");
+  REQUIRE(!tokens.empty());
+  CHECK_EQ(tokens[0].data, std::string("\xEF\xBB\xBF" "a"));
+}
+
+BONK_TEST(html, leading_bom_is_stripped_by_the_parser) {
+  const std::string html = parse_and_serialize("\xEF\xBB\xBF" "<p>hi</p>");
+  CHECK_EQ(html, std::string("<html><head></head><body><p>hi</p></body></html>"));
 }
 
 BONK_TEST(html, implicit_html_head_body) {

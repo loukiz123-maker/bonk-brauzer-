@@ -39,6 +39,8 @@ const ModuleInfo kModules[] = {
      ModuleStatus::InProgress, "net, bindings, shell"},
     {"devtools", "DevTools", "Console, DOM/CSS inspector, network panel", 6, ModuleStatus::InProgress,
      "dom, js, net, paint"},
+    {"conformance", "Conformance", "html5lib tokenizer/tree corpora, sandboxed test262 runner, pixel reftests", 7,
+     ModuleStatus::InProgress, "html, dom, js, shell"},
 };
 
 constexpr std::size_t kModuleCount = sizeof(kModules) / sizeof(kModules[0]);

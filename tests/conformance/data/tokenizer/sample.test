@@ -1,0 +1,17 @@
+{
+  "tests": [
+    {"description": "doctype", "input": "<!DOCTYPE html>", "output": [["DOCTYPE", "html", null, null, true]]},
+    {"description": "paragraph and text", "input": "<p>a &amp; b</p>",
+     "output": [["StartTag", "p", {}], ["Character", "a & b"], ["EndTag", "p"]]},
+    {"description": "attributes", "input": "<div id=x class=\"y\">",
+     "output": [["StartTag", "div", {"id": "x", "class": "y"}]]},
+    {"description": "comment", "input": "<!-- hi -->", "output": [["Comment", " hi "]]},
+    {"description": "rcdata with entity", "input": "a &amp; b", "lastStartTag": "title",
+     "initialStates": ["RCDATA state"], "output": [["Character", "a & b"]]},
+    {"description": "rawtext", "input": "a &amp; b", "lastStartTag": "script",
+     "initialStates": ["Script data state"], "output": [["Character", "a &amp; b"]]},
+    {"description": "two-code-point entity", "input": "&NotEqualTilde;", "output": [["Character", "\u2242\u0338"]]},
+    {"description": "double escaped nul", "doubleEscaped": true, "input": "\\u0041\\u0000",
+     "output": [["Character", "\\u0041\\uFFFD"]]}
+  ]
+}

@@ -10,7 +10,8 @@ Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 (SHA-256, HMAC, HKDF, ChaCha20-Poly1305, X25519) и **JavaScript-движок со своим парсером
 и интерпретатором**, flexbox и grid, Canvas 2D, формы с отправкой GET/POST,
 cookies и `localStorage`, Same-Origin Policy с CORS и CSP, процесс на вкладку
-через `fork()`+pipe и собственные devtools.
+через `fork()`+pipe, собственные devtools и прогон по внешним наборам тестов
+(html5lib-tests, test262, reftests).
 
 ![Страница, отрисованная движком](docs/screenshot.png)
 
@@ -29,7 +30,7 @@ HTML был разобран, стилизован, разложен и раст
 | 4 | `js` (лексер, парсер, интерпретатор, встроенные объекты) + `bindings` (window/document/элементы/события) | **сделано ядро**, см. [`docs/STAGE-04.md`](docs/STAGE-04.md) |
 | 5 | flexbox/grid, Canvas 2D, формы (GET/POST), cookies, storage | **сделано ядро**, см. [`docs/STAGE-05.md`](docs/STAGE-05.md) |
 | 6 | security (SOP, CORS, CSP, mixed content), процесс на вкладку + IPC, devtools | **сделано ядро**, см. [`docs/STAGE-06.md`](docs/STAGE-06.md) |
-| 7 | conformance: html5lib-tests, test262, WPT, Acid2 | — |
+| 7 | conformance: html5lib-tests (токенайзер + дерево), test262, пиксельные reftests | **сделано ядро**, см. [`docs/STAGE-07.md`](docs/STAGE-07.md) |
 
 Реестр модулей — в коде (`src/core/module.cpp`), печатается бинарником и генерирует
 `docs/modules.generated.md`:
@@ -55,11 +56,22 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 316 юнит-тестов
+$ make test               # 326 юнит-тестов
+$ make conformance        # прогон по html5lib-tests/test262/reftests -> docs/conformance.md
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
 $ make SAN=address,undefined test   # ASan + UBSan
 ```
+
+Корпуса для conformance-прогона в репозитории не лежат (они большие и со своими
+лицензиями). Один раз скачать:
+
+```console
+$ ./tools/fetch_conformance.sh   # html5lib-tests (tokenizer + tree), test262, reftests
+```
+
+Без корпусов `make test` и `make verify` работают как обычно: conformance-раннеры
+пропускают отсутствующие наборы, а `tests/conformance/reftests/` лежат в репозитории.
 
 CMake-путь (IDE/CI):
 

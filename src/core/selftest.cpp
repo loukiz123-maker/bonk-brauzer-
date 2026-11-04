@@ -145,7 +145,7 @@ bool dependencies_form_a_dag() {
 
 void check_modules(Recorder& rec) {
   const std::vector<ModuleInfo>& all = modules();
-  rec.check(all.size() == 15, "modules.count");
+  rec.check(all.size() == 16, "modules.count");
 
   std::set<std::string_view> ids;
   bool unique = true;

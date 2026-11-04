@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Acid Bonk — a stage-7 layout torture page</title>
+  <style>
+    body { margin: 0; background: #f4f1ea; color: #1c1c1c; font-size: 15px; }
+    header { background: #1b3a5c; color: #f4f1ea; padding: 14px 20px; }
+    header h1 { margin: 0; font-size: 26px; }
+    header p { margin: 6px 0 0 0; font-size: 13px; }
+    main { padding: 16px 20px; }
+    h2 { font-size: 16px; margin: 18px 0 8px 0; border-bottom: 2px solid #1b3a5c; }
+
+    /* flexbox: three equal columns, a fixed sidebar, centre alignment */
+    .row { display: flex; width: 720px; height: 70px; }
+    .row .cell { flex: 1; height: 70px; }
+    .row .fixed { width: 120px; height: 70px; }
+    .c1 { background: #d1495b; } .c2 { background: #edae49; } .c3 { background: #66a182; }
+    .c4 { background: #00798c; }
+
+    /* box model: margin + border + padding + content, and a nested box */
+    .box { width: 300px; margin: 10px 0 10px 6px; padding: 8px; border: 3px solid #1b3a5c; background: #ffffff; }
+    .box .inner { height: 34px; background: #7aa6c2; }
+
+    /* table: two columns, one head row */
+    table { border-collapse: collapse; margin: 6px 0; }
+    th, td { padding: 2px 4px; border: 0; }
+    thead th { background: #1b3a5c; color: #f4f1ea; text-align: left; }
+    tbody tr td { background: #ffffff; }
+    .swatch { width: 40px; height: 14px; background: #66a182; }
+
+    /* text: entities, weights, inline formatting */
+    .text p { margin: 4px 0; }
+    .small { font-size: 12px; }
+    code { background: #e7e0d3; padding: 1px 3px; }
+
+    /* form controls and a list */
+    input { width: 180px; }
+    ul { margin: 6px 0 6px 0; }
+    footer { margin-top: 16px; padding: 10px 20px; background: #1b3a5c; color: #f4f1ea; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Acid Bonk</h1>
+    <p>One page, every layout feature the engine claims: flexbox, tables, the box model, entities, forms.</p>
+  </header>
+
+  <main>
+    <h2>1. Flexbox — equal columns and a fixed sidebar</h2>
+    <div class="row">
+      <div class="cell c1"></div>
+      <div class="cell c2"></div>
+      <div class="cell c3"></div>
+      <div class="fixed c4"></div>
+    </div>
+
+    <h2>2. Box model — border, padding, margin, nested content</h2>
+    <div class="box">
+      <div class="inner"></div>
+    </div>
+
+    <h2>3. Tables — head row, body rows, cells side by side</h2>
+    <table style="width:420px">
+      <thead>
+        <tr><th style="width:120px">colour</th><th style="width:120px">name</th><th style="width:180px">swatch</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>#d1495b</td><td>rose</td><td><div class="swatch" style="background:#d1495b"></div></td></tr>
+        <tr><td>#edae49</td><td>amber</td><td><div class="swatch" style="background:#edae49"></div></td></tr>
+        <tr><td>#66a182</td><td>sage</td><td><div class="swatch" style="background:#66a182"></div></td></tr>
+      </tbody>
+    </table>
+
+    <h2>4. Text — entities, sizes, inline boxes</h2>
+    <div class="text">
+      <p>Named entities: &amp; &lt; &gt; &mdash; &hellip; &nbsp; &copy; &frac12; &NotEqualTilde; (two code points).</p>
+      <p>Numeric entities: &#38; &#8212; &#x263A; and the Windows-1252 mapping &#0128; (euro sign).</p>
+      <p class="small">A smaller line with <code>inline code</code> and a <a href="#nowhere">link that goes nowhere</a>.</p>
+    </div>
+
+    <h2>5. Forms and lists</h2>
+    <form>
+      <p>Name: <input type="text" value="Bonk"><button type="button">Submit</button></p>
+    </form>
+    <ul>
+      <li>tokenizer: 6&nbsp;284 of 6&nbsp;823 html5lib cases</li>
+      <li>tree builder: 870 of 1&nbsp;380 runnable cases</li>
+      <li>JavaScript: 2&nbsp;673 of 13&nbsp;254 runnable test262 files</li>
+    </ul>
+  </main>
+
+  <footer>Rendered by Bonk Brauzer from scratch: HTML → CSS → layout → raster.</footer>
+</body>
+</html>

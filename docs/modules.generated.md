@@ -16,3 +16,4 @@
 | `bindings` | 4 | in-progress | js, dom | window, document, elements, events, forms, Canvas 2D, storage (stage 5) |
 | `security` | 6 | in-progress | net, bindings, shell | Origin/SOP, CORS, CSP, mixed content, per-origin storage, HTTPS UI |
 | `devtools` | 6 | in-progress | dom, js, net, paint | Console, DOM/CSS inspector, network panel |
+| `conformance` | 7 | in-progress | html, dom, js, shell | html5lib tokenizer/tree corpora, sandboxed test262 runner, pixel reftests |

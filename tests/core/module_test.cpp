@@ -10,7 +10,7 @@ using namespace bonk;
 
 BONK_TEST(module, registry_contents) {
   const std::vector<ModuleInfo>& all = modules();
-  CHECK_EQ(all.size(), std::size_t{15});
+  CHECK_EQ(all.size(), std::size_t{16});
 
   // Every module from the specification is present exactly once.
   const char* expected[] = {"core", "crypto", "net",      "html",     "dom",      "css",     "layout",
@@ -78,7 +78,7 @@ BONK_TEST(module, render_table_is_aligned_and_deterministic) {
   CHECK_EQ(std::string(table.substr(0, 2)), std::string("id"));
 
   // Header + separator + 13 rows + trailing empty line.
-  CHECK_EQ(lines.size(), std::size_t{18});
+  CHECK_EQ(lines.size(), std::size_t{19});
   REQUIRE(lines[1].size() > 40);
   const std::string_view separator = lines[1];
   CHECK(separator.find_first_not_of('-') == std::string_view::npos);  // separator is a dashed rule

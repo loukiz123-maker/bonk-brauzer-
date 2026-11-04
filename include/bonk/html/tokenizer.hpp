@@ -43,6 +43,9 @@ class Tokenizer {
   /// the following bytes are text up to the matching end tag, not markup.
   void enter_text_element(std::string_view tag_name, bool rcdata);
 
+  /// <plaintext> swallows the rest of the document as character data.
+  void enter_plain_text();
+
  private:
   enum class State {
     Data,
@@ -63,7 +66,11 @@ class Tokenizer {
     SelfClosingStartTag,
     MarkupDeclarationOpen,
     CommentStart,
+    CommentStartDash,
     Comment,
+    CommentEndDash,
+    CommentEnd,
+    CommentEndBang,
     Doctype,
     BogusComment,
     EndOfFile,
@@ -78,9 +85,10 @@ class Tokenizer {
   void start_new_tag(TokenType type);
   void finish_attribute();
   void emit_character(char32_t code_point);
-  void decode_character_reference(std::string& out);
+  void decode_character_reference(std::string& out, bool in_attribute);
   [[nodiscard]] Token flush_characters();
   [[nodiscard]] bool is_text_end_tag_at(std::size_t position) const;
+  [[nodiscard]] bool starts_tag_end(std::size_t position) const;
 
   std::string input_;
   std::size_t position_ = 0;
@@ -92,10 +100,16 @@ class Tokenizer {
   std::string attribute_name_;
   std::string attribute_value_;
   std::string character_buffer_;
+  bool doctype_name_done_ = false;
   bool text_element_active_ = false;
   bool text_element_rcdata_ = false;
   std::string text_element_name_;
   std::size_t text_element_end_ = 0;
+
+  // <script> has three text modes: plain, "escaped" after `<!--` and
+  // "double escaped" after a nested <script>; only the first two honour `</script>`.
+  enum class ScriptMode { Data, Escaped, DoubleEscaped };
+  ScriptMode script_mode_ = ScriptMode::Data;
 };
 
 }  // namespace bonk::html

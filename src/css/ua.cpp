@@ -150,10 +150,17 @@ sup {
   font-size: 0.83em;
 }
 table {
+  display: table;
   margin: 1em 0;
 }
-td, th {
+thead, tbody, tfoot {
   display: block;
+}
+tr {
+  display: table-row;
+}
+td, th {
+  display: table-cell;
   padding: 2px 4px;
 }
 )CSS";

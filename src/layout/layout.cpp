@@ -515,6 +515,7 @@ class LayoutEngine {
     const css::ComputedStyle& style = *box.style;
     if (style.display == css::Display::Flex) return layout_flex(box, width);
     if (style.display == css::Display::Grid) return layout_grid(box, width);
+    if (style.display == css::Display::TableRow) return layout_table_row(box, width);
     if (has_block_children(box.node)) {
       return layout_block_children(box, box.content_box.x, box.content_box.y, width);
     }
@@ -687,9 +688,10 @@ class LayoutEngine {
         if (row) {
           init_child_box(probe, item.node, *item.style, 0.0f, 0.0f, item.main);
           const float content_height = layout_content(probe, probe.content_box.width);
+          // A specified cross size always wins; `align-items: stretch` only feeds
+          // items whose height is auto (CSS Flexbox §9.4).
           item.cross = content_height + item.pad_cross;
-          if (!item.style->height.is_auto() &&
-              style.align_items != css::AlignItems::Stretch) {
+          if (!item.style->height.is_auto()) {
             item.cross = resolve(item.style->height, item.style->font_size, content_width) + item.pad_cross;
           }
         } else {
@@ -742,9 +744,11 @@ class LayoutEngine {
         init_child_box(box, item.node, *item.style, x, y, width);
         const float content_height = layout_content(box, box.content_box.width);
         float final_content_height = content_height;
-        if (style.align_items == css::AlignItems::Stretch && item.style->height.is_auto()) {
-          final_content_height =
-              std::max(content_height, line_size - item.pad_cross);
+        if (!item.style->height.is_auto()) {
+          // `height` is the content-box height, which is what the item asked for.
+          final_content_height = resolve(item.style->height, item.style->font_size, content_width);
+        } else if (style.align_items == css::AlignItems::Stretch) {
+          final_content_height = std::max(content_height, line_size - item.pad_cross);
         }
         box.content_box.height = final_content_height;
         border_height = final_content_height + item.pad_cross;
@@ -771,6 +775,63 @@ class LayoutEngine {
       (void)border_height;
     }
     return cross_cursor;
+  }
+
+  // --- tables -------------------------------------------------------------
+  /// One table row: cells sit side by side, auto widths share the leftover space,
+  /// and every cell is stretched to the tallest cell in the row. This is the
+  /// "anonymous table" simplification: no column model, no borders collapsing.
+  float layout_table_row(Box& row, float content_width) {
+    std::vector<dom::NodeId> cells;
+    float fixed_width = 0.0f;
+    std::size_t automatic = 0;
+    for (const dom::NodeId child : document_.children(row.node)) {
+      if (document_.type(child) != dom::NodeType::Element) continue;
+      const css::ComputedStyle& child_style = styles_.get(document_, child);
+      if (child_style.display == css::Display::None) continue;
+      cells.push_back(child);
+      if (child_style.width.is_auto()) {
+        ++automatic;
+      } else {
+        const float horizontal = resolve(child_style.padding[3], child_style.font_size, content_width) +
+                                 resolve(child_style.padding[1], child_style.font_size, content_width) +
+                                 child_style.border_width[1] + child_style.border_width[3];
+        fixed_width += resolve(child_style.width, child_style.font_size, content_width) + horizontal;
+      }
+    }
+    if (cells.empty()) return 0.0f;
+
+    const float automatic_width =
+        automatic == 0 ? 0.0f : std::max(0.0f, (content_width - fixed_width) / static_cast<float>(automatic));
+    float x = row.content_box.x;
+    float row_height = 0.0f;
+    std::vector<Box> boxes;
+    for (const dom::NodeId cell : cells) {
+      const css::ComputedStyle& cell_style = styles_.get(document_, cell);
+      const float horizontal = resolve(cell_style.padding[3], cell_style.font_size, content_width) +
+                               resolve(cell_style.padding[1], cell_style.font_size, content_width) +
+                               cell_style.border_width[1] + cell_style.border_width[3];
+      const float width = cell_style.width.is_auto() ? automatic_width
+                                                     : resolve(cell_style.width, cell_style.font_size, content_width) +
+                                                           horizontal;
+      Box cell_box;
+      init_child_box(cell_box, cell, cell_style, x, row.content_box.y, width);
+      float height = layout_content(cell_box, cell_box.content_box.width);
+      if (!cell_style.height.is_auto()) height = resolve(cell_style.height, cell_style.font_size, content_width);
+      cell_box.content_box.height = height;
+      cell_box.border_box.height = height + cell_box.padding[0] + cell_box.padding[2] + cell_box.border[0] +
+                                   cell_box.border[2];
+      row_height = std::max(row_height, cell_box.border_box.height);
+      x += cell_box.border_box.width;
+      boxes.push_back(std::move(cell_box));
+    }
+    for (Box& cell_box : boxes) {  // stretch every cell to the row height
+      const float vertical = cell_box.padding[0] + cell_box.padding[2] + cell_box.border[0] + cell_box.border[2];
+      cell_box.border_box.height = std::max(cell_box.border_box.height, row_height);
+      cell_box.content_box.height = std::max(0.0f, cell_box.border_box.height - vertical);
+      row.children.push_back(std::move(cell_box));
+    }
+    return row_height;
   }
 
   // --- grid ---------------------------------------------------------------
@@ -976,7 +1037,8 @@ class LayoutEngine {
             style.display == css::Display::ListItem ? child_box.content_box.x + kListIndent : child_box.content_box.x;
 
         float height = 0.0f;
-        if (style.display == css::Display::Flex || style.display == css::Display::Grid) {
+        if (style.display == css::Display::Flex || style.display == css::Display::Grid ||
+            style.display == css::Display::TableRow) {
           height = layout_content(child_box, inner_width);
         } else if (has_block_children(child)) {
           // Mixed content: layout_block_children() already appends the element's

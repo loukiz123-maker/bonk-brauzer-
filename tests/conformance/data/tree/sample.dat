@@ -1,0 +1,36 @@
+#data
+<p>One<p>Two
+#errors
+(1,0): expected-doctype-but-got-start-tag
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "One"
+|     <p>
+|       "Two"
+
+#data
+<!DOCTYPE html><table><tr><td>a</td></tr></table>
+#document
+| <!DOCTYPE html>
+| <html>
+|   <head>
+|   <body>
+|     <table>
+|       <tbody>
+|         <tr>
+|           <td>
+|             "a"
+
+#data
+<div id="x"><span>hi</span></div>
+#document
+| <html>
+|   <head>
+|   <body>
+|     <div>
+|       id="x"
+|       <span>
+|         "hi"
