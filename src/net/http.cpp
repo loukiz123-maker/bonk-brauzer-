@@ -111,33 +111,6 @@ Result<SocketHandle> connect_to(std::string_view host, std::uint16_t port, int t
   return result;
 }
 
-std::string build_request(const HttpRequest& request) {
-  std::string out;
-  out += request.method;
-  out += ' ';
-  out += request.url.has_opaque_path() ? request.url.path : request.url.path;
-  if (out.back() == ' ') out += '/';
-  if (!request.url.query.empty()) {
-    out += '?';
-    out += request.url.query;
-  }
-  out += " HTTP/1.1\r\nHost: ";
-  out += request.url.host;
-  if (request.url.port.has_value() && request.url.effective_port() != request.url.port.value_or(0)) {
-    out += ':';
-    out += std::to_string(*request.url.port);
-  }
-  out += "\r\nUser-Agent: BonkBrauzer/0.1\r\nAccept: text/html,*/*\r\nAccept-Encoding: identity\r\nConnection: close\r\n";
-  for (const auto& [name, value] : request.headers) {
-    out += name;
-    out += ": ";
-    out += value;
-    out += "\r\n";
-  }
-  out += "\r\n";
-  return out;
-}
-
 Result<std::string> read_all(SocketHandle handle, Diagnostics* diagnostics) {
   std::string response;
   char buffer[16384];
@@ -193,6 +166,49 @@ Result<std::string> decode_chunked(std::string_view body) {
     out.append(body.substr(position, size));
     position += static_cast<std::size_t>(size) + 2;  // skip CRLF
   }
+}
+
+std::string build_request(const HttpRequest& request) {
+  std::string out;
+  out += request.method;
+  out += ' ';
+  out += request.url.has_opaque_path() ? request.url.path : request.url.path;
+  if (out.back() == ' ') out += '/';
+  if (!request.url.query.empty()) {
+    out += '?';
+    out += request.url.query;
+  }
+  out += " HTTP/1.1\r\nHost: ";
+  out += request.url.host;
+  if (request.url.port.has_value() && request.url.effective_port() != request.url.port.value_or(0)) {
+    out += ':';
+    out += std::to_string(*request.url.port);
+  }
+  out += "\r\nUser-Agent: BonkBrauzer/0.1\r\nAccept: text/html,*/*\r\nAccept-Encoding: gzip, deflate, identity\r\nConnection: close\r\n";
+  if (request.cookie_jar != nullptr) {
+    const std::string cookies = request.cookie_jar->cookie_header(request.url);
+    if (!cookies.empty()) {
+      out += "Cookie: ";
+      out += cookies;
+      out += "\r\n";
+    }
+  }
+  if (!request.body.empty() || request.method == "POST") {
+    out += "Content-Length: ";
+    out += std::to_string(request.body.size());
+    out += "\r\nContent-Type: ";
+    out += request.content_type.empty() ? std::string("application/x-www-form-urlencoded") : request.content_type;
+    out += "\r\n";
+  }
+  for (const auto& [name, value] : request.headers) {
+    out += name;
+    out += ": ";
+    out += value;
+    out += "\r\n";
+  }
+  out += "\r\n";
+  out += request.body;
+  return out;
 }
 
 Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagnostics) {
@@ -298,6 +314,12 @@ Result<HttpResponse> http_request(const HttpRequest& request, Diagnostics* diagn
       }
       if (line_end == std::string_view::npos) break;
       position = line_end + 2;
+    }
+
+    if (request.cookie_jar != nullptr) {
+      for (const auto& [name, value] : parsed.headers) {
+        if (name == "set-cookie" || name == "Set-Cookie") (void)request.cookie_jar->store_from_header(current, value);
+      }
     }
 
     const bool is_redirect = parsed.status == 301 || parsed.status == 302 || parsed.status == 303 ||

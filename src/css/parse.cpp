@@ -351,6 +351,9 @@ Display display_from_keyword(std::string_view keyword) noexcept {
   if (equals_ci(keyword, "inline")) return Display::Inline;
   if (equals_ci(keyword, "inline-block")) return Display::InlineBlock;
   if (equals_ci(keyword, "flex")) return Display::Flex;
+  if (equals_ci(keyword, "inline-flex")) return Display::Flex;
+  if (equals_ci(keyword, "grid")) return Display::Grid;
+  if (equals_ci(keyword, "inline-grid")) return Display::Grid;
   if (equals_ci(keyword, "none")) return Display::None;
   if (equals_ci(keyword, "list-item")) return Display::ListItem;
   if (equals_ci(keyword, "table")) return Display::Table;
@@ -506,6 +509,8 @@ std::string_view to_string(Display display) noexcept {
       return "inline-block";
     case Display::Flex:
       return "flex";
+    case Display::Grid:
+      return "grid";
     case Display::None:
       return "none";
     case Display::ListItem:

@@ -38,6 +38,7 @@ struct CliOptions {
   int width = 1024;
   int height = 768;
   std::string font_path;                // empty = auto-detect
+  std::string profile_dir;              // view/localStorage directory (empty = memory only)
   std::string css_path;                 // extra stylesheet
   bool debug_boxes = false;
   bool dump_layout = false;

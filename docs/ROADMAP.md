@@ -79,8 +79,9 @@ computed values с `em/rem`; TrueType-парсер и растеризация �
 - `bindings`: `window`, `document`, обёртки элементов (`textContent`, `innerHTML`, `classList`,
   `style`, `appendChild`, …), события с всплытием, инлайновые `<script>`.
   **Сделано ядро** (`src/bindings/bindings.cpp`).
-- Впереди (этап 5–7): `class`, `switch`, regex, `Promise`/`async`, `Map/Set/Date`, байткод,
-  tracing GC, `fetch`/`XHR`/`localStorage`, Canvas 2D, микро- и макротаски.
+- Впереди (этап 6–7): `class`, `switch`, regex, `Promise`/`async`, `Map/Set/Date`, байткод,
+  tracing GC, `fetch`/`XHR`, микро- и макротаски; `localStorage`, Canvas 2D и формы —
+  сделаны на этапе 5.
 
 **Критерий выхода**: проходит подмножество test262 (базовый синтаксис + встроенные объекты),
 страница со счётчиком на `addEventListener` и `fetch` работает.
@@ -91,8 +92,15 @@ computed values с `em/rem`; TrueType-парсер и растеризация �
 
 Flexbox и Grid в `layout`, Canvas 2D в `paint`+`bindings`, формы (`input`, `select`,
 `textarea`, отправка GET/POST), cookies в `net`, `localStorage`/`sessionStorage`.
+Подробности: [`docs/STAGE-05.md`](STAGE-05.md), решение по состоянию —
+[`docs/adr/0007-forms-cookies-storage.md`](adr/0007-forms-cookies-storage.md).
 
 **Критерий выхода**: типовой лендинг на flexbox+grid с формой и сохранением состояния.
+Сейчас: flexbox/grid раскладывают карточки и сетки (`docs/demo/flex-grid.png`), Canvas 2D
+рисует примитивы (`docs/demo/canvas.png`), форма отправляется GET и POST на реальный
+сервер, cookies доезжают до сервера и возвращаются в `document.cookie`,
+`localStorage` переживает перезапуск (`docs/demo/forms.png`). Остаётся ввод с клавиатуры
+и `grid-template-areas` — они перенесены в этап 6.
 
 ## Этап 6 — безопасность, процессы, devtools
 

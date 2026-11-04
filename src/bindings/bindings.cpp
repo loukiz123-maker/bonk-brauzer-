@@ -3,7 +3,10 @@
 
 #include <algorithm>
 #include <cctype>
+#include <fstream>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -11,6 +14,7 @@
 
 #include "bonk/core/version.hpp"
 #include "bonk/html/html.hpp"
+#include "bonk/paint/canvas.hpp"
 #include "bonk/net/url.hpp"
 
 namespace bonk::bindings {
@@ -102,13 +106,236 @@ const char* const kStyleProperties[] = {
     "visibility", "overflow",         "transform",       "cursor",        "letterSpacing"};
 }  // namespace
 
+
+
+// -------------------------------------------------------------- storage -----
+
+namespace {
+
+std::string escape_field(std::string_view text) {
+  std::string out;
+  for (const char c : text) {
+    switch (c) {
+      case '\\': out += "\\\\"; break;
+      case '\t': out += "\\t"; break;
+      case '\n': out += "\\n"; break;
+      default: out.push_back(c); break;
+    }
+  }
+  return out;
+}
+
+std::string unescape_field(std::string_view text) {
+  std::string out;
+  for (std::size_t i = 0; i < text.size(); ++i) {
+    if (text[i] != '\\' || i + 1 >= text.size()) {
+      out.push_back(text[i]);
+      continue;
+    }
+    ++i;
+    switch (text[i]) {
+      case 't': out.push_back('\t'); break;
+      case 'n': out.push_back('\n'); break;
+      case '\\': out.push_back('\\'); break;
+      default: out.push_back(text[i]); break;
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+Storage::Storage(std::string path) : path_(std::move(path)) {}
+
+std::string Storage::get(const std::string& key) const {
+  for (const auto& entry : entries_) {
+    if (entry.first == key) return entry.second;
+  }
+  return std::string();
+}
+
+bool Storage::has(const std::string& key) const {
+  for (const auto& entry : entries_) {
+    if (entry.first == key) return true;
+  }
+  return false;
+}
+
+void Storage::set(std::string key, std::string value) {
+  for (auto& entry : entries_) {
+    if (entry.first == key) {
+      entry.second = std::move(value);
+      return;
+    }
+  }
+  entries_.emplace_back(std::move(key), std::move(value));
+}
+
+void Storage::remove(const std::string& key) {
+  entries_.erase(std::remove_if(entries_.begin(), entries_.end(),
+                                [&key](const std::pair<std::string, std::string>& entry) {
+                                  return entry.first == key;
+                                }),
+                 entries_.end());
+}
+
+void Storage::clear() { entries_.clear(); }
+
+std::string Storage::key_of(std::size_t index) const {
+  return index < entries_.size() ? entries_[index].first : std::string();
+}
+
+std::vector<std::string> Storage::keys() const {
+  std::vector<std::string> out;
+  out.reserve(entries_.size());
+  for (const auto& entry : entries_) out.push_back(entry.first);
+  return out;
+}
+
+bool Storage::load() {
+  if (path_.empty()) return false;
+  std::ifstream file{path_, std::ios::binary};
+  if (!file) return false;
+  entries_.clear();
+  std::string line;
+  while (std::getline(file, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const std::size_t tab = line.find('\t');
+    if (tab == std::string::npos) continue;
+    entries_.emplace_back(unescape_field(std::string_view(line).substr(0, tab)),
+                          unescape_field(std::string_view(line).substr(tab + 1)));
+  }
+  return true;
+}
+
+bool Storage::save() const {
+  if (path_.empty()) return false;
+  std::ofstream file{path_, std::ios::binary | std::ios::trunc};
+  if (!file) return false;
+  for (const auto& entry : entries_) {
+    file << escape_field(entry.first) << '\t' << escape_field(entry.second) << '\n';
+  }
+  return static_cast<bool>(file);
+}
+
+
+// --------------------------------------------------------------- canvas -----
+
+namespace {
+
+/// State of one `<canvas>` 2D context: the bitmap plus the drawing state stack.
+struct CanvasState {
+  explicit CanvasState(int width_in, int height_in) : canvas(width_in, height_in) {
+    canvas.clear(css::Color{255, 255, 255, 0});
+  }
+  paint::Canvas canvas;
+  css::Color fill{0, 0, 0, 255};
+  css::Color stroke{0, 0, 0, 255};
+  float line_width = 1.0f;
+  float alpha = 1.0f;
+  std::string font = "16px sans-serif";
+  std::vector<std::pair<float, float>> path;
+  struct Saved {
+    css::Color fill;
+    css::Color stroke;
+    float line_width = 1.0f;
+    float alpha = 1.0f;
+  };
+  std::vector<Saved> stack;
+};
+
+bool parse_canvas_color(const Value& value, css::Color& out) {
+  if (value.is_string()) return css::parse_color(value.text, out);
+  return false;
+}
+
+/// Even-odd scanline fill of a polygon; the only path primitive we need for
+/// `fill()`, because paint::Canvas offers rectangles and glyphs but not paths.
+void fill_polygon(paint::Canvas& canvas, const std::vector<std::pair<float, float>>& points, css::Color color) {
+  if (points.size() < 3) return;
+  float min_y = points[0].second;
+  float max_y = points[0].second;
+  for (const auto& [x, y] : points) {
+    (void)x;
+    min_y = std::min(min_y, y);
+    max_y = std::max(max_y, y);
+  }
+  const int first_row = std::max(0, static_cast<int>(std::floor(min_y)));
+  const int last_row = std::min(canvas.height() - 1, static_cast<int>(std::ceil(max_y)));
+  std::vector<float> crossings;
+  for (int row = first_row; row <= last_row; ++row) {
+    const float y = static_cast<float>(row) + 0.5f;
+    crossings.clear();
+    for (std::size_t i = 0; i < points.size(); ++i) {
+      const auto& [x1, y1] = points[i];
+      const auto& [x2, y2] = points[(i + 1) % points.size()];
+      if ((y1 <= y && y2 > y) || (y2 <= y && y1 > y)) {
+        const float t = (y - y1) / (y2 - y1);
+        crossings.push_back(x1 + t * (x2 - x1));
+      }
+    }
+    std::sort(crossings.begin(), crossings.end());
+    for (std::size_t i = 0; i + 1 < crossings.size(); i += 2) {
+      const int start = std::max(0, static_cast<int>(std::ceil(crossings[i])));
+      const int end = std::min(canvas.width() - 1, static_cast<int>(std::floor(crossings[i + 1])));
+      for (int x = start; x <= end; ++x) canvas.blend_pixel(x, row, color);
+    }
+  }
+}
+
+/// Thick polyline via a disk stamped along each segment (good enough for
+/// `stroke()` and `strokeRect` at the widths pages actually use).
+void stroke_polyline(paint::Canvas& canvas, const std::vector<std::pair<float, float>>& points, css::Color color,
+                     float width, bool closed) {
+  if (points.empty() || width <= 0.0f) return;
+  const auto stamp = [&](float cx, float cy) {
+    const int radius = std::max(0, static_cast<int>(std::ceil(width / 2.0f)));
+    for (int dy = -radius; dy <= radius; ++dy) {
+      for (int dx = -radius; dx <= radius; ++dx) {
+        canvas.blend_pixel(static_cast<int>(std::lround(cx)) + dx, static_cast<int>(std::lround(cy)) + dy, color);
+      }
+    }
+  };
+  const std::size_t segments = closed ? points.size() : (points.size() > 1 ? points.size() - 1 : 0);
+  for (std::size_t i = 0; i < segments; ++i) {
+    const auto& [x1, y1] = points[i];
+    const auto& [x2, y2] = points[(i + 1) % points.size()];
+    const float dx = x2 - x1;
+    const float dy = y2 - y1;
+    const float length = std::max(1.0f, std::sqrt(dx * dx + dy * dy));
+    const int steps = static_cast<int>(length);
+    for (int step = 0; step <= steps; ++step) {
+      const float t = static_cast<float>(step) / static_cast<float>(steps);
+      stamp(x1 + dx * t, y1 + dy * t);
+    }
+  }
+}
+
+css::Color apply_alpha(css::Color color, float alpha) {
+  color.a = static_cast<std::uint8_t>(std::clamp(static_cast<float>(color.a) * std::clamp(alpha, 0.0f, 1.0f), 0.0f,
+                                                255.0f));
+  return color;
+}
+
+}  // namespace
+
 struct Bindings::Impl {
   js::Context& context;
   Document& document;
 
   std::unordered_map<std::uint64_t, Value> wrappers;
   std::unordered_map<std::uint64_t, std::vector<std::pair<std::string, Value>>> listeners;
+  std::unordered_map<std::uint64_t, std::shared_ptr<CanvasState>> canvases;
+  std::vector<CanvasImage> canvas_images;
+  const text::Font* font = nullptr;
+  text::Font fallback_font;
+  net::CookieJar* cookies = nullptr;
+  js::Value local_storage_object;
+  js::Value session_storage_object;
+  Storage local_storage;
+  Storage session_storage;
   std::vector<ScriptRun> runs;
+  std::vector<FormSubmission> pending_submissions;
   Value window;
   Value document_object;
   Value location_object;
@@ -150,6 +377,13 @@ struct Bindings::Impl {
   void install_window();
   void install_document();
   void install_element(const std::shared_ptr<Object>& object, NodeId node);
+  void install_canvas(const std::shared_ptr<Object>& object, NodeId node);
+  std::shared_ptr<CanvasState> canvas_state(NodeId node);
+  std::string control_value(NodeId node) const;
+  std::string control_label(NodeId node) const;
+  FormSubmission collect_form(NodeId form) const;
+  void materialize_controls();
+  Value canvas_context(NodeId node);
   void install_document_node(const std::shared_ptr<Object>& object, NodeId node);
 };
 
@@ -399,6 +633,337 @@ bool Bindings::Impl::dispatch(NodeId target, const std::string& type, Value deta
   return prevented;
 }
 
+
+// --------------------------------------------------------------- canvas -----
+
+std::shared_ptr<CanvasState> Bindings::Impl::canvas_state(NodeId node) {
+  const std::uint64_t key = node_key(node);
+  const auto found = canvases.find(key);
+  if (found != canvases.end()) return found->second;
+
+  // Size comes from the HTML attributes (CSS pixels == device Pixels for us).
+  int width = 300;
+  int height = 150;
+  unsigned long long parsed = 0;
+  const std::string_view width_attribute = document.attribute(node, "width");
+  if (!width_attribute.empty()) {
+    char* end = nullptr;
+    const long value = std::strtol(std::string(width_attribute).c_str(), &end, 10);
+    if (value > 0) width = static_cast<int>(std::min<long>(value, 4096));
+    (void)parsed;
+  }
+  const std::string_view height_attribute = document.attribute(node, "height");
+  if (!height_attribute.empty()) {
+    char* end = nullptr;
+    const long value = std::strtol(std::string(height_attribute).c_str(), &end, 10);
+    if (value > 0) height = static_cast<int>(std::min<long>(value, 4096));
+  }
+  auto state = std::make_shared<CanvasState>(width, height);
+  canvases[key] = state;
+  return state;
+}
+
+Value Bindings::Impl::canvas_context(NodeId node) {
+  const std::shared_ptr<CanvasState> state = canvas_state(node);
+  auto drawing_context = std::make_shared<Object>();
+
+  const auto font_ref = [this]() -> const text::Font& {
+    return font != nullptr ? *font : fallback_font;
+  };
+  const auto color_of = [](const Value& value, css::Color fallback) {
+    css::Color color;
+    return parse_canvas_color(value, color) ? color : fallback;
+  };
+
+  getter(drawing_context, "canvas", [this, node]() { return wrap(node); });
+  getter(drawing_context, "fillStyle", [state]() {
+    char buffer[8];
+    std::snprintf(buffer, sizeof(buffer), "#%02x%02x%02x", state->fill.r, state->fill.g, state->fill.b);
+    return Value::string_of(buffer);
+  });
+  setter(drawing_context, "fillStyle", [state, color_of](const Value& value) {
+    state->fill = color_of(value, state->fill);
+  });
+  getter(drawing_context, "strokeStyle", [state]() {
+    char buffer[8];
+    std::snprintf(buffer, sizeof(buffer), "#%02x%02x%02x", state->stroke.r, state->stroke.g, state->stroke.b);
+    return Value::string_of(buffer);
+  });
+  setter(drawing_context, "strokeStyle", [state, color_of](const Value& value) {
+    state->stroke = color_of(value, state->stroke);
+  });
+  getter(drawing_context, "lineWidth", [state]() { return Value::number_of(state->line_width); });
+  setter(drawing_context, "lineWidth", [state](const Value& value) { state->line_width = static_cast<float>(js::to_number(value)); });
+  getter(drawing_context, "globalAlpha", [state]() { return Value::number_of(state->alpha); });
+  setter(drawing_context, "globalAlpha", [state](const Value& value) {
+    state->alpha = static_cast<float>(std::clamp(js::to_number(value), 0.0, 1.0));
+  });
+
+  auto number_at = [](const std::vector<Value>& arguments, std::size_t index) {
+    return index < arguments.size() ? static_cast<float>(js::to_number(arguments[index])) : 0.0f;
+  };
+
+  method(drawing_context, "fillRect", [state, number_at](const std::vector<Value>& arguments, Value) {
+    state->canvas.fill_rect(paint::Rect{number_at(arguments, 0), number_at(arguments, 1), number_at(arguments, 2),
+                                        number_at(arguments, 3)},
+                            apply_alpha(state->fill, state->alpha));
+    return Value::undefined();
+  });
+  method(drawing_context, "clearRect", [state, number_at](const std::vector<Value>& arguments, Value) {
+    state->canvas.fill_rect(paint::Rect{number_at(arguments, 0), number_at(arguments, 1), number_at(arguments, 2),
+                                        number_at(arguments, 3)},
+                            css::Color{0, 0, 0, 0});
+    return Value::undefined();
+  });
+  method(drawing_context, "strokeRect", [state, number_at](const std::vector<Value>& arguments, Value) {
+    state->canvas.stroke_rect(paint::Rect{number_at(arguments, 0), number_at(arguments, 1), number_at(arguments, 2),
+                                          number_at(arguments, 3)},
+                              apply_alpha(state->stroke, state->alpha), std::max(1.0f, state->line_width));
+    return Value::undefined();
+  });
+  method(drawing_context, "fillText", [state, font_ref, number_at](const std::vector<Value>& arguments, Value) {
+    if (arguments.empty()) return Value::undefined();
+    const std::string text = js::to_string(arguments[0]);
+    state->canvas.draw_text(font_ref(), text, number_at(arguments, 1), number_at(arguments, 2), 16.0f,
+                            apply_alpha(state->fill, state->alpha));
+    return Value::undefined();
+  });
+  method(drawing_context, "measureText", [font_ref](const std::vector<Value>& arguments, Value) {
+    const float width =
+        font_ref().text_width(arguments.empty() ? std::string() : js::to_string(arguments[0]), 16.0f);
+    auto metrics = std::make_shared<Object>();
+    metrics->properties["width"] = Property{Value::number_of(width)};
+    return Value::object_of(metrics);
+  });
+  method(drawing_context, "beginPath", [state](const std::vector<Value>&, Value) {
+    state->path.clear();
+    return Value::undefined();
+  });
+  method(drawing_context, "moveTo", [state, number_at](const std::vector<Value>& arguments, Value) {
+    state->path.emplace_back(number_at(arguments, 0), number_at(arguments, 1));
+    return Value::undefined();
+  });
+  method(drawing_context, "lineTo", [state, number_at](const std::vector<Value>& arguments, Value) {
+    state->path.emplace_back(number_at(arguments, 0), number_at(arguments, 1));
+    return Value::undefined();
+  });
+  method(drawing_context, "closePath", [state](const std::vector<Value>&, Value) {
+    if (state->path.size() > 1) state->path.push_back(state->path.front());
+    return Value::undefined();
+  });
+  method(drawing_context, "rect", [state, number_at](const std::vector<Value>& arguments, Value) {
+    const float x = number_at(arguments, 0);
+    const float y = number_at(arguments, 1);
+    const float w = number_at(arguments, 2);
+    const float h = number_at(arguments, 3);
+    state->path.emplace_back(x, y);
+    state->path.emplace_back(x + w, y);
+    state->path.emplace_back(x + w, y + h);
+    state->path.emplace_back(x, y + h);
+    return Value::undefined();
+  });
+  method(drawing_context, "arc", [state, number_at](const std::vector<Value>& arguments, Value) {
+    const float cx = number_at(arguments, 0);
+    const float cy = number_at(arguments, 1);
+    const float radius = number_at(arguments, 2);
+    const float start = number_at(arguments, 3);
+    const float end = number_at(arguments, 4);
+    const int steps = 32;
+    for (int step = 0; step <= steps; ++step) {
+      const float angle = start + (end - start) * static_cast<float>(step) / static_cast<float>(steps);
+      state->path.emplace_back(cx + radius * std::cos(angle), cy + radius * std::sin(angle));
+    }
+    return Value::undefined();
+  });
+  method(drawing_context, "fill", [state](const std::vector<Value>&, Value) {
+    fill_polygon(state->canvas, state->path, apply_alpha(state->fill, state->alpha));
+    return Value::undefined();
+  });
+  method(drawing_context, "stroke", [state](const std::vector<Value>&, Value) {
+    stroke_polyline(state->canvas, state->path, apply_alpha(state->stroke, state->alpha),
+                    std::max(1.0f, state->line_width), false);
+    return Value::undefined();
+  });
+  method(drawing_context, "save", [state](const std::vector<Value>&, Value) {
+    state->stack.push_back(CanvasState::Saved{state->fill, state->stroke, state->line_width, state->alpha});
+    return Value::undefined();
+  });
+  method(drawing_context, "restore", [state](const std::vector<Value>&, Value) {
+    if (state->stack.empty()) return Value::undefined();
+    const CanvasState::Saved saved = state->stack.back();
+    state->stack.pop_back();
+    state->fill = saved.fill;
+    state->stroke = saved.stroke;
+    state->line_width = saved.line_width;
+    state->alpha = saved.alpha;
+    return Value::undefined();
+  });
+  return Value::object_of(drawing_context);
+}
+
+void Bindings::Impl::install_canvas(const std::shared_ptr<Object>& object, NodeId node) {
+  getter(object, "width", [this, node]() {
+    return Value::number_of(static_cast<double>(canvas_state(node)->canvas.width()));
+  });
+  setter(object, "width", [this, node](const Value& value) {
+    const int width = static_cast<int>(std::clamp(js::to_number(value), 1.0, 4096.0));
+    document.set_attribute(node, "width", std::to_string(width));
+    canvases.erase(node_key(node));  // resizing resets the bitmap, like a browser
+  });
+  getter(object, "height", [this, node]() {
+    return Value::number_of(static_cast<double>(canvas_state(node)->canvas.height()));
+  });
+  setter(object, "height", [this, node](const Value& value) {
+    const int height = static_cast<int>(std::clamp(js::to_number(value), 1.0, 4096.0));
+    document.set_attribute(node, "height", std::to_string(height));
+    canvases.erase(node_key(node));
+  });
+  method(object, "getContext", [this, node](const std::vector<Value>& arguments, Value) {
+    if (arguments.empty()) return Value::null();
+    const std::string kind = js::to_string(arguments[0]);
+    if (kind != "2d") return Value::null();
+    return canvas_context(node);
+  });
+}
+
+// ---------------------------------------------------------------- forms -----
+
+namespace {
+
+std::string percent_encode(std::string_view text) {
+  static const char* kHex = "0123456789ABCDEF";
+  std::string out;
+  for (const unsigned char c : text) {
+    const bool unreserved = (c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-' ||
+                            c == '_' || c == '.' || c == '~';
+    if (unreserved) {
+      out.push_back(static_cast<char>(c));
+    } else if (c == ' ') {
+      out.push_back('+');
+    } else {
+      out.push_back('%');
+      out.push_back(kHex[c >> 4]);
+      out.push_back(kHex[c & 0x0F]);
+    }
+  }
+  return out;
+}
+
+}  // namespace
+
+std::string Bindings::Impl::control_value(NodeId node) const {
+  const std::string_view tag = document.tag_name(node);
+  if (tag == "textarea") return document.text_content(node);
+  if (tag == "select") {
+    NodeId selected;
+    const auto option_value = [this](NodeId option) {
+      const std::string_view value = document.attribute(option, "value");
+      return value.empty() ? std::string(document.text_content(option)) : std::string(value);
+    };
+    for (const NodeId child : document.descendants(node)) {
+      if (document.type(child) != NodeType::Element || document.tag_name(child) != "option") continue;
+      if (!selected.valid()) selected = child;
+      if (document.has_attribute(child, "selected")) return option_value(child);
+    }
+    return selected.valid() ? option_value(selected) : std::string();
+  }
+  const std::string_view value = document.attribute(node, "value");
+  return std::string(value);
+}
+
+std::string Bindings::Impl::control_label(NodeId node) const {
+  const std::string_view tag = document.tag_name(node);
+  if (tag == "select") {
+    NodeId selected;
+    NodeId first;
+    for (const NodeId child : document.descendants(node)) {
+      if (document.type(child) != NodeType::Element || document.tag_name(child) != "option") continue;
+      if (!first.valid()) first = child;
+      if (document.has_attribute(child, "selected")) {
+        selected = child;
+        break;
+      }
+    }
+    const NodeId option = selected.valid() ? selected : first;
+    return option.valid() ? std::string(document.text_content(option)) : std::string();
+  }
+  if (tag == "textarea") return std::string(document.text_content(node));
+  if (tag == "input") {
+    const std::string type = ascii_lower(document.attribute(node, "type"));
+    if (type == "checkbox" || type == "radio") {
+      return document.has_attribute(node, "checked") ? std::string("x") : std::string();
+    }
+    if (type == "password") {
+      return std::string(document.attribute(node, "value").size(), '*');
+    }
+  }
+  return std::string(document.attribute(node, "value"));
+}
+
+FormSubmission Bindings::Impl::collect_form(NodeId form) const {
+  FormSubmission submission;
+  submission.form = form;
+  if (!document.is_alive(form)) return submission;
+
+  const std::string method = ascii_lower(document.attribute(form, "method"));
+  submission.method = (method == "post") ? "POST" : "GET";
+  submission.action = std::string(document.attribute(form, "action"));
+
+  for (const NodeId node : document.descendants(form)) {
+    if (document.type(node) != NodeType::Element) continue;
+    const std::string_view tag = document.tag_name(node);
+    const bool is_control = tag == "input" || tag == "textarea" || tag == "select";
+    if (!is_control) continue;
+    if (document.has_attribute(node, "disabled")) continue;
+    const std::string name = std::string(document.attribute(node, "name"));
+    if (name.empty()) continue;
+    if (tag == "input") {
+      const std::string type = ascii_lower(document.attribute(node, "type"));
+      if (type == "submit" || type == "button" || type == "reset" || type == "image" || type == "file") continue;
+      if (type == "checkbox" || type == "radio") {
+        if (!document.has_attribute(node, "checked")) continue;
+        const std::string_view value = document.attribute(node, "value");
+        const std::string text = value.empty() ? std::string("on") : std::string(value);
+        submission.body += (submission.body.empty() ? "" : "&") + percent_encode(name) + "=" + percent_encode(text);
+        continue;
+      }
+    }
+    submission.body += (submission.body.empty() ? "" : "&") + percent_encode(name) + "=" +
+                       percent_encode(control_value(node));
+  }
+  return submission;
+}
+
+std::vector<FormSubmission> Bindings::take_pending_submissions() {
+  std::vector<FormSubmission> out = std::move(impl_->pending_submissions);
+  impl_->pending_submissions.clear();
+  return out;
+}
+
+void Bindings::Impl::materialize_controls() {
+  for (const std::string_view tag : {"input", "textarea", "select"}) {
+    for (const NodeId node : document.get_elements_by_tag_name(tag)) {
+      const std::string label = control_label(node);
+      // Only direct text children are ours to rewrite: <select> keeps its
+      // <option> children, <input> never has element children.
+      std::vector<NodeId> text_children;
+      std::string current;
+      for (const NodeId child : document.children(node)) {
+        if (document.type(child) != NodeType::Text) continue;
+        text_children.push_back(child);
+        current += std::string(document.text_data(child));
+      }
+      if (current == label) continue;
+      for (const NodeId child : text_children) document.remove_child(node, child);
+      if (!label.empty()) document.append_text(node, label);
+    }
+  }
+}
+
+void Bindings::materialize_form_controls() { impl_->materialize_controls(); }
+
+FormSubmission Bindings::collect_form_submission(dom::NodeId form) const { return impl_->collect_form(form); }
+
 // ----------------------------------------------------------- element API ----
 
 void Bindings::Impl::install_document_node(const std::shared_ptr<Object>& object, NodeId node) {
@@ -517,8 +1082,22 @@ void Bindings::Impl::install_element(const std::shared_ptr<Object>& object, Node
     document.set_attribute(node, "href", js::to_string(value));
   });
   getter(object, "src", [this, node]() { return Value::string_of(resolved_url(document.attribute(node, "src"))); });
-  getter(object, "checked", [this, node]() {
-    return Value::boolean_of(document.attribute(node, "checked") == "checked");
+  getter(object, "checked", [this, node]() { return Value::boolean_of(document.has_attribute(node, "checked")); });
+  setter(object, "checked", [this, node](const Value& value) {
+    if (js::to_boolean(value)) {
+      document.set_attribute(node, "checked", "");
+    } else {
+      document.remove_attribute(node, "checked");
+    }
+  });
+  getter(object, "value", [this, node]() { return Value::string_of(control_value(node)); });
+  setter(object, "value", [this, node](const Value& value) {
+    const std::string text = js::to_string(value);
+    if (document.tag_name(node) == "textarea" || document.tag_name(node) == "select") {
+      set_text_content(node, text);
+    } else {
+      document.set_attribute(node, "value", text);
+    }
   });
 
   method(object, "getAttribute", [this, node](const std::vector<Value>& arguments, Value) {
@@ -663,6 +1242,45 @@ void Bindings::Impl::install_element(const std::shared_ptr<Object>& object, Node
     return Value::boolean_of(!present);
   });
   object->properties["classList"] = Property{Value::object_of(class_list)};
+
+  if (document.tag_name(node) == "canvas") install_canvas(object, node);
+
+  if (document.tag_name(node) == "form") {
+    getter(object, "elements", [this, node]() {
+      auto array = std::make_shared<Object>();
+      array->kind = Object::Kind::Array;
+      for (const NodeId child : document.descendants(node)) {
+        if (document.type(child) != NodeType::Element) continue;
+        const std::string_view tag = document.tag_name(child);
+        if (tag != "input" && tag != "select" && tag != "textarea" && tag != "button") continue;
+        array->elements.push_back(wrap(child));
+      }
+      return Value::object_of(array);
+    });
+    method(object, "submit", [this, node](const std::vector<Value>&, Value) {
+      pending_submissions.push_back(collect_form(node));
+      return Value::undefined();
+    });
+    method(object, "requestSubmit", [this, node](const std::vector<Value>&, Value) {
+      pending_submissions.push_back(collect_form(node));
+      return Value::undefined();
+    });
+    method(object, "reset", [this, node](const std::vector<Value>&, Value) {
+      for (const NodeId control : document.descendants(node)) {
+        if (document.type(control) != NodeType::Element) continue;
+        const std::string_view tag = document.tag_name(control);
+        if (tag == "input" || tag == "textarea") document.set_attribute(control, "value", "");
+        if (tag == "select") {
+          for (const NodeId option : document.descendants(control)) {
+            if (document.type(option) == NodeType::Element && document.tag_name(option) == "option") {
+              document.set_attribute(option, "selected", "");
+            }
+          }
+        }
+      }
+      return Value::undefined();
+    });
+  }
 }
 
 // ------------------------------------------------------------- document -----
@@ -677,6 +1295,18 @@ void Bindings::Impl::install_document() {
   getter(object, "body", [this]() { return wrap(document.body()); });
   getter(object, "documentElement", [this]() { return wrap(document.document_element()); });
   getter(object, "readyState", []() { return Value::string_of("complete"); });
+  getter(object, "cookie", [this]() {
+    if (cookies == nullptr) return Value::string_of(std::string());
+    const Result<net::Url> url = net::parse_url(document.source_url());
+    if (url.is_error()) return Value::string_of(std::string());
+    return Value::string_of(cookies->document_cookie(url.value()));
+  });
+  setter(object, "cookie", [this](const Value& value) {
+    if (cookies == nullptr) return;
+    const Result<net::Url> url = net::parse_url(document.source_url());
+    if (url.is_error()) return;
+    cookies->set_document_cookie(url.value(), js::to_string(value));
+  });
   getter(object, "URL", [this]() { return Value::string_of(document.source_url()); });
   getter(object, "location", [this]() { return location_object; });
   getter(object, "title", [this]() {
@@ -690,7 +1320,12 @@ void Bindings::Impl::install_document() {
       return;
     }
     const NodeId head = document.query_selector(document.root(), "head");
-    if (!head.valid()) return;
+    if (!head.valid()) {
+      const NodeId element = document.create_element("title");
+      document.append_child(document.root(), element);
+      document.append_text(element, title);
+      return;
+    }
     const NodeId element = document.create_element("title");
     document.append_child(head, element);
     document.append_text(element, title);
@@ -820,6 +1455,51 @@ void Bindings::Impl::install_window() {
     return Value::number_of(0);
   });
 
+  // --- storage ------------------------------------------------------------
+  const auto make_storage = [this](Storage* storage) {
+    auto storage_object = std::make_shared<Object>();
+    auto method = [&](const std::string& name, Function::Native native) {
+      auto function = std::make_shared<Function>();
+      function->name = name;
+      function->native = std::move(native);
+      storage_object->properties[name] = Property{Value::function_of(std::move(function))};
+    };
+    method("getItem", [storage](const std::vector<Value>& arguments, Value) {
+      if (arguments.empty()) return Value::null();
+      const std::string key = js::to_string(arguments[0]);
+      return storage->has(key) ? Value::string_of(storage->get(key)) : Value::null();
+    });
+    method("setItem", [storage](const std::vector<Value>& arguments, Value) {
+      if (arguments.size() < 2) return Value::undefined();
+      storage->set(js::to_string(arguments[0]), js::to_string(arguments[1]));
+      (void)storage->save();
+      return Value::undefined();
+    });
+    method("removeItem", [storage](const std::vector<Value>& arguments, Value) {
+      if (arguments.empty()) return Value::undefined();
+      storage->remove(js::to_string(arguments[0]));
+      (void)storage->save();
+      return Value::undefined();
+    });
+    method("clear", [storage](const std::vector<Value>&, Value) {
+      storage->clear();
+      (void)storage->save();
+      return Value::undefined();
+    });
+    method("key", [storage](const std::vector<Value>& arguments, Value) {
+      const std::size_t index =
+          arguments.empty() ? 0 : static_cast<std::size_t>(std::max(0.0, js::to_number(arguments[0])));
+      const std::string key = storage->key_of(index);
+      return key.empty() && index >= storage->size() ? Value::null() : Value::string_of(key);
+    });
+    getter(storage_object, "length", [storage]() { return Value::number_of(static_cast<double>(storage->size())); });
+    return Value::object_of(storage_object);
+  };
+  local_storage_object = make_storage(&local_storage);
+  session_storage_object = make_storage(&session_storage);
+  object->properties["localStorage"] = Property{local_storage_object};
+  object->properties["sessionStorage"] = Property{session_storage_object};
+
   window = Value::object_of(object);
   // Self-references are getters over a weak_ptr: a strong `window.window = window`
   // property would be a reference cycle that no refcount can ever free.
@@ -838,6 +1518,7 @@ void Bindings::Impl::install_window() {
 Bindings::Bindings(js::Context& context, dom::Document& document)
     : impl_(std::make_unique<Impl>(context, document)), context_(&context), document_(&document) {}
 
+
 Bindings::~Bindings() = default;
 
 void Bindings::install() {
@@ -847,9 +1528,34 @@ void Bindings::install() {
   context_->set_global("document", impl_->document_object);
   context_->set_global("location", impl_->location_object);
   context_->set_global("navigator", impl_->window.object->properties.at("navigator").value);
+  context_->set_global("localStorage", impl_->local_storage_object);
+  context_->set_global("sessionStorage", impl_->session_storage_object);
   // The engine's own console writes into the context buffer; window.console mirrors it.
   context_->set_global("alert", context_->runtime().global("alert"));
 }
+
+void Bindings::set_font(const text::Font* font) { impl_->font = font; }
+
+void Bindings::set_cookie_jar(net::CookieJar* jar) { impl_->cookies = jar; }
+
+Storage& Bindings::local_storage() noexcept { return impl_->local_storage; }
+Storage& Bindings::session_storage() noexcept { return impl_->session_storage; }
+
+void Bindings::refresh_canvases() {
+  impl_->canvas_images.clear();
+  for (const auto& entry : impl_->canvases) {
+    CanvasImage image;
+    image.node.index = static_cast<std::uint32_t>(entry.first & 0xFFFFFFFFu);
+    image.node.generation = static_cast<std::uint32_t>(entry.first >> 32);
+    if (!document_->is_alive(image.node)) continue;
+    image.image.width = entry.second->canvas.width();
+    image.image.height = entry.second->canvas.height();
+    image.image.rgba = entry.second->canvas.pixels();
+    impl_->canvas_images.push_back(std::move(image));
+  }
+}
+
+const std::vector<CanvasImage>& Bindings::canvas_images() const noexcept { return impl_->canvas_images; }
 
 void Bindings::run_scripts() {
   impl_->runs.clear();
