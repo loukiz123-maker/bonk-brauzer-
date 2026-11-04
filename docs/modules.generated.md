@@ -2,13 +2,14 @@
 | Module | Stage | Status | Depends on | Summary |
 |---|---|---|---|---|
 | `core` | 0 | done | — | Result/Status, UTF-8, Arena, diagnostics, module registry |
-| `net` | 1 | planned | core | WHATWG URL, DNS, TCP, HTTP/1.1, TLS, cookies, cache, streaming |
-| `html` | 1 | planned | core | WHATWG tokenizer + tree builder (insertion modes, entities) |
-| `dom` | 1 | planned | core, html | Node/Element/Text, querySelector, events, MutationObserver, innerHTML |
-| `text` | 2 | planned | core | TTF/OTF parsing, glyph raster, shaping, bidi, line breaking |
-| `css` | 2 | planned | dom | Tokenizer, parser, selectors, cascade, inheritance, computed values |
-| `layout` | 2 | planned | css, dom, text | Box model, block/inline, floats, positioning, flexbox, grid |
-| `paint` | 2 | planned | layout, text | CPU rasterizer, images, clipping, stacking contexts, layers |
+| `net` | 1 | in-progress | core | WHATWG URL, DNS, TCP, HTTP/1.1, TLS, cookies, cache, streaming |
+| `html` | 1 | in-progress | core | WHATWG tokenizer + tree builder (insertion modes, entities) |
+| `dom` | 1 | in-progress | core, html | Node/Element/Text, querySelector, events, MutationObserver, innerHTML |
+| `text` | 2 | in-progress | core | TTF/OTF parsing, glyph raster, shaping, bidi, line breaking |
+| `image` | 2 | in-progress | core | Own inflate (RFC 1951/1950) + PNG decoder, image store |
+| `css` | 2 | in-progress | dom | Tokenizer, parser, selectors, cascade, inheritance, computed values |
+| `layout` | 2 | in-progress | css, dom, text | Box model, block/inline, floats, positioning, flexbox, grid |
+| `paint` | 2 | in-progress | layout, text | CPU rasterizer, images, clipping, stacking contexts, layers |
 | `shell` | 3 | planned | dom, paint, net | Window, tabs, address bar, history, bookmarks, downloads, settings |
 | `js` | 4 | planned | core | Lexer, parser, bytecode, VM, GC, event loop, builtins |
 | `bindings` | 4 | planned | js, dom, net | window, document, console, fetch, XHR, storage, History, Canvas 2D |

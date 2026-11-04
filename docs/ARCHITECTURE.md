@@ -131,36 +131,51 @@ struct NodeId {            // 8 байт, копируется как значе
 - Этап 6 добавляет процесс на вкладку: контракт сообщений остаётся тем же, меняется транспорт
   (сокет вместо очереди) — поэтому очередь проектируется сразу как «канал», а не как `global`.
 
-## 6. Контракты модулей (что будет обещано на следующих этапах)
+## 6. Контракты модулей
 
-Сигнатуры ниже — обязательства этапа 1/2; на этапе 0 они не компилируются намеренно, чтобы в
-репозитории не было мёртвых заглушек.
+Сигнатуры ниже — фактические API этапов 1–2 (они реализованы; актуальные ограничения и
+пробелы перечислены в [`STAGE-01-02.md`](STAGE-01-02.md)).
 
 ```cpp
-// net — этап 1
-struct Url { std::string scheme, host, path, query; std::optional<std::uint16_t> port; /* ... */ };
-Result<Url> parse_url(std::string_view input, const std::optional<Url>& base);
-struct Request { Url url; std::string method = "GET"; std::vector<std::pair<std::string,std::string>> headers; };
-struct Response { int status; std::vector<std::pair<std::string,std::string>> headers; std::vector<std::uint8_t> body; };
-Result<Response> fetch(const Request& request, Diagnostics& diagnostics);
+```cpp
+// net — этап 1 (реализовано: URL + HTTP/1.1; TLS/gzip — этап 1b)
+Result<Url> parse_url(std::string_view input, const Url* base = nullptr);
+Result<HttpResponse> http_get(const Url& url, Diagnostics* = nullptr, int timeout_ms = 5000);
 
 // html — этап 1
-// Токенайзер работает по правилам WHATWG: вход — байты, выход — поток токенов.
-// Tree builder создаёт узлы через интерфейс dom::DocumentBuilder, поэтому html не зависит от dom.
-struct TreeSink { /* create_element, append_child, set_attribute, ... */ };
-Status parse_html(std::string_view bytes, TreeSink& sink, Diagnostics& diagnostics);
+Status parse_html(std::string_view bytes, dom::Document& document, Diagnostics* = nullptr,
+                  ParseOptions = {});
 
 // dom — этап 1
-Result<Node*> Document::resolve(NodeId id);
-std::vector<Node*> Document::query_selector_all(std::string_view selector);
+bool Document::is_alive(NodeId id) const;          // ловит устаревшие хендлы
+std::vector<NodeId> Document::query_selector_all(NodeId root, std::string_view selector) const;
+
+// css — этап 2
+Result<StyleSheet> StyleSheet::parse(std::string_view text, Diagnostics* = nullptr);
+StyleMap compute_styles(const dom::Document&, const StyleSheet&, float viewport_width, Diagnostics* = nullptr);
+
+// text — этап 2
+Result<Font> Font::load_file(std::string_view path);
+const GlyphBitmap& Font::glyph(char32_t code_point, float pixel_size) const;  // кэш
+
+// image — этап 2
+Result<Image> decode_png(std::string_view bytes);   // свой inflate + PNG
+Result<Image> load_image(std::string_view path);
+const Image* ImageStore::find(std::string_view src) const;
 
 // layout — этап 2
-struct LayoutBox;
-std::unique_ptr<LayoutBox> layout_document(const dom::Document&, const css::ComputedStyleMap&, const LayoutViewport&);
+LayoutResult layout_document(const dom::Document&, const css::StyleMap&, const text::Font&,
+                             const LayoutViewport&);
 
 // paint — этап 2
-DisplayList build_display_list(const LayoutBox&);
-void rasterize(const DisplayList&, paint::Canvas& target);
+void render_layout(Canvas&, const layout::Box& root, const text::Font&, const RenderOptions&);
+bool Canvas::write_png(std::string_view path) const;
+```
+
+`html` сознательно зависит от `dom::Document` напрямую (а не через интерфейс `TreeSink`):
+дерево строится в одном модуле, узлы — POD-записи, а лишний виртуальный слой стоил бы
+производительности без пользы. Если понадобится отдельный sink (например, для `<template>`),
+он появится здесь же.
 ```
 
 ## 7. Тестовая стратегия

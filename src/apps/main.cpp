@@ -1,21 +1,128 @@
-// bonk — command line entry point (stage 0: no window, no network yet).
+// bonk — command line entry point.
 //
-// Exit codes: 0 success, 1 failed check, 2 usage error. Scripts and CI rely on
-// them, so they are documented in README.md and tested in tests/cli_test.cpp.
+// Exit codes: 0 success, 1 failed check / render error, 2 usage error.
+// Scripts and CI rely on them, so they are covered by tests/cli_test.cpp.
 
 #include <cstdio>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "bonk/apps/pipeline.hpp"
 #include "bonk/cli/cli.hpp"
+#include "bonk/core/diag.hpp"
 #include "bonk/core/module.hpp"
 #include "bonk/core/selftest.hpp"
 #include "bonk/core/version.hpp"
+#include "bonk/net/http.hpp"
 
 namespace {
 
-void print_line(std::string_view text) { std::fwrite(text.data(), 1, text.size(), stdout); }
+void print(std::string_view text) { std::fwrite(text.data(), 1, text.size(), stdout); }
+
+int print_diagnostics(const bonk::Diagnostics& diagnostics) {
+  if (diagnostics.size() == 0) return 0;
+  const std::string formatted = bonk::format_diagnostics(diagnostics);
+  std::fwrite(formatted.data(), 1, formatted.size(), stderr);
+  return 0;
+}
+
+int run_render(const bonk::CliOptions& options) {
+  bonk::app::RenderRequest request;
+  request.input_path = options.input;
+  request.output_path = options.output;
+  request.width = static_cast<float>(options.width);
+  request.height = static_cast<float>(options.height);
+  request.font_path = options.font_path;
+  request.debug_boxes = options.debug_boxes;
+  request.dump_layout = options.dump_layout;
+  if (!options.css_path.empty()) {
+    const bonk::Result<std::string> css = bonk::app::read_file(options.css_path);
+    if (css.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", css.error().to_string().c_str());
+      return 1;
+    }
+    request.extra_css = css.value();
+  }
+
+  bonk::Diagnostics diagnostics;
+  const bonk::Result<bonk::app::RenderReport> result = bonk::app::render_file(request, diagnostics);
+
+  if (options.show_diagnostics) print_diagnostics(diagnostics);
+  if (result.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", result.error().to_string().c_str());
+    return 1;
+  }
+
+  const bonk::app::RenderReport& report = result.value();
+  std::string out;
+  out += "rendered ";
+  out += options.input;
+  out += " -> ";
+  out += report.output_path;
+  out += "  (";
+  out += std::to_string(static_cast<int>(request.width));
+  out += 'x';
+  out += std::to_string(static_cast<int>(request.height));
+  out += ", nodes=";
+  out += std::to_string(report.node_count);
+  out += ", css-rules=";
+  out += std::to_string(report.css_rule_count);
+  out += ", font=";
+  out += report.font_name;
+  out += ", doc-height=";
+  out += std::to_string(static_cast<int>(report.document_height));
+  out += ")\n";
+  print(out);
+  if (options.dump_layout) print(report.layout_dump);
+  return 0;
+}
+
+int run_dump_dom(const bonk::CliOptions& options) {
+  bonk::Diagnostics diagnostics;
+  const bonk::Result<bonk::app::ParsedPage> page = bonk::app::parse_page_from_file(options.input, diagnostics);
+  if (options.show_diagnostics) print_diagnostics(diagnostics);
+  if (page.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", page.error().to_string().c_str());
+    return 1;
+  }
+  print(page.value().document->debug_tree(page.value().document->root()));
+  return 0;
+}
+
+int run_fetch(const bonk::CliOptions& options) {
+  const bonk::Result<bonk::net::Url> url = bonk::net::parse_url(options.input);
+  if (url.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", url.error().to_string().c_str());
+    return 2;
+  }
+  bonk::Diagnostics diagnostics;
+  const bonk::Result<bonk::net::HttpResponse> response = bonk::net::http_get(url.value(), &diagnostics);
+  if (options.show_diagnostics) print_diagnostics(diagnostics);
+  if (response.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", response.error().to_string().c_str());
+    return 1;
+  }
+  std::string out;
+  out += "HTTP ";
+  out += std::to_string(response.value().status);
+  out += ' ';
+  out += response.value().reason;
+  out += "\nurl: ";
+  out += response.value().final_url;
+  out += "\n";
+  for (const auto& [name, value] : response.value().headers) {
+    out += name;
+    out += ": ";
+    out += value;
+    out += "\n";
+  }
+  out += "\nbody: ";
+  out += std::to_string(response.value().body.size());
+  out += " bytes\n";
+  print(out);
+  return 0;
+}
 
 }  // namespace
 
@@ -33,7 +140,7 @@ int main(int argc, char** argv) {
 
   switch (options.command) {
     case bonk::Command::Help:
-      print_line(bonk::cli_help_text());
+      print(bonk::cli_help_text());
       return 0;
 
     case bonk::Command::Version: {
@@ -45,7 +152,7 @@ int main(int argc, char** argv) {
         line += bonk::build_string();
         line += '\n';
       }
-      print_line(line);
+      print(line);
       return 0;
     }
 
@@ -73,7 +180,7 @@ int main(int argc, char** argv) {
           out += '\n';
         }
       }
-      print_line(out);
+      print(out);
       return 0;
     }
 
@@ -91,9 +198,18 @@ int main(int argc, char** argv) {
         out += '\n';
       }
       out += report.passed() ? "selftest: PASS\n" : "selftest: FAIL\n";
-      print_line(out);
+      print(out);
       return report.passed() ? 0 : 1;
     }
+
+    case bonk::Command::Render:
+      return run_render(options);
+
+    case bonk::Command::DumpDom:
+      return run_dump_dom(options);
+
+    case bonk::Command::Fetch:
+      return run_fetch(options);
   }
   return 0;
 }

@@ -1,98 +1,125 @@
 # Bonk Brauzer
 
 Экспериментальный браузер с **собственным движком**: свой HTML-парсер, свой CSS-каскад, свой
-layout, свой растеризатор и свой JavaScript-движок. Без Chromium/Blink, WebKit, Gecko, Servo,
-V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
+layout, свой растеризатор и (впереди) свой JavaScript-движок. Без Chromium/Blink, WebKit,
+Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 
-Зависимости: **только стандартная библиотека C++20** + системные окно/ввод (SDL2) на этапе 3.
-Сегодня в проекте ровно ноль внешних зависимостей.
+Зависимости: **только стандартная библиотека C++20**. Сегодня в проекте ровно ноль внешних
+зависимостей — включая тест-фреймворк, inflate/PNG-кодек и парсер шрифтов.
 
-## Статус: Этап 0 завершён ✅
+![Страница, отрисованная движком](docs/screenshot.png)
+
+*Эта картинка получена командой `bonk render tests/fixtures/sample.html -o page.png`:
+HTML был разобран, стилизован, разложен и растеризован целиком этим репозиторием.*
+
+## Статус
 
 | Этап | Содержание | Статус |
 |---|---|---|
-| 0 | Каркас проекта, сборка, CI, контракты модулей, план | **готово** |
-| 1 | `net` + `html` + `dom`: скачать страницу и напечатать дерево DOM | следующий |
-| 2 | `css` + `text` + `layout` + `paint`: статичные страницы на экране | — |
-| 3 | `shell`: окно, вкладки, адресная строка, клики, скролл | — |
+| 0 | Каркас, сборка, CI, контракты, план | **готово** |
+| 1 | `net` (URL, HTTP/1.1), `html` (токенайзер + дерево), `dom` (узлы, `querySelector`) | **сделано ядро**, см. [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) |
+| 2 | `css` (селекторы, каскад), `text` (TrueType), `image` (inflate + PNG), `layout` (block/inline), `paint` (растеризация + PNG) | **сделано ядро** |
+| 3 | `shell`: окно, вкладки, адресная строка, клики, скролл | следующий |
 | 4 | `js` + `bindings`: интерактивность, события, `fetch` | — |
 | 5 | flexbox/grid, Canvas 2D, формы, cookies, storage | — |
 | 6 | security, процесс на вкладку, devtools, оптимизация | — |
 | 7 | conformance: html5lib-tests, test262, WPT, Acid2 | — |
 
-Актуальный реестр модулей живёт в коде (`src/core/module.cpp`) и печатается бинарником:
+Реестр модулей — в коде (`src/core/module.cpp`), печатается бинарником и генерирует
+`docs/modules.generated.md`:
 
 ```console
 $ bonk modules
-id        stage  status   depends on            title
------------------------------------------------------------------
-core      0      done     -                     Core utilities
-net       1      planned  core                  Networking
-html      1      planned  core                  HTML parser
+id        stage  status       depends on            title
+---------------------------------------------------------------------
+core      0      done         -                     Core utilities
+net       1      in-progress  core                  Networking
+html      1      in-progress  core                  HTML parser
+dom       1      in-progress  core, html            DOM
+text      2      in-progress  core                  Text & fonts
+css       2      in-progress  dom                   CSS
+layout    2      in-progress  css, dom, text        Layout
+paint     2      in-progress  layout, text          Paint
 ...
 ```
 
 ## Быстрый старт
 
-Требуется компилятор с C++20 (g++ ≥ 12 / clang ≥ 15) и GNU make. Ничего скачивать не нужно.
+Нужен компилятор с C++20 (g++ ≥ 12 / clang ≥ 15) и GNU make. Ничего скачивать не нужно.
 
 ```console
-$ make -j            # собрать build/bonk и build/bonk_tests
-$ make test          # 62 юнит-теста
-$ make run ARGS="modules --stage 1"
-$ make verify        # тесты + selftest + проверка, что docs не устарели
+$ make -j                 # build/bonk и build/bonk_tests
+$ make test               # 171 юнит-тест
+$ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
-$ make SAN=address,undefined test     # ASan + UBSan сборка в build-address,undefined
+$ make SAN=address,undefined test   # ASan + UBSan
 ```
 
-CMake-путь (для IDE и CI):
+CMake-путь (IDE/CI):
 
 ```console
 $ cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
-$ cmake --build build-cmake -j
-$ ctest --test-dir build-cmake --output-on-failure
+$ cmake --build build-cmake -j && ctest --test-dir build-cmake --output-on-failure
 ```
 
-### CLI
+### Отрисовать страницу
 
 ```console
-$ bonk                        # краткая справка + все 8 этапов
-$ bonk version --full         # Bonk Brauzer 0.1.0-stage-0 + тулчейн
-$ bonk modules --stage 2      # что входит в этап 2
-$ bonk modules --markdown     # таблица для docs/modules.generated.md
+$ bonk render tests/fixtures/sample.html -o page.png --width 900 --height 640
+rendered tests/fixtures/sample.html -> page.png (900x640, nodes=70, css-rules=10,
+         font=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf, doc-height=562)
+```
+
+Полезные флаги: `--font PATH` (или `BONK_FONT`), `--css extra.css`, `--debug-boxes`
+(контуры всех блочных боксов), `--dump-layout` (дерево боксов с геометрией), `--diagnostics`.
+
+### Остальные команды
+
+```console
+$ bonk dom page.html          # разобранное DOM-дерево в консоль
+$ bonk fetch http://host/     # HTTP/1.1 GET: статус, заголовки, размер тела
+$ bonk modules --stage 2      # что входит в этап
+$ bonk version --full         # версия + тулчейн
 $ bonk selftest               # 23 быстрые проверки инвариантов рантайма
 ```
 
-Коды возврата: `0` — успех, `1` — проваленная проверка, `2` — ошибка использования.
+Коды возврата: `0` — успех, `1` — ошибка рендера/проверки, `2` — ошибка использования.
 
-## Структура репозитория
+## Структура
 
 ```
-include/bonk/          публичные заголовки (по модулям)
-  core/                result, utf8, strings, arena, diag, module, version, selftest
-  cli/                 разбор аргументов командной строки
-src/                   реализации (src/<module>/<file>.cpp)
-  core/  cli/  apps/   apps/main.cpp — точка входа bonk
-tests/                 свой тест-фреймворк (~180 строк) + тесты по модулям
-docs/                  ARCHITECTURE.md, ROADMAP.md, STAGE-00.md, ADR, generated
+include/bonk/          публичные заголовки по модулям
+  core/                Result/Status, UTF-8, строки, арена, диагностика, реестр модулей
+  net/                 url, http
+  html/                tokenizer, entities, html (tree builder)
+  dom/                 dom, selector
+  css/                 css (парсер, каскад, computed style)
+  text/                font (TrueType + растеризация глифов)
+  image/               image (свой inflate RFC 1951/1950 + PNG-декодер, хранилище картинок)
+  layout/              layout (block/inline, box model)
+  paint/               canvas (RGBA8 + PNG/PPM), render (боксы → пиксели)
+  apps/                pipeline (HTML → PNG за один вызов), cli, main
+src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
+tests/                 свой фреймворк + 171 тест + tests/fixtures/
+docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
 .github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
 ```
 
 Правила слоёв: `core` не зависит ни от чего; `net`/`html`/`js`/`text` зависят только от `core`;
-`dom` ← `html`; `css` ← `dom`; `layout` ← `css`+`text`; `paint` ← `layout`; UI (`shell`,
-`devtools`) — только на верхнем уровне. Нарушение слоёв = ошибка ревью.
+`dom` ← `html`; `css` ← `dom`; `layout` ← `css`+`text`; `paint` ← `layout`; UI — сверху.
 
 ## Документация
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, контракты модулей, модель памяти, потоки.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — этапы 0–7 с критериями готовности.
-- [`docs/STAGE-00.md`](docs/STAGE-00.md) — что именно сделано на этапе 0 и как это проверить.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, контракты, модель памяти, потоки.
+- [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) — что именно работает в сети/HTML/CSS/layout/paint и чего нет.
+- [`docs/STAGE-00.md`](docs/STAGE-00.md) — фундамент и инфраструктура.
+- [`docs/ROADMAP.md`](docs/ROADMAP.md) — этапы 0–7 с критериями выхода.
 - [`docs/modules.generated.md`](docs/modules.generated.md) — таблица модулей из кода.
-- [`docs/adr/`](docs/adr/) — архитектурные решения (ADR).
+- [`docs/adr/`](docs/adr/) — архитектурные решения.
 
 ## Соглашения
 
-- Комментарии и имена в коде — английский; документация и общение — русский.
+- Комментарии и имена в коде — английский; документация — русский.
 - Ошибки: `Result<T>`/`Status`, без исключений в коде движка; ошибки разбора — в `Diagnostics`.
-- Память: арена на документ + генерационные хендлы вместо сырых указателей в публичных API.
+- Память: индексные пулы в документе + генерационные `NodeId`; никаких сырых указателей в API.
 - Каждый модуль поставляется с юнит-тестами и запускаемым способом проверки результата.

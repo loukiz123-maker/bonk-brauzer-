@@ -12,12 +12,12 @@ namespace bonk {
 inline constexpr std::string_view kProjectName = "Bonk Brauzer";
 inline constexpr std::string_view kProjectSlug = "bonk";
 inline constexpr int kVersionMajor = 0;
-inline constexpr int kVersionMinor = 1;
+inline constexpr int kVersionMinor = 2;
 inline constexpr int kVersionPatch = 0;
 
 // Human readable milestone, bumped at the end of every stage.
-// Stage 0 = project skeleton, no rendering yet.
-inline constexpr std::string_view kVersionPhase = "stage-0";
+// Stage 2 = static pages render to PNG (stages 0-2 delivered incrementally).
+inline constexpr std::string_view kVersionPhase = "stage-2";
 
 // "0.1.0-stage-0"
 std::string version_string();

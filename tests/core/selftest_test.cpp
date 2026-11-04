@@ -19,7 +19,7 @@ BONK_TEST(selftest, is_deterministic) {
 }
 
 BONK_TEST(version, format) {
-  CHECK_EQ(version_string(), std::string("0.1.0-stage-0"));
+  CHECK_EQ(version_string(), std::string("0.2.0-stage-2"));
 }
 
 BONK_TEST(version, build_string_mentions_toolchain) {

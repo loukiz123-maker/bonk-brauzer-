@@ -29,7 +29,7 @@ target_include_directories(bonk_compile_options INTERFACE
 
 # Engine library: everything under src/ except the executables in src/apps.
 file(GLOB_RECURSE BONK_ENGINE_SOURCES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/src/*/*.cpp)
-list(FILTER BONK_ENGINE_SOURCES EXCLUDE REGEX "/src/apps/")
+list(FILTER BONK_ENGINE_SOURCES EXCLUDE REGEX "/src/apps/main\\.cpp$")
 
 add_library(bonk_engine STATIC ${BONK_ENGINE_SOURCES})
 target_link_libraries(bonk_engine PUBLIC bonk_compile_options)

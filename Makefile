@@ -36,7 +36,8 @@ LDFLAGS   += $(SAN_FLAGS)
 BIN        := $(BUILD_DIR)/bonk
 TESTS_BIN  := $(BUILD_DIR)/bonk_tests
 
-LIB_SRC    := $(filter-out src/apps/%,$(wildcard src/*/*.cpp))
+# Everything under src/ is engine code except the executable entry points (main.cpp).
+LIB_SRC    := $(filter-out %/main.cpp,$(wildcard src/*/*.cpp))
 APP_SRC    := $(wildcard src/apps/*.cpp)
 TEST_SRC   := $(wildcard tests/*.cpp) $(wildcard tests/*/*.cpp)
 

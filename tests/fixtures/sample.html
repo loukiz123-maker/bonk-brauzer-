@@ -1,0 +1,80 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>Bonk Brauzer — stage 2 smoke page</title>
+  <style>
+    body {
+      font-family: sans-serif;
+      font-size: 16px;
+      margin: 24px;
+      color: #1b1b1b;
+    }
+    h1 {
+      font-size: 34px;
+      color: #10305c;
+      margin: 0 0 4px 0;
+    }
+    .subtitle {
+      color: #6b7280;
+      font-size: 15px;
+      margin: 0 0 20px 0;
+    }
+    .card {
+      background: #f4f7fb;
+      border: 1px solid #c9d6e8;
+      padding: 14px 18px;
+      margin: 0 0 18px 0;
+    }
+    .card h2 {
+      font-size: 20px;
+      margin: 0 0 8px 0;
+      color: #10305c;
+    }
+    .accent {
+      color: #b91c1c;
+      font-weight: bold;
+    }
+    .center {
+      text-align: center;
+      padding: 10px;
+      background: #fef3c7;
+      border: 1px solid #f59e0b;
+    }
+    ul {
+      margin: 8px 0;
+      padding: 0 0 0 28px;
+    }
+    a {
+      color: #1d4ed8;
+    }
+    img {
+      width: 180px;
+      height: 100px;
+    }
+  </style>
+</head>
+<body>
+  <h1>Bonk Brauzer</h1>
+  <p class="subtitle">Own engine: HTML → DOM → CSSOM → layout → raster. No Blink, no WebKit, no V8.</p>
+
+  <div class="card">
+    <h2>What already works</h2>
+    <p>Tokenising, entity decoding, implicit <b>&lt;html&gt;</b>/<b>&lt;head&gt;</b>/<b>&lt;body&gt;</b>,
+       implied end tags, <span class="accent">inline styling</span>, class/id selectors, specificity,
+       inheritance and the cascade.</p>
+    <ul>
+      <li>Block layout with margin collapsing</li>
+      <li>Inline formatting, word wrap, <a href="https://example.com/">links</a>, text-align</li>
+      <li>TrueType glyphs rasterised by our own scanline filler</li>
+    </ul>
+  </div>
+
+  <div class="center">Centred text with an amber background &amp; border — 100% engine, 0% library.</div>
+
+  <p>Unicode: Привет, мир! Grüße, κόσμος, 你好. Entities: &copy; &nbsp;&mdash; &lt;tag&gt; &#169;.</p>
+
+  <p><img src="logo.png" width="64" height="64" alt="logo"> A decoded PNG (own inflate + PNG decoder).</p>
+  <p><img src="missing.png" alt="placeholder"> An unreachable image stays a placeholder box.</p>
+</body>
+</html>

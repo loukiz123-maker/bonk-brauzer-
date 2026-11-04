@@ -29,9 +29,14 @@
   `querySelector` (пока простой: tag/id/class), события capture/bubble, MutationObserver.
 - CLI: `bonk fetch URL --dump-dom`, `bonk fetch URL --dump-tree`, `--diagnostics`.
 
-**Критерий выхода**: `bonk fetch https://example.com --dump-dom` печатает дерево, совпадающее
-с браузерным `document.documentElement.outerHTML` (с точностью до порядка атрибутов); 100+
-фикстур html5lib-tests проходят на уровне токенайзера.
+**Сделано (ядро)**: `net::Url` (WHATWG-подмножество + RFC 3986), HTTP/1.1 (chunked, redirects,
+таймауты), HTML-токенайзер и tree builder с неявными html/head/body и implied end tags,
+DOM на индексных пулах с генерационными `NodeId`, `querySelector` с атрибутными и
+псевдо-селекторами. Подробности и пробелы — [`STAGE-01-02.md`](STAGE-01-02.md).
+
+**Осталось до выхода с этапа**: TLS (свой TLS 1.3 или документированный системный бэкенд),
+gzip, cookies/кэш/keep-alive, foster parenting + adoption agency, события и MutationObserver,
+прогон html5lib-tests.
 
 ## Этап 2 — css + text + layout + paint
 
@@ -45,8 +50,14 @@
   (inflate свой), peek в JPEG/GIF/WebP, stacking contexts, вывод в PPM/PNG для проверки.
 - CLI: `bonk render URL -o out.png --width 1024 --height 768`.
 
-**Критерий выхода**: `bonk render tests/fixtures/stage2/*.html -o out.png` визуально совпадает
-с эталонами; Acid1-подобная фикстура проходит.
+**Сделано (ядро)**: CSS-парсер, каскад со специфичностью и наследованием, `@media`,
+computed values с `em/rem`; TrueType-парсер и растеризация глифов с антиалиасингом;
+блочный и inline-layout со схлопыванием margin'ов, переносом строк и `text-align`;
+программный растеризатор с альфа-смешиванием и свой PNG-энкодер.
+`bonk render tests/fixtures/sample.html -o page.png` рисует страницу (см. README).
+
+**Осталось до выхода с этапа**: декодеры PNG/JPEG/GIF/WebP для `<img>`, шейпинг и bidi,
+`var()`/`calc()`, псевдоэлементы, эталонные скриншоты для регрессий.
 
 ## Этап 3 — shell
 

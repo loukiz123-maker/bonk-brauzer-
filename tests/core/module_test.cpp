@@ -10,11 +10,11 @@ using namespace bonk;
 
 BONK_TEST(module, registry_contents) {
   const std::vector<ModuleInfo>& all = modules();
-  CHECK_EQ(all.size(), std::size_t{13});
+  CHECK_EQ(all.size(), std::size_t{14});
 
   // Every module from the specification is present exactly once.
-  const char* expected[] = {"core",    "net",     "html",     "dom",  "css",   "layout", "paint",
-                            "text",    "js",      "bindings", "shell", "security", "devtools"};
+  const char* expected[] = {"core",  "net",   "html",   "dom",      "css",  "layout", "paint",
+                            "text",  "image", "js",     "bindings", "shell", "security", "devtools"};
   for (const char* id : expected) CHECK(find_module(id) != nullptr);
 
   std::set<std::string_view> ids;
@@ -45,6 +45,13 @@ BONK_TEST(module, stage_zero_only_core_is_done) {
   }
 }
 
+BONK_TEST(module, stages_one_and_two_are_in_progress) {
+  for (const ModuleInfo& module : modules()) {
+    if (module.stage == 1 || module.stage == 2) CHECK_EQ(module.status, ModuleStatus::InProgress);
+    if (module.stage >= 3) CHECK_EQ(module.status, ModuleStatus::Planned);
+  }
+}
+
 BONK_TEST(module, available_at_stage_is_cumulative) {
   const auto stage0 = modules_available_at(0);
   REQUIRE(stage0.size() == 1);
@@ -66,7 +73,7 @@ BONK_TEST(module, render_table_is_aligned_and_deterministic) {
   CHECK_EQ(std::string(table.substr(0, 2)), std::string("id"));
 
   // Header + separator + 13 rows + trailing empty line.
-  CHECK_EQ(lines.size(), std::size_t{16});
+  CHECK_EQ(lines.size(), std::size_t{17});
   REQUIRE(lines[1].size() > 40);
   const std::string_view separator = lines[1];
   CHECK(separator.find_first_not_of('-') == std::string_view::npos);  // separator is a dashed rule
@@ -94,7 +101,7 @@ BONK_TEST(module, render_table_stage_filter) {
 BONK_TEST(module, markdown_table) {
   const std::string markdown = render_module_table_markdown();
   CHECK(markdown.rfind("| Module | Stage | Status | Depends on | Summary |", 0) == 0);
-  CHECK(markdown.find("| `html` | 1 | planned | core |") != std::string::npos);
+  CHECK(markdown.find("| `html` | 1 | in-progress | core |") != std::string::npos);
   CHECK(markdown.find("| `core` | 0 | done | — |") != std::string::npos);
 }
 
