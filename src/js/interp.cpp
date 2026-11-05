@@ -333,6 +333,9 @@ struct RuntimeState {
   std::string origin;
   /// The one Object.prototype every plain object inherits from (stage 23).
   std::shared_ptr<Object> object_prototype;
+  /// The one Array.prototype (stage 24): array methods live here, so
+  /// `Array.prototype.slice.call(arguments)` works on any array-like.
+  std::shared_ptr<Object> array_prototype;
 
   void log(ConsoleEntry::Level level, const std::string& message) {
     console.push_back(ConsoleEntry{level, message});
@@ -406,6 +409,58 @@ std::vector<std::string> own_property_keys(const Object& object, bool enumerable
   std::sort(names.begin(), names.end());
   indices.insert(indices.end(), names.begin(), names.end());
   return indices;
+}
+
+/// Array methods work on *array-likes*: real arrays, `arguments`, and any object
+/// with a numeric `length` (that is what `Array.prototype.slice.call(…)` relies on).
+std::size_t array_like_length(const Object& object) {
+  if (object.is_array()) return object.elements.size();
+  const auto found = object.properties.find("length");
+  if (found == object.properties.end()) return 0;
+  const double length = to_number(found->second.value);
+  if (!(length > 0.0)) return 0;
+  return static_cast<std::size_t>(length);
+}
+
+Value array_like_get(const Object& object, std::size_t index) {
+  const std::string key = std::to_string(index);
+  const auto getter = object.getters.find(key);
+  if (getter != object.getters.end()) return getter->second();
+  if (object.is_array()) return index < object.elements.size() ? object.elements[index] : Value::undefined();
+  const auto found = object.properties.find(key);
+  return found == object.properties.end() ? Value::undefined() : found->second.value;
+}
+
+void array_like_set(Object& object, std::size_t index, const Value& value) {
+  const std::string key = std::to_string(index);
+  const auto setter = object.setters.find(key);
+  if (setter != object.setters.end()) {
+    setter->second(value);
+    return;
+  }
+  if (object.is_array()) {
+    if (index >= object.elements.size()) object.elements.resize(index + 1);
+    object.elements[index] = value;
+    return;
+  }
+  object.properties[key] = Property{value};
+}
+
+/// Array-likes that are not real arrays keep their length in `length`.
+void array_like_set_length(Object& object, std::size_t length) {
+  if (object.is_array()) {
+    object.elements.resize(length);
+    return;
+  }
+  object.properties["length"] = Property{Value::number_of(static_cast<double>(length))};
+}
+
+std::vector<Value> array_like_values(const Object& object) {
+  std::vector<Value> values;
+  const std::size_t length = array_like_length(object);
+  values.reserve(length);
+  for (std::size_t i = 0; i < length; ++i) values.push_back(array_like_get(object, i));
+  return values;
 }
 
 /// Property lookup that follows the whole prototype chain.
@@ -623,6 +678,9 @@ class Interpreter {
   Value call(const Value& callee, const Value& this_value, std::vector<Value> arguments);
   Value get_member(const Value& object, const std::string& key);
   void set_member(const Value& object, const std::string& key, const Value& value);
+  /// `eval(source)`: parses and runs the text in `scope` (direct eval semantics
+  /// as far as this engine goes: `var` lands in the calling scope).
+  Value eval_source(const std::string& source, const ScopePtr& scope);
   RuntimeState& runtime() { return runtime_; }
 
  private:
@@ -828,97 +886,18 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
 
   if (target->is_array()) {
     if (key == "length") return Value::number_of(static_cast<double>(target->elements.size()));
-    if (key == "push") {
-      return native_value("push", [target](const std::vector<Value>& arguments, Value) {
-        for (const Value& argument : arguments) target->elements.push_back(argument);
-        return Value::number_of(static_cast<double>(target->elements.size()));
-      });
-    }
-    if (key == "pop") {
-      return native_value("pop", [target](const std::vector<Value>&, Value) {
-        if (target->elements.empty()) return Value::undefined();
-        const Value last = target->elements.back();
-        target->elements.pop_back();
-        return last;
-      });
-    }
-    if (key == "shift") {
-      return native_value("shift", [target](const std::vector<Value>&, Value) {
-        if (target->elements.empty()) return Value::undefined();
-        const Value first = target->elements.front();
-        target->elements.erase(target->elements.begin());
-        return first;
-      });
-    }
-    if (key == "indexOf") {
-      return native_value("indexOf", [target](const std::vector<Value>& arguments, Value) {
-        if (arguments.empty()) return Value::number_of(-1);
-        for (std::size_t i = 0; i < target->elements.size(); ++i) {
-          if (strict_equals(target->elements[i], arguments[0])) return Value::number_of(static_cast<double>(i));
-        }
-        return Value::number_of(-1);
-      });
-    }
-    if (key == "join") {
-      return native_value("join", [target](const std::vector<Value>& arguments, Value) {
-        const std::string separator = arguments.empty() ? std::string(",") : to_string(arguments[0]);
-        return Value::string_of(join_values(target->elements, separator));
-      });
-    }
-    if (key == "slice") {
-      return native_value("slice", [target](const std::vector<Value>& arguments, Value) {
-        const auto length = static_cast<long>(target->elements.size());
-        long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
-        long end = arguments.size() < 2 ? length : static_cast<long>(to_number(arguments[1]));
-        if (begin < 0) begin = std::max(0L, length + begin);
-        if (end < 0) end = std::max(0L, length + end);
-        begin = std::min(begin, length);
-        end = std::min(end, length);
-        if (end < begin) end = begin;
-        return Value::object_of(make_array(
-            std::vector<Value>(target->elements.begin() + begin, target->elements.begin() + end)));
-      });
-    }
-    if (key == "map" || key == "filter" || key == "forEach" || key == "find") {
-      const std::string method = key;
-      return native_value(method, [target, method](const std::vector<Value>& arguments, Value) {
-        if (arguments.empty()) return Value::undefined();
-        const Value callback = arguments[0];
-        std::vector<Value> results;
-        for (std::size_t i = 0; i < target->elements.size(); ++i) {
-          const Value element = target->elements[i];
-          const Value mapped = call_function(callback, Value::undefined(),
-                                             {element, Value::number_of(static_cast<double>(i)),
-                                              Value::object_of(target)});
-          if (method == "map") {
-            results.push_back(mapped);
-          } else if (method == "filter" && to_boolean(mapped)) {
-            results.push_back(element);
-          } else if (method == "find" && to_boolean(mapped)) {
-            return element;
-          }
-        }
-        if (method == "forEach" || method == "find") return Value::undefined();
-        return Value::object_of(make_array(std::move(results)));
-      });
-    }
-    if (key == "reverse") {
-      return native_value("reverse", [target](const std::vector<Value>&, Value) {
-        std::reverse(target->elements.begin(), target->elements.end());
-        return Value::object_of(target);
-      });
-    }
-    if (key == "toString") {
-      return native_value("toString", [target](const std::vector<Value>&, Value) {
-        return Value::string_of(join_values(target->elements, ","));
-      });
-    }
     std::size_t index = 0;
     if (is_array_index(key, index) && index < target->elements.size()) return target->elements[index];
   }
 
   Value found;
   if (lookup_property(target, key, found)) return found;
+  // Arrays and their prototype methods live on Array.prototype (stage 24); it is
+  // kept in the runtime rather than linked into every array value.
+  if (target->is_array() && runtime_.array_prototype != nullptr &&
+      lookup_property(runtime_.array_prototype, key, found)) {
+    return found;
+  }
   if (!target->prototype_is_null && runtime_.object_prototype != nullptr && target != runtime_.object_prototype &&
       lookup_property(runtime_.object_prototype, key, found)) {
     return found;
@@ -1001,7 +980,36 @@ Value Interpreter::call(const Value& callee, const Value& this_value, std::vecto
   for (std::size_t i = 0; i < code->parameters.size(); ++i) {
     scope->variables[code->parameters[i]] = i < arguments.size() ? arguments[i] : Value::undefined();
   }
-  if (!code->is_arrow) scope->variables["arguments"] = Value::object_of(make_array(std::move(arguments)));
+  if (!code->is_arrow) {
+    // The arguments object: `length`, indices, `callee`, and — in sloppy code —
+    // indices 0..n-1 mapped onto the named parameters. The mapping is a pair of
+    // accessor callbacks that read/write the parameter slot in the call's scope,
+    // so `p = 1` and `arguments[0] = 1` stay in sync without copying.
+    auto arguments_object = std::make_shared<Object>();
+    arguments_object->is_arguments_object = true;
+    arguments_object->properties["length"] =
+        Property{Value::number_of(static_cast<double>(arguments.size())), true, false, true};
+    arguments_object->properties["callee"] =
+        Property{Value::function_of(function), true, false, true};
+    for (std::size_t i = 0; i < arguments.size(); ++i) {
+      const std::string key = std::to_string(i);
+      if (i < code->parameters.size()) {
+        const std::string parameter = code->parameters[i];
+        Scope* captured = scope;
+        arguments_object->getters[key] = [captured, parameter]() {
+          const auto found = captured->variables.find(parameter);
+          return found == captured->variables.end() ? Value::undefined() : found->second;
+        };
+        arguments_object->setters[key] = [captured, parameter](const Value& value) {
+          captured->variables[parameter] = value;
+        };
+        arguments_object->properties[key] = Property{Value::undefined(), true, true, true};
+      } else {
+        arguments_object->properties[key] = Property{arguments[i]};
+      }
+    }
+    scope->variables["arguments"] = Value::object_of(std::move(arguments_object));
+  }
   if (!code->name.empty()) scope->variables[code->name] = callee;
 
   Interpreter* previous = g_interpreter;
@@ -1231,6 +1239,16 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
 
 // ------------------------------------------------------------ expressions ----
 
+Value Interpreter::eval_source(const std::string& source, const ScopePtr& scope) {
+  Result<ast::StmtPtr> program = parse_script(source);
+  if (program.is_error()) {
+    throw thrown(make_error("SyntaxError", program.error().message));
+  }
+  const Completion completion = exec_statements(program.value()->statements, scope);
+  if (completion.type == CompletionType::Throw) throw completion;
+  return completion.value;
+}
+
 Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope) {
   const ast::ExprPtr& callee_expression = expression.children[0];
   Value this_value = Value::undefined();
@@ -1252,6 +1270,18 @@ Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope)
     arguments.push_back(eval(expression.children[i], scope));
   }
   if (callee.type != ValueType::Function) throw thrown(type_error(to_string(callee) + " is not a function"));
+  // Direct eval: `eval('...')` runs in the *calling* scope, so it cannot go
+  // through the ordinary native-function path (which has no scope).
+  if (callee_expression->kind == ast::ExprKind::Identifier && callee_expression->text == "eval") {
+    const auto global_eval = global_->variables.find("eval");
+    if (global_eval != global_->variables.end() && global_eval->second.type == ValueType::Function &&
+        global_eval->second.function == callee.function) {
+      if (arguments.empty() || !arguments[0].is_string()) {
+        return arguments.empty() ? Value::undefined() : arguments[0];
+      }
+      return eval_source(arguments[0].text, scope);
+    }
+  }
   return call(callee, this_value, std::move(arguments));
 }
 
@@ -1454,6 +1484,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         }
         if (prototype == nullptr) return Value::boolean_of(false);
         std::shared_ptr<Object> current = left.object->prototype;
+        if (current == nullptr && left.object->is_array()) current = runtime_.array_prototype;
         while (current != nullptr) {
           if (current == prototype) return Value::boolean_of(true);
           current = current->prototype;
@@ -1652,8 +1683,318 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::object_of(make_array(arguments));
   });
-  array_constructor.function->prototype_object = std::make_shared<Object>();
-  array_constructor.function->prototype_object->owner_function = array_constructor.function;
+  // Array.prototype: the methods live here (not on every array value), so
+  // `Array.prototype.slice.call(arguments)` and friends work on array-likes.
+  runtime.array_prototype = std::make_shared<Object>();
+  const std::shared_ptr<Object> array_prototype = runtime.array_prototype;
+  array_prototype->owner_function = array_constructor.function;
+  auto array_this = [](const Value& this_value, const char* method) -> std::shared_ptr<Object> {
+    if (this_value.is_string()) {
+      // ToObject("abc") is array-like: {"0":"a","1":"b","2":"c",length:3}.
+      auto wrapper = std::make_shared<Object>();
+      for (std::size_t i = 0; i < this_value.text.size(); ++i) {
+        wrapper->properties[std::to_string(i)] = Property{Value::string_of(std::string(1, this_value.text[i]))};
+      }
+      wrapper->properties["length"] = Property{Value::number_of(static_cast<double>(this_value.text.size())), true,
+                                              false, true};
+      return wrapper;
+    }
+    if (!this_value.is_object() || this_value.object == nullptr) {
+      throw thrown(type_error(std::string("Array.prototype.") + method + " called on " +
+                              typeof_string(this_value)));
+    }
+    return this_value.object;
+  };
+  auto add_array_method = [&](const char* name, Function::Native native) {
+    array_prototype->properties[name] = Property{native_value(name, std::move(native))};
+  };
+  add_array_method("push", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "push");
+    std::size_t length = array_like_length(*target);
+    for (const Value& argument : arguments) array_like_set(*target, length++, argument);
+    array_like_set_length(*target, length);
+    return Value::number_of(static_cast<double>(length));
+  });
+  add_array_method("pop", [array_this](const std::vector<Value>&, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "pop");
+    const std::size_t length = array_like_length(*target);
+    if (length == 0) return Value::undefined();
+    const Value last = array_like_get(*target, length - 1);
+    array_like_set_length(*target, length - 1);
+    return last;
+  });
+  add_array_method("shift", [array_this](const std::vector<Value>&, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "shift");
+    const std::size_t length = array_like_length(*target);
+    if (length == 0) return Value::undefined();
+    const Value first = array_like_get(*target, 0);
+    for (std::size_t i = 1; i < length; ++i) array_like_set(*target, i - 1, array_like_get(*target, i));
+    array_like_set_length(*target, length - 1);
+    return first;
+  });
+  add_array_method("unshift", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "unshift");
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = length; i > 0; --i) array_like_set(*target, i - 1 + arguments.size(), array_like_get(*target, i - 1));
+    for (std::size_t i = 0; i < arguments.size(); ++i) array_like_set(*target, i, arguments[i]);
+    array_like_set_length(*target, length + arguments.size());
+    return Value::number_of(static_cast<double>(length + arguments.size()));
+  });
+  add_array_method("slice", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "slice");
+    const auto length = static_cast<long>(array_like_length(*target));
+    long begin = arguments.empty() || arguments[0].is_undefined() ? 0 : static_cast<long>(to_number(arguments[0]));
+    long end = arguments.size() < 2 || arguments[1].is_undefined() ? length : static_cast<long>(to_number(arguments[1]));
+    if (begin < 0) begin = std::max(0L, length + begin);
+    if (end < 0) end = std::max(0L, length + end);
+    begin = std::min(begin, length);
+    end = std::min(end, length);
+    if (end < begin) end = begin;
+    std::vector<Value> values;
+    for (long i = begin; i < end; ++i) values.push_back(array_like_get(*target, static_cast<std::size_t>(i)));
+    return Value::object_of(make_array(std::move(values)));
+  });
+  add_array_method("splice", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "splice");
+    const auto length = static_cast<long>(array_like_length(*target));
+    long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    if (begin < 0) begin = std::max(0L, length + begin);
+    begin = std::min(begin, length);
+    const long delete_count = arguments.size() < 2 ? length - begin
+                                                  : std::max(0L, std::min(static_cast<long>(to_number(arguments[1])),
+                                                                          length - begin));
+    std::vector<Value> removed;
+    for (long i = 0; i < delete_count; ++i) removed.push_back(array_like_get(*target, static_cast<std::size_t>(begin + i)));
+    const long insert_count = static_cast<long>(arguments.size()) - 2;
+    std::vector<Value> tail;
+    for (long i = begin + delete_count; i < length; ++i) tail.push_back(array_like_get(*target, static_cast<std::size_t>(i)));
+    std::size_t at = static_cast<std::size_t>(begin);
+    for (long i = 2; i < static_cast<long>(arguments.size()); ++i) array_like_set(*target, at++, arguments[static_cast<std::size_t>(i)]);
+    for (const Value& value : tail) array_like_set(*target, at++, value);
+    array_like_set_length(*target, static_cast<std::size_t>(begin + insert_count) + tail.size());
+    return Value::object_of(make_array(std::move(removed)));
+  });
+  add_array_method("join", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "join");
+    const std::string separator = arguments.empty() || arguments[0].is_undefined() ? std::string(",")
+                                                                                 : to_string(arguments[0]);
+    std::string out;
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      if (i != 0) out += separator;
+      const Value value = array_like_get(*target, i);
+      if (!value.is_nullish()) out += to_string(value);
+    }
+    return Value::string_of(out);
+  });
+  add_array_method("toString", [array_this](const std::vector<Value>&, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "toString");
+    return Value::string_of(join_values(array_like_values(*target), ","));
+  });
+  add_array_method("indexOf", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "indexOf");
+    if (arguments.empty()) return Value::number_of(-1);
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      if (strict_equals(array_like_get(*target, i), arguments[0])) return Value::number_of(static_cast<double>(i));
+    }
+    return Value::number_of(-1);
+  });
+  add_array_method("lastIndexOf", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "lastIndexOf");
+    if (arguments.empty()) return Value::number_of(-1);
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = length; i > 0; --i) {
+      if (strict_equals(array_like_get(*target, i - 1), arguments[0])) {
+        return Value::number_of(static_cast<double>(i - 1));
+      }
+    }
+    return Value::number_of(-1);
+  });
+  add_array_method("includes", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "includes");
+    const Value needle = arguments.empty() ? Value::undefined() : arguments[0];
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      const Value value = array_like_get(*target, i);
+      // SameValueZero: NaN is found, +0/-0 are the same.
+      if (value.is_number() && needle.is_number() && std::isnan(value.number) && std::isnan(needle.number)) {
+        return Value::boolean_of(true);
+      }
+      if (strict_equals(value, needle)) return Value::boolean_of(true);
+    }
+    return Value::boolean_of(false);
+  });
+  add_array_method("concat", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "concat");
+    std::vector<Value> values = array_like_values(*target);
+    for (const Value& argument : arguments) {
+      if (argument.is_object() && argument.object != nullptr && argument.object->is_array()) {
+        const std::vector<Value> nested = array_like_values(*argument.object);
+        values.insert(values.end(), nested.begin(), nested.end());
+      } else {
+        values.push_back(argument);
+      }
+    }
+    return Value::object_of(make_array(std::move(values)));
+  });
+  add_array_method("reverse", [array_this](const std::vector<Value>&, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "reverse");
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length / 2; ++i) {
+      const Value left = array_like_get(*target, i);
+      const Value right = array_like_get(*target, length - 1 - i);
+      array_like_set(*target, i, right);
+      array_like_set(*target, length - 1 - i, left);
+    }
+    return this_value;
+  });
+  add_array_method("sort", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "sort");
+    std::vector<Value> values = array_like_values(*target);
+    const Value comparator = arguments.empty() ? Value::undefined() : arguments[0];
+    std::stable_sort(values.begin(), values.end(), [&comparator](const Value& a, const Value& b) {
+      if (comparator.type == ValueType::Function) {
+        return to_number(call_function(comparator, Value::undefined(), {a, b})) < 0.0;
+      }
+      return to_string(a) < to_string(b);
+    });
+    for (std::size_t i = 0; i < values.size(); ++i) array_like_set(*target, i, values[i]);
+    array_like_set_length(*target, values.size());
+    return this_value;
+  });
+  add_array_method("forEach", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "forEach");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.forEach needs a callback"));
+    }
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      call_function(arguments[0], Value::undefined(),
+                    {array_like_get(*target, i), Value::number_of(static_cast<double>(i)), this_value});
+    }
+    return Value::undefined();
+  });
+  add_array_method("map", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "map");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.map needs a callback"));
+    }
+    std::vector<Value> results;
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      results.push_back(call_function(arguments[0], Value::undefined(),
+                                      {array_like_get(*target, i), Value::number_of(static_cast<double>(i)),
+                                       this_value}));
+    }
+    return Value::object_of(make_array(std::move(results)));
+  });
+  add_array_method("filter", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "filter");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.filter needs a callback"));
+    }
+    std::vector<Value> results;
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      const Value element = array_like_get(*target, i);
+      if (to_boolean(call_function(arguments[0], Value::undefined(),
+                                   {element, Value::number_of(static_cast<double>(i)), this_value}))) {
+        results.push_back(element);
+      }
+    }
+    return Value::object_of(make_array(std::move(results)));
+  });
+  add_array_method("find", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "find");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.find needs a callback"));
+    }
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      const Value element = array_like_get(*target, i);
+      if (to_boolean(call_function(arguments[0], Value::undefined(),
+                                   {element, Value::number_of(static_cast<double>(i)), this_value}))) {
+        return element;
+      }
+    }
+    return Value::undefined();
+  });
+  add_array_method("findIndex", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "findIndex");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.findIndex needs a callback"));
+    }
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      if (to_boolean(call_function(arguments[0], Value::undefined(),
+                                   {array_like_get(*target, i), Value::number_of(static_cast<double>(i)), this_value}))) {
+        return Value::number_of(static_cast<double>(i));
+      }
+    }
+    return Value::number_of(-1);
+  });
+  for (const char* name : {"every", "some"}) {
+    const std::string method = name;
+    const bool every = method == "every";
+    add_array_method(name, [array_this, every, method](const std::vector<Value>& arguments, Value this_value) {
+      const std::shared_ptr<Object> target = array_this(this_value, method.c_str());
+      if (arguments.empty() || arguments[0].type != ValueType::Function) {
+        throw thrown(type_error("Array.prototype." + method + " needs a callback"));
+      }
+      const std::size_t length = array_like_length(*target);
+      for (std::size_t i = 0; i < length; ++i) {
+        const bool matches = to_boolean(call_function(arguments[0], Value::undefined(),
+                                                      {array_like_get(*target, i),
+                                                       Value::number_of(static_cast<double>(i)), this_value}));
+        if (every && !matches) return Value::boolean_of(false);
+        if (!every && matches) return Value::boolean_of(true);
+      }
+      return Value::boolean_of(every);
+    });
+  }
+  for (const char* name : {"reduce", "reduceRight"}) {
+    const std::string method = name;
+    const bool from_right = method == "reduceRight";
+    add_array_method(name, [array_this, from_right, method](const std::vector<Value>& arguments, Value this_value) {
+      const std::shared_ptr<Object> target = array_this(this_value, method.c_str());
+      if (arguments.empty() || arguments[0].type != ValueType::Function) {
+        throw thrown(type_error("Array.prototype." + method + " needs a callback"));
+      }
+      const std::size_t length = array_like_length(*target);
+      std::size_t index = 0;
+      Value accumulator;
+      if (arguments.size() > 1) {
+        accumulator = arguments[1];
+      } else {
+        if (length == 0) throw thrown(type_error("reduce of empty array with no initial value"));
+        accumulator = array_like_get(*target, from_right ? length - 1 : 0);
+        index = 1;
+      }
+      for (; index < length; ++index) {
+        const std::size_t at = from_right ? length - 1 - index : index;
+        accumulator = call_function(arguments[0], Value::undefined(),
+                                    {accumulator, array_like_get(*target, at), Value::number_of(static_cast<double>(at)),
+                                     this_value});
+      }
+      return accumulator;
+    });
+  }
+  add_array_method("fill", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "fill");
+    const Value value = arguments.empty() ? Value::undefined() : arguments[0];
+    const auto length = static_cast<long>(array_like_length(*target));
+    long begin = arguments.size() < 2 ? 0 : static_cast<long>(to_number(arguments[1]));
+    long end = arguments.size() < 3 || arguments[2].is_undefined() ? length : static_cast<long>(to_number(arguments[2]));
+    if (begin < 0) begin = std::max(0L, length + begin);
+    if (end < 0) end = std::max(0L, length + end);
+    begin = std::min(begin, length);
+    end = std::min(end, length);
+    for (long i = begin; i < end; ++i) array_like_set(*target, static_cast<std::size_t>(i), value);
+    return this_value;
+  });
+
+  array_constructor.function->prototype_object = array_prototype;
   array_constructor.function->statics = std::make_shared<Object>();
   array_constructor.function->statics->properties["isArray"] = Property{native_value(
       "isArray", [](const std::vector<Value>& arguments, Value) {
@@ -1688,12 +2029,14 @@ void install_builtins(RuntimeState& runtime) {
     const auto found = bag->properties.find(key);
     return Value::boolean_of(found == bag->properties.end() || found->second.enumerable);
   });
-  add_proto_method("isPrototypeOf", [](const std::vector<Value>& arguments, Value this_value) {
+  add_proto_method("isPrototypeOf", [&runtime](const std::vector<Value>& arguments, Value this_value) {
     const std::shared_ptr<Object> bag = property_bag(this_value);
     if (bag == nullptr) return Value::boolean_of(false);
     const std::shared_ptr<Object> other = property_bag(arguments.empty() ? Value::undefined() : arguments[0]);
     if (other == nullptr) return Value::boolean_of(false);
-    for (std::shared_ptr<Object> ancestor = other->prototype; ancestor != nullptr; ancestor = ancestor->prototype) {
+    std::shared_ptr<Object> start = other->prototype;
+    if (start == nullptr && other->is_array()) start = runtime.array_prototype;
+    for (std::shared_ptr<Object> ancestor = start; ancestor != nullptr; ancestor = ancestor->prototype) {
       if (ancestor == bag) return Value::boolean_of(true);
     }
     return Value::boolean_of(false);
@@ -1716,6 +2059,8 @@ void install_builtins(RuntimeState& runtime) {
         tag = "Array";
       } else if (this_value.object->kind == Object::Kind::Error) {
         tag = "Error";
+      } else if (this_value.object->is_arguments_object) {
+        tag = "Arguments";
       }
     }
     return Value::string_of("[object " + tag + "]");
@@ -2008,6 +2353,14 @@ void install_builtins(RuntimeState& runtime) {
     global->variables[name] = error_constructor(name);
   }
 
+  global->variables["eval"] = native_value("eval", [&runtime](const std::vector<Value>& arguments, Value) {
+    if (arguments.empty() || !arguments[0].is_string()) {
+      return arguments.empty() ? Value::undefined() : arguments[0];
+    }
+    Interpreter interpreter(runtime, runtime.global);
+    return interpreter.eval_source(arguments[0].text, runtime.global);
+  });
+
   global->variables["globalThis"] = Value::object_of(std::make_shared<Object>());
 }
 
@@ -2125,7 +2478,15 @@ std::string number_to_string(double value) { return number_to_raw_string(value);
 std::string describe_exception(const Value& value) {
   if (value.type == ValueType::Object && value.object != nullptr) {
     const auto message = value.object->properties.find("message");
-    if (message != value.object->properties.end()) return to_string(message->second.value);
+    if (message != value.object->properties.end()) {
+      const std::string text = to_string(message->second.value);
+      const auto name = value.object->properties.find("name");
+      // Errors read like the console shows them: "TypeError: x is not a function".
+      if (name != value.object->properties.end() && !text.empty()) {
+        return to_string(name->second.value) + ": " + text;
+      }
+      return text;
+    }
   }
   return to_string(value);
 }

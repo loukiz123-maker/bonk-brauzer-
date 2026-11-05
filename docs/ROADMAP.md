@@ -474,6 +474,27 @@ test262 — 2 673/13 254 (20.2 %), юнит-тестов **442**. Открыто
 spread/`for-of`, strict-режим, порядок ключей как в спецификации.
 
 
+## Этап 24 — массивы как объекты, `arguments`, `eval`, ранние ошибки
+
+Методы массива переехали из значения в общий `Array.prototype` и стали работать с
+array-like (`length` + числовые ключи) — отсюда `Array.prototype.slice.call(arguments)`,
+`[] instanceof Array` и `Array.prototype.isPrototypeOf([])`. Появился настоящий
+объект `arguments` с `length`/`callee` и связью индексов с параметрами через
+accessor-колбэки, директный `eval` (исполняется в области вызова, ошибки разбора —
+`SyntaxError`), ранние ошибки целей присваивания (`1 = 2`, `this = 1`, `f() = 1`) и
+числовые ключи в литералах объектов. Подробности:
+[`docs/STAGE-24.md`](STAGE-24.md), решение —
+[`docs/adr/0026-array-prototype-arguments-and-eval.md`](adr/0026-array-prototype-arguments-and-eval.md).
+
+**Критерий выхода**: `Array` перестаёт быть самым слабым встроенным объектом, а
+классический «ES5-код» (slice.call/arguments) исполняется. Сейчас: test262 —
+**4 511/14 759 (30.6 %)**, `Array` — 25.9 % (было 7.7 %), `language` — 41.7 %,
+reftests 13/13, токенайзер 6 792/6 820 (99.6 %), tree construction
+1 792/1 792 (100 %), юнит-тестов **462**. Открыто: `String.prototype`/
+`Function.prototype` как объекты, `class`, деструктуризация, spread/`for-of`,
+strict-режим, `RegExp`/`Date`/`Promise`/`Symbol`.
+
+
 ---
 
 ## Риски и как их снимаем

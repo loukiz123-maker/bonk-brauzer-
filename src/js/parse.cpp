@@ -593,12 +593,39 @@ struct Parser {
     return -1;
   }
 
+  /// Early error: only identifiers and member expressions may be assigned to
+  /// (ES2015 12.14.1 AssignmentTargetType). `1 = 2`, `f() = 2`, `this = 1` and
+  /// `(a, b) = 1` are SyntaxErrors, not runtime errors.
+  static bool is_simple_assignment_target(const ExprPtr& expression) {
+    return expression != nullptr &&
+           (expression->kind == ExprKind::Identifier || expression->kind == ExprKind::Member);
+  }
+
+  /// `=` additionally accepts destructuring patterns, which are (syntactically)
+  /// array/object literals. The engine does not implement destructuring yet, so
+  /// those still fail at runtime — but they are not early errors.
+  static bool is_assignment_target(const ExprPtr& expression) {
+    if (is_simple_assignment_target(expression)) return true;
+    return expression != nullptr &&
+           (expression->kind == ExprKind::Array || expression->kind == ExprKind::ObjectLiteral);
+  }
+
+  void require_assignment_target(const ExprPtr& expression, const std::string& what) {
+    if (error.empty() && !is_simple_assignment_target(expression)) {
+      error = "invalid assignment target in " + what;
+    }
+  }
+
   ExprPtr parse_assignment() {
     ExprPtr left = parse_binary(0);
     if (is("=") || is("+=") || is("-=") || is("*=") || is("/=") || is("%=")) {
-      const std::string op = take().text;
       auto assign = make(ExprKind::Assign);
-      assign->text = op;
+      assign->text = take().text;
+      if (assign->text == "=") {
+        if (error.empty() && !is_assignment_target(left)) error = "invalid assignment target in assignment";
+      } else {
+        require_assignment_target(left, "compound assignment");
+      }
       assign->children.push_back(left);
       assign->children.push_back(parse_assignment());
       return assign;
@@ -644,6 +671,7 @@ struct Parser {
       auto update = make(ExprKind::Update);
       update->text = take().text;
       update->children.push_back(parse_unary());
+      require_assignment_target(update->children[0], "update expression");
       update->boolean = true;  // prefix
       return update;
     }
@@ -697,6 +725,7 @@ struct Parser {
       update->text = take().text;
       update->children.push_back(expression);
       update->boolean = false;  // postfix
+      require_assignment_target(expression, "update expression");
       return update;
     }
     return expression;
@@ -910,7 +939,9 @@ struct Parser {
                 property.value = expression;
                 accessor = true;
               }
-            } else if (current().type == Token::Type::String) {
+            } else if (current().type == Token::Type::String ||
+                       current().type == Token::Type::Number) {
+              // `{1: 'a', 2.5: 'b'}`: numeric property names are ordinary keys.
               property.key = take().text;
             } else {
               if (error.empty()) error = "expected a property name";

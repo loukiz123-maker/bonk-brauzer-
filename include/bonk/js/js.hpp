@@ -117,6 +117,8 @@ struct Object {
   /// `Object.create(null)` / `setPrototypeOf(o, null)`: the chain really ends
   /// here, so the implicit Object.prototype fallback must not apply.
   bool prototype_is_null = false;
+  /// `arguments`: only affects `Object.prototype.toString` ([object Arguments]).
+  bool is_arguments_object = false;
   /// Set on a function's `prototype` object so `f.prototype.constructor === f`
   /// without a shared_ptr cycle (the prototype only *observes* the function).
   std::weak_ptr<Function> owner_function;
