@@ -61,7 +61,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 504 юнит-теста
+$ make test               # 514 юнит-тестов
 $ make conformance        # прогон по html5lib-tests/test262/reftests -> docs/conformance.md
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
@@ -145,7 +145,7 @@ include/bonk/          публичные заголовки по модулям
   bindings/            bindings (window, document, обёртки элементов, события, инлайновые скрипты)
   apps/                pipeline (HTML → PNG за один вызов), cli, main
 src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
-tests/                 свой фреймворк + 504 теста + tests/fixtures/
+tests/                 свой фреймворк + 514 тестов + tests/fixtures/
 docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
 .github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
 ```

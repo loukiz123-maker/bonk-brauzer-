@@ -118,7 +118,11 @@ struct Lexer {
     }
 
     const char c = peek();
-    if ((c >= '0' && c <= '9') || (c == '.' && peek(1) >= '0' && peek(1) <= '9')) {
+    // `.5` is a number, but the third dot of `...` followed by a digit is not:
+    // `[...5]` must lex as `.` `.` `.` `5`.
+    const bool leading_dot_number = c == '.' && peek(1) >= '0' && peek(1) <= '9' &&
+                                    !(position > 0 && source[position - 1] == '.');
+    if ((c >= '0' && c <= '9') || leading_dot_number) {
       token.type = Token::Type::Number;
       std::string digits;
       if (c == '0' && (peek(1) == 'x' || peek(1) == 'X' || peek(1) == 'b' || peek(1) == 'B' || peek(1) == 'o' ||
@@ -443,22 +447,172 @@ struct Parser {
     const std::string kind = take().text;
     auto statement = make_stmt(StmtKind::Var);
     statement->declaration_kind = kind;
+    // `var [a, b] = …` / `var {a: b} = …` are desugared into several declarators of
+    // the same statement, so the initialiser is still evaluated exactly once.
+    auto make_temp = [&statement](const ExprPtr& value) {
+      const std::string name = "__bonk$v" + std::to_string(statement->names.size());
+      statement->names.push_back(name);
+      statement->values.push_back(value);
+      return identifier_of(name);
+    };
+    auto bind = [&statement, this](const ExprPtr& target, const ExprPtr& value) {
+      if (target == nullptr || target->kind != ExprKind::Identifier) {
+        if (error.empty()) error = "invalid destructuring target in declaration";
+        return;
+      }
+      statement->names.push_back(target->text);
+      statement->values.push_back(value);
+    };
     for (;;) {
-      if (!is_identifier()) {
+      if (is_identifier()) {
+        const std::string name = take().text;
+        statement->names.push_back(name);
+        if (match("=")) {
+          statement->values.push_back(parse_assignment());
+        } else {
+          statement->values.push_back(nullptr);
+        }
+      } else if (is("[") || is("{")) {
+        const ExprPtr pattern = parse_call_member();
+        const ExprPtr value = match("=") ? parse_assignment() : identifier_of("undefined");
+        if (pattern == nullptr || (pattern->kind != ExprKind::Array && pattern->kind != ExprKind::ObjectLiteral)) {
+          if (error.empty()) error = "expected a destructuring pattern";
+          return statement;
+        }
+        unpack_pattern(pattern, value, make_temp, bind);
+      } else {
         error = "expected a variable name";
         return statement;
-      }
-      const std::string name = take().text;
-      statement->names.push_back(name);
-      if (match("=")) {
-        statement->values.push_back(parse_assignment());
-      } else {
-        statement->values.push_back(nullptr);
       }
       if (!match(",")) break;
     }
     expect_semicolon();
     return statement;
+  }
+
+  // ---------------------------------------------------------- destructuring --
+  //
+  // Patterns are parsed as ordinary array/object literals and unpacked here into
+  // plain bindings/assignments; every sub-expression lands in a temporary so it is
+  // evaluated exactly once (`var [a] = [f()]` calls `f` once, defaults included).
+
+  std::size_t destructuring_temp = 0;
+
+  std::string new_temp_name() { return "__bonk$d" + std::to_string(destructuring_temp++); }
+
+  static ExprPtr identifier_of(const std::string& name) {
+    auto identifier = std::make_shared<ast::Expr>();
+    identifier->kind = ast::ExprKind::Identifier;
+    identifier->text = name;
+    return identifier;
+  }
+
+  static ExprPtr literal_of(const std::string& text) {
+    auto literal = std::make_shared<ast::Expr>();
+    literal->kind = ast::ExprKind::String;
+    literal->text = text;
+    return literal;
+  }
+
+  static ExprPtr number_of(double value) {
+    auto literal = std::make_shared<ast::Expr>();
+    literal->kind = ast::ExprKind::Number;
+    literal->number = value;
+    return literal;
+  }
+
+  static ExprPtr member_of(const ExprPtr& object, const ExprPtr& key) {
+    auto member = std::make_shared<ast::Expr>();
+    member->kind = ast::ExprKind::Member;
+    member->boolean = true;  // computed
+    member->children.push_back(object);
+    member->children.push_back(key);
+    return member;
+  }
+
+  static ExprPtr call_of(const std::string& name, const std::vector<ExprPtr>& arguments) {
+    auto call = std::make_shared<ast::Expr>();
+    call->kind = ast::ExprKind::Call;
+    call->children.push_back(identifier_of(name));
+    for (const ExprPtr& argument : arguments) call->children.push_back(argument);
+    return call;
+  }
+
+  static ExprPtr assign_of(const ExprPtr& target, const ExprPtr& value) {
+    auto assign = std::make_shared<ast::Expr>();
+    assign->kind = ast::ExprKind::Assign;
+    assign->text = "=";
+    assign->children.push_back(target);
+    assign->children.push_back(value);
+    return assign;
+  }
+
+  /// `value === undefined ? fallback : value`
+  static ExprPtr default_of(const ExprPtr& value, const ExprPtr& fallback) {
+    auto compare = std::make_shared<ast::Expr>();
+    compare->kind = ast::ExprKind::Binary;
+    compare->text = "===";
+    compare->children.push_back(value);
+    compare->children.push_back(identifier_of("undefined"));
+    auto conditional = std::make_shared<ast::Expr>();
+    conditional->kind = ast::ExprKind::Conditional;
+    conditional->children.push_back(compare);
+    conditional->children.push_back(fallback);
+    conditional->children.push_back(value);
+    return conditional;
+  }
+
+  using TempFn = std::function<ExprPtr(const ExprPtr&)>;
+  using BindFn = std::function<void(const ExprPtr&, const ExprPtr&)>;
+
+  /// Unpacks `pattern` (array/object literal) from `value`, invoking `bind` for leaves.
+  void unpack_pattern(const ExprPtr& pattern, const ExprPtr& value_in, const TempFn& make_temp,
+                      const BindFn& bind) {
+    if (pattern == nullptr) return;
+    if (pattern->kind != ExprKind::Array && pattern->kind != ExprKind::ObjectLiteral) {
+      bind(pattern, value_in);
+      return;
+    }
+    // Evaluate the source once: `var [a, b] = make()` must call `make` once.
+    const ExprPtr value = make_temp(value_in);
+    if (pattern->kind == ExprKind::Array) {
+      for (std::size_t i = 0; i < pattern->children.size(); ++i) {
+        const ExprPtr& element = pattern->children[i];
+        if (element == nullptr) continue;  // `[ , b] = …` hole
+        if (element->kind == ExprKind::Spread) {
+          bind(element->children[0], call_of("__bonk$arrayRest", {value, number_of(static_cast<double>(i))}));
+          return;
+        }
+        unpack_element(element, member_of(value, number_of(static_cast<double>(i))), make_temp, bind);
+      }
+      return;
+    }
+    if (pattern->kind == ExprKind::ObjectLiteral) {
+      std::vector<ExprPtr> excluded;
+      for (const ast::PropertyDef& property : pattern->properties) {
+        if (property.kind == ast::PropertyDef::Kind::Spread) {
+          auto keys = std::make_shared<ast::Expr>();
+          keys->kind = ast::ExprKind::Array;
+          keys->children = excluded;
+          bind(property.value, call_of("__bonk$objectRest", {value, keys}));
+          continue;
+        }
+        excluded.push_back(literal_of(property.key));
+        unpack_element(property.value, member_of(value, literal_of(property.key)), make_temp, bind);
+      }
+      return;
+    }
+  }
+
+  void unpack_element(const ExprPtr& element, const ExprPtr& slot, const TempFn& make_temp,
+                      const BindFn& bind) {
+    // `[a = 1]`, `{b: c = 2}` — the default applies to `undefined` only.
+    if (element->kind == ExprKind::Assign && element->text == "=" && element->children.size() == 2) {
+      const ExprPtr temporary = make_temp(slot);
+      unpack_pattern(element->children[0], default_of(temporary, element->children[1]), make_temp, bind);
+      return;
+    }
+    unpack_pattern(element, slot, make_temp, bind);
   }
 
   FunctionPtr parse_function(bool is_arrow, bool require_name) {
@@ -470,9 +624,57 @@ struct Parser {
       else if (require_name && error.empty()) error = "expected a function name";
     }
     if (!expect("(")) return function;
+    // Parameter patterns and defaults become statements at the top of the body, so
+    // the interpreter only ever sees plain parameter names (stage 30).
+    std::vector<StmtPtr> prologue;
+    auto prologue_temp = [&](const ExprPtr& value) {
+      auto declaration = make_stmt(StmtKind::Var);
+      const std::string name = "__bonk$t" + std::to_string(prologue.size());
+      declaration->names.push_back(name);
+      declaration->values.push_back(value);
+      prologue.push_back(declaration);
+      return identifier_of(name);
+    };
+    auto prologue_bind = [&](const ExprPtr& target, const ExprPtr& value) {
+      if (target == nullptr || target->kind != ExprKind::Identifier) {
+        if (error.empty()) error = "invalid destructuring target in parameter";
+        return;
+      }
+      auto declaration = make_stmt(StmtKind::Var);
+      declaration->names.push_back(target->text);
+      declaration->values.push_back(value);
+      prologue.push_back(declaration);
+    };
     while (!is(")") && current().type != Token::Type::EndOfFile) {
+      if (is(".") && peek().text == ".") {
+        if (!accept_ellipsis()) break;
+        if (!is_identifier()) {
+          if (error.empty()) error = "expected a rest parameter name";
+          break;
+        }
+        function->rest_parameter = take().text;
+        break;
+      }
       if (is_identifier()) {
-        function->parameters.push_back(take().text);
+        const std::string name = take().text;
+        function->parameters.push_back(name);
+        if (is("=")) {
+          take();
+          auto statement = make_stmt(StmtKind::Expression);
+          statement->expression =
+              assign_of(identifier_of(name), default_of(identifier_of(name), parse_assignment()));
+          prologue.push_back(statement);
+        }
+      } else if (is("[") || is("{")) {
+        const ExprPtr pattern = parse_call_member();
+        const std::string name = "__bonk$p" + std::to_string(function->parameters.size());
+        function->parameters.push_back(name);
+        ExprPtr source = identifier_of(name);
+        if (is("=")) {
+          take();
+          source = default_of(source, parse_assignment());
+        }
+        unpack_pattern(pattern, source, prologue_temp, prologue_bind);
       } else {
         error = "expected a parameter name";
         break;
@@ -491,10 +693,12 @@ struct Parser {
         function->body.push_back(statement);
         function->expression_body = true;
       }
+      function->body.insert(function->body.begin(), prologue.begin(), prologue.end());
       return function;
     }
     StmtPtr body = parse_block();
     function->body = body->statements;
+    function->body.insert(function->body.begin(), prologue.begin(), prologue.end());
     return function;
   }
 
@@ -546,16 +750,53 @@ struct Parser {
     // for (let x of …) / for (var k in …) / classic for(;;)
     if (is("var") || is("let") || is("const")) {
       const std::string kind = take().text;
-      if (!is_identifier()) {
+      ExprPtr pattern = nullptr;
+      std::string name;
+      if (is("[") || is("{")) {
+        pattern = parse_call_member();  // `for (var [k, v] of pairs)`
+      } else if (is_identifier()) {
+        name = take().text;
+      } else {
         error = "expected a loop variable";
         return make_stmt(StmtKind::Empty);
       }
-      const std::string name = take().text;
       if (is("of") || is("in")) {
         const bool is_of = is("of");
         take();
         auto statement = make_stmt(is_of ? StmtKind::ForOf : StmtKind::ForIn);
         statement->declaration_kind = kind;
+        if (pattern != nullptr) {
+          // The loop binds a temporary; the pattern is unpacked at the top of the body.
+          const std::string loop_name = "__bonk$loop" + std::to_string(destructuring_temp++);
+          statement->names.push_back(loop_name);
+          statement->declares_iteration = true;
+          statement->expression = parse_expression();
+          expect(")");
+          StmtPtr body = parse_statement();
+          auto wrap = make_stmt(StmtKind::Block);
+          auto bindings = make_stmt(StmtKind::Var);
+          bindings->declaration_kind = kind;
+          const ExprPtr source = call_of("__bonk$copy", {identifier_of(loop_name)});
+          auto make_temp = [&bindings](const ExprPtr& slot) {
+            const std::string temp = "__bonk$l" + std::to_string(bindings->names.size());
+            bindings->names.push_back(temp);
+            bindings->values.push_back(slot);
+            return identifier_of(temp);
+          };
+          auto bind = [&bindings, this](const ExprPtr& target, const ExprPtr& slot) {
+            if (target == nullptr || target->kind != ExprKind::Identifier) {
+              if (error.empty()) error = "invalid destructuring target in loop";
+              return;
+            }
+            bindings->names.push_back(target->text);
+            bindings->values.push_back(slot);
+          };
+          unpack_pattern(pattern, source, make_temp, bind);
+          wrap->statements.push_back(bindings);
+          wrap->statements.push_back(body);
+          statement->body = wrap;
+          return statement;
+        }
         statement->names.push_back(name);
         statement->declares_iteration = true;
         statement->expression = parse_expression();
@@ -807,6 +1048,29 @@ struct Parser {
     return expression;
   }
 
+  /// `...` is lexed as three `.` punctuators, so look ahead before consuming.
+  bool accept_ellipsis() {
+    if (!is(".") || peek().text != "." || peek(2).text != ".") {
+      if (error.empty()) error = "expected '...'";
+      return false;
+    }
+    take();
+    take();
+    take();
+    return true;
+  }
+
+  /// One call argument: `expr` or `...expr`.
+  ExprPtr parse_argument() {
+    if (is(".") && peek().text == "." ) {
+      if (!accept_ellipsis()) return nullptr;
+      auto spread = make(ExprKind::Spread);
+      spread->children.push_back(parse_assignment());
+      return spread;
+    }
+    return parse_assignment();
+  }
+
   ExprPtr parse_call_member() {
     ExprPtr expression = is("new") ? parse_new() : parse_primary();
     for (;;) {
@@ -870,7 +1134,7 @@ struct Parser {
         call->children.push_back(expression);
         take();
         while (!is(")") && current().type != Token::Type::EndOfFile) {
-          call->children.push_back(parse_assignment());
+          call->children.push_back(parse_argument());
           if (!match(",")) break;
         }
         expect(")");
@@ -904,7 +1168,7 @@ struct Parser {
     expression->children.push_back(callee);
     if (match("(")) {
       while (!is(")") && current().type != Token::Type::EndOfFile) {
-        expression->children.push_back(parse_assignment());
+        expression->children.push_back(parse_argument());
         if (!match(",")) break;
       }
       expect(")");
@@ -1026,7 +1290,20 @@ struct Parser {
           take();
           auto array = make(ExprKind::Array);
           while (!is("]") && current().type != Token::Type::EndOfFile) {
-            array->children.push_back(parse_assignment());
+            if (is(",")) {  // elision: `[a, , c]` has a hole
+              array->children.push_back(nullptr);
+              take();
+              continue;
+            }
+            if (is(".")) {
+              // `[...iterable]`
+              if (!accept_ellipsis()) break;
+              auto spread = make(ExprKind::Spread);
+              spread->children.push_back(parse_assignment());
+              array->children.push_back(spread);
+            } else {
+              array->children.push_back(parse_assignment());
+            }
             if (!match(",")) break;
           }
           expect("]");
@@ -1038,6 +1315,15 @@ struct Parser {
           while (!is("}") && current().type != Token::Type::EndOfFile) {
             ast::PropertyDef property;
             bool accessor = false;
+            if (is(".") && peek().text == ".") {
+              // `{...source}` — copy own enumerable properties.
+              if (!accept_ellipsis()) break;
+              property.kind = ast::PropertyDef::Kind::Spread;
+              property.value = parse_assignment();
+              object->properties.push_back(std::move(property));
+              if (!match(",")) break;
+              continue;
+            }
             if (is_identifier() || current().type == Token::Type::Keyword) {
               property.key = take().text;
               // `get x() {}` / `set x(v) {}`: a get/set keyword followed by a
@@ -1075,6 +1361,10 @@ struct Parser {
             }
             if (match(":")) {
               property.value = parse_assignment();
+            } else if (is("=")) {
+              // Shorthand with a default: `{a = 5}` (used by destructuring).
+              take();
+              property.value = assign_of(identifier_of(property.key), parse_assignment());
             } else {
               auto identifier = make(ExprKind::Identifier);
               identifier->text = property.key;

@@ -8,6 +8,7 @@
 #include <optional>
 #include <string>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 #include <vector>
 
@@ -856,6 +857,10 @@ class Interpreter {
   Value call(const Value& callee, const Value& this_value, std::vector<Value> arguments);
   Value get_member(const Value& object, const std::string& key);
   void set_member(const Value& object, const std::string& key, const Value& value);
+  /// `[a, b] = value` / `({a} = value)`: unpacks a pattern into existing bindings.
+  void assign_pattern(const ast::Expr& pattern, const Value& value, const ScopePtr& scope);
+  /// Stores `value` into an identifier or member target.
+  void store_target(const ast::Expr& target, const Value& value, const ScopePtr& scope);
   /// Builds the constructor/prototype/statics of a `class` (stage 28).
   Value make_class(const std::shared_ptr<ast::ClassNode>& node, const ScopePtr& scope);
   /// `eval(source)`: parses and runs the text in `scope` (direct eval semantics
@@ -879,6 +884,53 @@ class Interpreter {
 Value call_function(const Value& callee, const Value& this_value, std::vector<Value> arguments);
 
 // ---------------------------------------------------------- member access ----
+
+/// Elements of an iterable for `...expr` (stage 30): arrays, strings and array-likes.
+std::vector<Value> spread_values(const Value& value) {
+  std::vector<Value> out;
+  if (value.is_string()) {
+    for (const char c : value.text) out.push_back(Value::string_of(std::string(1, c)));
+    return out;
+  }
+  if (value.is_object() && value.object != nullptr) {
+    if (value.object->is_array()) return value.object->elements;
+    const std::size_t length = array_like_length(*value.object);
+    out.reserve(length);
+    for (std::size_t i = 0; i < length; ++i) out.push_back(array_like_get(*value.object, i));
+    return out;
+  }
+  throw thrown(make_error("TypeError", to_string(value) + " is not iterable"));
+}
+
+/// One element of an array/string/array-like, for destructuring (`[a, b] = value`).
+Value element_of(const Value& value, std::size_t index) {
+  if (value.is_string()) {
+    return index < value.text.size() ? Value::string_of(std::string(1, value.text[index])) : Value::undefined();
+  }
+  if (value.is_object() && value.object != nullptr) {
+    if (value.object->is_array()) {
+      return index < value.object->elements.size() ? value.object->elements[index] : Value::undefined();
+    }
+    return array_like_get(*value.object, index);
+  }
+  if (value.is_nullish()) throw thrown(type_error(to_string(value) + " is not iterable"));
+  return Value::undefined();
+}
+
+/// `{...source}`: copies own enumerable properties (null/undefined contribute nothing).
+void copy_own_enumerable(const Value& source, Object& target, const std::function<Value(const Value&, const std::string&)>& lookup) {
+  if (source.is_nullish()) return;
+  if (source.is_string()) {
+    for (std::size_t i = 0; i < source.text.size(); ++i) {
+      target.properties[std::to_string(i)] = Property{Value::string_of(std::string(1, source.text[i]))};
+    }
+    return;
+  }
+  if (!source.is_object() || source.object == nullptr) return;
+  for (const std::string& key : own_property_keys(*source.object, true)) {
+    target.properties[key] = Property{lookup(source, key)};
+  }
+}
 
 Value Interpreter::get_member(const Value& object, const std::string& key) {
   if (object.is_nullish()) {
@@ -1135,6 +1187,12 @@ Value Interpreter::call(const Value& callee, const Value& this_value, std::vecto
   scope->this_value = this_value;
   for (std::size_t i = 0; i < code->parameters.size(); ++i) {
     scope->variables[code->parameters[i]] = i < arguments.size() ? arguments[i] : Value::undefined();
+  }
+  if (!code->rest_parameter.empty()) {
+    // `function f(a, ...rest)`: everything from `parameters.size()` on, as an array.
+    std::vector<Value> rest;
+    for (std::size_t i = code->parameters.size(); i < arguments.size(); ++i) rest.push_back(arguments[i]);
+    scope->variables[code->rest_parameter] = Value::object_of(make_array(std::move(rest)));
   }
   if (!code->is_arrow) {
     // The arguments object: `length`, indices, `callee`, and — in sloppy code —
@@ -1405,6 +1463,66 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
 
 // ------------------------------------------------------------ expressions ----
 
+void Interpreter::store_target(const ast::Expr& target, const Value& value, const ScopePtr& scope) {
+  if (target.kind == ast::ExprKind::Identifier) {
+    const Lookup found = lookup_scope(scope, target.text);
+    if (found.found) found.scope->variables[target.text] = value;
+    else scope->variables[target.text] = value;  // sloppy: creates a global
+    return;
+  }
+  if (target.kind == ast::ExprKind::Member) {
+    const Value object = eval(target.children[0], scope);
+    const std::string key = target.boolean ? to_string(eval(target.children[1], scope)) : target.text;
+    set_member(object, key, value);
+    return;
+  }
+  throw thrown(reference_error("invalid destructuring target"));
+}
+
+void Interpreter::assign_pattern(const ast::Expr& pattern, const Value& value, const ScopePtr& scope) {
+  // `[a = 1]` / `{b: c = 2}`: the initialiser applies only to `undefined`.
+  if (pattern.kind == ast::ExprKind::Assign && pattern.text == "=" && pattern.children.size() == 2) {
+    const Value slot = value;
+    assign_pattern(*pattern.children[0], slot.is_undefined() ? eval(pattern.children[1], scope) : slot, scope);
+    return;
+  }
+  if (pattern.kind == ast::ExprKind::Array) {
+    for (std::size_t i = 0; i < pattern.children.size(); ++i) {
+      const ast::ExprPtr& element = pattern.children[i];
+      if (element == nullptr) continue;
+      if (element->kind == ast::ExprKind::Spread) {
+        std::vector<Value> rest;
+        const std::vector<Value> all = spread_values(value);
+        for (std::size_t at = i; at < all.size(); ++at) rest.push_back(all[at]);
+        assign_pattern(*element->children[0], Value::object_of(make_array(std::move(rest))), scope);
+        return;
+      }
+      assign_pattern(*element, element_of(value, i), scope);
+    }
+    return;
+  }
+  if (pattern.kind == ast::ExprKind::ObjectLiteral) {
+    std::vector<std::string> excluded;
+    for (const ast::PropertyDef& property : pattern.properties) {
+      if (property.kind == ast::PropertyDef::Kind::Spread) {
+        std::shared_ptr<Object> rest = std::make_shared<Object>();
+        if (value.is_object() && value.object != nullptr) {
+          for (const std::string& key : own_property_keys(*value.object, true)) {
+            if (std::find(excluded.begin(), excluded.end(), key) != excluded.end()) continue;
+            rest->properties[key] = Property{get_member(value, key)};
+          }
+        }
+        assign_pattern(*property.value, Value::object_of(std::move(rest)), scope);
+        continue;
+      }
+      excluded.push_back(property.key);
+      assign_pattern(*property.value, value.is_nullish() ? Value::undefined() : get_member(value, property.key), scope);
+    }
+    return;
+  }
+  store_target(pattern, value, scope);
+}
+
 Value Interpreter::make_class(const std::shared_ptr<ast::ClassNode>& node, const ScopePtr& scope) {
   Value super_value;
   if (node->super_class != nullptr) {
@@ -1550,6 +1668,11 @@ Value Interpreter::eval_postfix_chain(const ast::Expr& expression, const ScopePt
     if (step.optional && current.is_nullish()) return Value::undefined();
     std::vector<Value> arguments;
     for (std::size_t i = 1; i < step.children.size(); ++i) {
+      if (step.children[i]->kind == ast::ExprKind::Spread) {
+        const std::vector<Value> expanded = spread_values(eval(step.children[i]->children[0], scope));
+        arguments.insert(arguments.end(), expanded.begin(), expanded.end());
+        continue;
+      }
       arguments.push_back(eval(step.children[i], scope));
     }
     current = call(current, receiver, std::move(arguments));
@@ -1577,6 +1700,11 @@ Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope)
     this_value = lookup_this(scope);
     std::vector<Value> arguments;
     for (std::size_t i = 1; i < expression.children.size(); ++i) {
+      if (expression.children[i]->kind == ast::ExprKind::Spread) {
+        const std::vector<Value> expanded = spread_values(eval(expression.children[i]->children[0], scope));
+        arguments.insert(arguments.end(), expanded.begin(), expanded.end());
+        continue;
+      }
       arguments.push_back(eval(expression.children[i], scope));
     }
     if (is_super_identifier) {
@@ -1621,6 +1749,12 @@ Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope)
   std::vector<Value> arguments;
   arguments.reserve(expression.children.size());
   for (std::size_t i = 1; i < expression.children.size(); ++i) {
+    if (expression.children[i]->kind == ast::ExprKind::Spread) {
+      const Value source = eval(expression.children[i]->children[0], scope);
+      const std::vector<Value> expanded = spread_values(source);
+      arguments.insert(arguments.end(), expanded.begin(), expanded.end());
+      continue;
+    }
     arguments.push_back(eval(expression.children[i], scope));
   }
   if (callee.type != ValueType::Function) throw thrown(type_error(to_string(callee) + " is not a function"));
@@ -1667,7 +1801,18 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::Array: {
       std::vector<Value> elements;
       elements.reserve(expression->children.size());
-      for (const ast::ExprPtr& element : expression->children) elements.push_back(eval(element, scope));
+      for (const ast::ExprPtr& element : expression->children) {
+        if (element == nullptr) {  // elision: `[1, , 3]` keeps the slot, as `undefined`
+          elements.push_back(Value::undefined());
+          continue;
+        }
+        if (element->kind == ast::ExprKind::Spread) {
+          const std::vector<Value> expanded = spread_values(eval(element->children[0], scope));
+          elements.insert(elements.end(), expanded.begin(), expanded.end());
+          continue;
+        }
+        elements.push_back(eval(element, scope));
+      }
       return Value::object_of(make_array(std::move(elements)));
     }
 
@@ -1675,6 +1820,12 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       auto object = std::make_shared<Object>();
       for (const ast::PropertyDef& property : expression->properties) {
         const Value value = eval(property.value, scope);
+        if (property.kind == ast::PropertyDef::Kind::Spread) {
+          copy_own_enumerable(value, *object, [this, &scope](const Value& source, const std::string& key) {
+            return get_member(source, key);
+          });
+          continue;
+        }
         if (property.kind == ast::PropertyDef::Kind::Data) {
           object->properties[property.key] = Property{value};
           continue;
@@ -1706,6 +1857,11 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       }
       return constructor;
     }
+
+    case ast::ExprKind::Spread:
+      // `...x` is expanded by its container (array literal, call, pattern); reaching
+      // here means it appeared where it is not allowed.
+      throw thrown(make_error("SyntaxError", "'...' is only valid inside an array, call or pattern"));
 
     case ast::ExprKind::Sequence: {
       Value last;
@@ -1870,6 +2026,13 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       const ast::ExprPtr& target = expression->children[0];
       const std::string& assign_op = expression->text;
       const bool target_is_identifier = target->kind == ast::ExprKind::Identifier;
+      if (assign_op == "=" && !target_is_identifier &&
+          (target->kind == ast::ExprKind::Array || target->kind == ast::ExprKind::ObjectLiteral)) {
+        // `[a, b] = value` / `({a: b.x} = value)` (ES2015 12.14.4, runtime part).
+        const Value value = eval(expression->children[1], scope);
+        assign_pattern(*target, value, scope);
+        return value;
+      }
       if (!target_is_identifier && target->kind != ast::ExprKind::Member) {
         throw thrown(reference_error("invalid assignment target"));
       }
@@ -1944,6 +2107,11 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       if (constructor.function->prototype_object != nullptr) instance->prototype = constructor.function->prototype_object;
       std::vector<Value> arguments;
       for (std::size_t i = 1; i < expression->children.size(); ++i) {
+        if (expression->children[i]->kind == ast::ExprKind::Spread) {
+          const std::vector<Value> expanded = spread_values(eval(expression->children[i]->children[0], scope));
+          arguments.insert(arguments.end(), expanded.begin(), expanded.end());
+          continue;
+        }
         arguments.push_back(eval(expression->children[i], scope));
       }
       const Value result = call(constructor, Value::object_of(instance), std::move(arguments));
@@ -3341,6 +3509,40 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::boolean_of(strict_equals(first, second));
   });
+  // Destructuring helpers used by the parser's desugaring (stage 30). The names are
+  // engine-private; they exist so `[a, ...rest] = x` and `{a, ...rest} = o` need no
+  // special AST nodes at run time.
+  global->variables["__bonk$arrayRest"] = native_value(
+      "__bonk$arrayRest", [](const std::vector<Value>& arguments, Value) {
+        std::vector<Value> values;
+        if (arguments.empty()) return Value::object_of(make_array(std::move(values)));
+        const auto from = arguments.size() > 1 ? static_cast<std::size_t>(to_number(arguments[1])) : 0;
+        const std::vector<Value> all = spread_values(arguments[0]);
+        for (std::size_t i = from; i < all.size(); ++i) values.push_back(all[i]);
+        return Value::object_of(make_array(std::move(values)));
+      });
+  global->variables["__bonk$copy"] = native_value("__bonk$copy", [](const std::vector<Value>& arguments, Value) {
+    return arguments.empty() ? Value::undefined() : arguments[0];
+  });
+  global->variables["__bonk$objectRest"] = native_value(
+      "__bonk$objectRest", [](const std::vector<Value>& arguments, Value) {
+        auto target = std::make_shared<Object>();
+        if (arguments.empty()) return Value::object_of(std::move(target));
+        std::unordered_set<std::string> excluded;
+        if (arguments.size() > 1) {
+          for (const Value& key : spread_values(arguments[1])) excluded.insert(to_string(key));
+        }
+        const Value source = arguments[0];
+        if (source.is_object() && source.object != nullptr) {
+          for (const std::string& key : own_property_keys(*source.object, true)) {
+            if (excluded.count(key) != 0) continue;
+            const auto found = source.object->properties.find(key);
+            if (found != source.object->properties.end()) target->properties[key] = found->second;
+          }
+        }
+        return Value::object_of(std::move(target));
+      });
+
   // `new Function(a, b, "return a + b")`: the body is parsed at construction time.
   Value function_constructor = native_value("Function", [global](const std::vector<Value>& arguments, Value) {
     std::string parameters;

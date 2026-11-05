@@ -39,6 +39,7 @@ enum class ExprKind {
   Sequence,
   Template,
   Class,
+  Spread,  // `...expr` in an array literal, a call's arguments or a pattern
 };
 
 /// One method of a class body: `m() {}`, `static m() {}`, `get m() {}`, `set m(v) {}`.
@@ -58,8 +59,9 @@ struct ClassNode {
 };
 
 struct PropertyDef {
-  /// `{a: 1}` is data; `{get a() {…}}` / `{set a(v) {…}}` are accessors.
-  enum class Kind { Data, Get, Set } kind = Kind::Data;
+  /// `{a: 1}` is data; `{get a() {…}}` / `{set a(v) {…}}` are accessors;
+  /// `{...o}` copies own enumerable properties.
+  enum class Kind { Data, Get, Set, Spread } kind = Kind::Data;
   std::string key;
   ExprPtr value;
 };
@@ -126,6 +128,7 @@ struct Stmt {
 struct FunctionNode {
   std::string name;
   std::vector<std::string> parameters;
+  std::string rest_parameter;  // `function f(a, ...rest)`; empty when absent
   std::vector<StmtPtr> body;
   bool is_arrow = false;
   bool expression_body = false;  // arrow with a single expression instead of a block
