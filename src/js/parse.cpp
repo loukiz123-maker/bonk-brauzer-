@@ -43,7 +43,9 @@ const std::unordered_set<std::string>& keywords() {
       "for",   "break",   "continue", "new",    "typeof", "instanceof", "in",  "this",   "true",
       "false", "null",    "undefined", "throw", "try",    "catch",  "finally", "void",   "delete",
       "of",    "switch",  "case",   "default",  "class",  "extends", "super",  "with",   "yield",
-      "async", "await",   "static", "import",   "export"};
+      "async", "static", "import", "export"};
+  // `await` is reserved only in modules and async functions (12.1.1), neither of
+  // which this engine parses yet, so it stays an ordinary identifier.
   return set;
 }
 
@@ -277,9 +279,56 @@ struct Lexer {
       return token;
     }
 
-    if (is_identifier_start(c)) {
+    // Identifiers may spell any code point with a `\uXXXX` / `\u{…}` escape
+    // (12.6.2); the escape is decoded into the name, so `\u0065val` *is* `eval`.
+    const bool escaped_start = c == '\\' && peek(1) == 'u';
+    if (is_identifier_start(c) || escaped_start) {
       std::string name;
-      while (!at_end() && is_identifier_part(peek())) name.push_back(advance());
+      for (;;) {
+        if (!at_end() && peek() == '\\' && peek(1) == 'u') {
+          advance();  // backslash
+          advance();  // 'u'
+          std::uint32_t code_point = 0;
+          if (!at_end() && peek() == '{') {
+            advance();
+            while (!at_end() && peek() != '}') {
+              const char digit = advance();
+              const int value = std::isdigit(static_cast<unsigned char>(digit)) != 0
+                                    ? digit - '0'
+                                    : ((digit >= 'a' && digit <= 'f') ? digit - 'a' + 10
+                                                                      : digit - 'A' + 10);
+              code_point = code_point * 16 + static_cast<std::uint32_t>(value);
+            }
+            if (!at_end()) advance();  // '}'
+          } else {
+            for (int i = 0; i < 4 && !at_end(); ++i) {
+              const char digit = advance();
+              const int value = std::isdigit(static_cast<unsigned char>(digit)) != 0
+                                    ? digit - '0'
+                                    : ((digit >= 'a' && digit <= 'f') ? digit - 'a' + 10
+                                                                      : digit - 'A' + 10);
+              code_point = code_point * 16 + static_cast<std::uint32_t>(value);
+            }
+          }
+          if (code_point == 0) {
+            error = "invalid unicode escape in an identifier";
+            break;
+          }
+          if (code_point < 0x80) {
+            name.push_back(static_cast<char>(code_point));
+          } else if (code_point < 0x800) {
+            name.push_back(static_cast<char>(0xC0 | (code_point >> 6)));
+            name.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+          } else {
+            name.push_back(static_cast<char>(0xE0 | (code_point >> 12)));
+            name.push_back(static_cast<char>(0x80 | ((code_point >> 6) & 0x3F)));
+            name.push_back(static_cast<char>(0x80 | (code_point & 0x3F)));
+          }
+          continue;
+        }
+        if (at_end() || !is_identifier_part(peek())) break;
+        name.push_back(advance());
+      }
       token.text = name;
       token.type = keywords().count(name) != 0 ? Token::Type::Keyword : Token::Type::Identifier;
       return token;
@@ -459,17 +508,31 @@ struct Parser {
       statement->class_node = parse_class();
       return statement;
     }
-    if (is("with")) {
-      if (strict) {
-        error = "'with' is not allowed in strict mode";
-        return nullptr;
-      }
-      error = "'with' statements are not supported by this engine yet";
-      return nullptr;
-    }
-    if (is("switch") || is("import") || is("export")) {
+    if (is("with")) return parse_with();
+    if (is("switch")) return parse_switch();
+    if (is("import") || is("export")) {
       error = "'" + current().text + "' statements are not supported by this engine yet";
       return nullptr;
+    }
+    // `label: statement` — only an identifier followed by a colon can start one.
+    if (is_identifier() && peek().text == ":") {
+      auto statement = make_stmt(StmtKind::Labeled);
+      statement->declaration_kind = take().text;
+      take();  // ':'
+      statement->body = parse_statement();
+      // LabelledItem is `Statement | FunctionDeclaration`: lexical declarations may
+      // not be labelled (13.13.1), and a labelled function is strict-only illegal.
+      if (statement->body != nullptr) {
+        const StmtKind body_kind = statement->body->kind;
+        const bool lexical_declaration =
+            body_kind == StmtKind::ClassDecl ||
+            (body_kind == StmtKind::Var && statement->body->declaration_kind != "var");
+        const bool function_declaration = body_kind == StmtKind::FunctionDecl;
+        if (error.empty() && (lexical_declaration || (function_declaration && strict))) {
+          error = "a declaration cannot be labelled";
+        }
+      }
+      return statement;
     }
 
     auto statement = make_stmt(StmtKind::Expression);
@@ -571,11 +634,19 @@ struct Parser {
         if (match("=")) {
           statement->values.push_back(parse_assignment());
         } else {
+          // `const a;` is a SyntaxError (13.3.1): a const binding needs an initialiser.
+          if (kind == "const" && error.empty()) {
+            error = "missing initializer in const declaration";
+          }
           statement->values.push_back(nullptr);
         }
       } else if (is("[") || is("{")) {
         const ExprPtr pattern = parse_call_member();
-        const ExprPtr value = match("=") ? parse_assignment() : identifier_of("undefined");
+        const bool has_initializer = match("=");
+        if (!has_initializer && kind == "const" && error.empty()) {
+          error = "missing initializer in const declaration";
+        }
+        const ExprPtr value = has_initializer ? parse_assignment() : identifier_of("undefined");
         if (pattern == nullptr || (pattern->kind != ExprKind::Array && pattern->kind != ExprKind::ObjectLiteral)) {
           if (error.empty()) error = "expected a destructuring pattern";
           return statement;
@@ -1023,6 +1094,96 @@ struct Parser {
     expect(")");
     statement->body = parse_statement();
     return statement;
+  }
+
+  /// `with (object) statement` — legal only in sloppy code (ES2015 13.11).
+  StmtPtr parse_with() {
+    if (strict) {
+      error = "'with' is not allowed in strict mode";
+      return nullptr;
+    }
+    take();  // 'with'
+    auto statement = make_stmt(StmtKind::With);
+    expect("(");
+    statement->expression = parse_expression();
+    expect(")");
+    statement->body = parse_statement();
+    return statement;
+  }
+
+  /// `switch (expression) { case test: … default: … }` — the clauses are executed
+  /// as one block, so `var` (and the engine's block bindings) behave as in the spec.
+  StmtPtr parse_switch() {
+    take();  // 'switch'
+    auto statement = make_stmt(StmtKind::Switch);
+    expect("(");
+    statement->expression = parse_expression();
+    expect(")");
+    expect("{");
+    bool saw_default = false;
+    while (!is("}") && current().type != Token::Type::EndOfFile && error.empty()) {
+      ast::SwitchCase clause;
+      if (match("case")) {
+        clause.test = parse_expression();
+        expect(":");
+      } else if (match("default")) {
+        if (saw_default) {
+          error = "a switch statement may have only one default clause";
+          break;
+        }
+        saw_default = true;
+        expect(":");
+      } else {
+        error = "expected 'case' or 'default' but found '" + current().text + "'";
+        break;
+      }
+      while (!is("case") && !is("default") && !is("}") && current().type != Token::Type::EndOfFile &&
+             error.empty()) {
+        StmtPtr statement_in_clause = parse_statement();
+        if (statement_in_clause == nullptr) break;
+        clause.statements.push_back(std::move(statement_in_clause));
+      }
+      statement->cases.push_back(std::move(clause));
+    }
+    expect("}");
+    check_switch_declarations(*statement);
+    return statement;
+  }
+
+  /// CaseBlock early errors (13.12.1): no duplicate lexical declarations, and no name
+  /// that is both lexically declared and declared with `var`/`function` in the block.
+  void check_switch_declarations(const ast::Stmt& statement) {
+    if (!error.empty()) return;
+    std::unordered_map<std::string, int> lexical;
+    std::unordered_map<std::string, bool> variables;
+    for (const ast::SwitchCase& clause : statement.cases) {
+      for (const StmtPtr& inner : clause.statements) {
+        if (inner == nullptr) continue;
+        if (inner->kind == StmtKind::ClassDecl) {
+          if (inner->class_node != nullptr && !inner->class_node->name.empty()) ++lexical[inner->class_node->name];
+        } else if (inner->kind == StmtKind::FunctionDecl) {
+          if (inner->function != nullptr && !inner->function->name.empty()) variables[inner->function->name] = true;
+        } else if (inner->kind == StmtKind::Var) {
+          for (const std::string& name : inner->names) {
+            if (inner->declaration_kind == "var") {
+              variables[name] = true;
+            } else {
+              ++lexical[name];
+            }
+          }
+        }
+      }
+    }
+    for (const auto& entry : lexical) {
+      if (entry.second > 1) {
+        error = "duplicate lexical declaration '" + entry.first + "' in a switch statement";
+        return;
+      }
+      if (variables.count(entry.first) != 0) {
+        error = "'" + entry.first + "' is declared both lexically and with 'var' in the same switch statement";
+        return;
+      }
+    }
   }
 
   StmtPtr parse_try() {

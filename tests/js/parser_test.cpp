@@ -64,11 +64,11 @@ BONK_TEST(js_parser, nested_blocks_and_if_else_chains) {
   CHECK_EQ(num(source), 2.0);
 }
 
-BONK_TEST(js_parser, switch_is_rejected_with_a_message) {
+BONK_TEST(js_parser, switch_statements_parse_and_run) {
   Context context;
-  const ExecutionResult switch_result = context.evaluate("switch (1) { case 1: break; }");
-  CHECK(!switch_result.ok);
-  CHECK(switch_result.message.find("switch") != std::string::npos);
+  const ExecutionResult result = context.evaluate("var v = 0; switch (1) { case 1: v = 7; break; }");
+  CHECK(result.ok);
+  CHECK_EQ(to_number(context.runtime().global("v")), 7.0);
 }
 
 BONK_TEST(js_parser, class_declarations_and_expressions_parse) {

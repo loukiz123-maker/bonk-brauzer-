@@ -35,6 +35,10 @@ struct Scope {
   Value this_value;
   bool is_function_scope = false;
   bool is_strict = false;
+  /// `with (object) { … }` — names that the object has resolve to its properties
+  /// *before* outer scopes are consulted (10.2.1.2 Object Environment Records).
+  /// `undefined` means "not a with-scope".
+  Value with_object;
 };
 
 using ScopePtr = Scope*;
@@ -60,6 +64,8 @@ enum class CompletionType { Normal, Return, Throw, Break, Continue };
 struct Completion {
   CompletionType type = CompletionType::Normal;
   Value value;
+  /// `break label` / `continue label`: empty for an unlabelled jump.
+  std::string label;
 };
 
 Completion normal() { return Completion{}; }
@@ -854,6 +860,24 @@ bool is_arithmetic_operator(const std::string& op) {
   return false;
 }
 
+/// Removes an own property from a property bag (all accessor tables plus an array
+/// slot). Returns false when the property exists but is not configurable.
+bool erase_own_property(const std::shared_ptr<Object>& bag, const std::string& key) {
+  if (bag == nullptr) return true;
+  const auto found = bag->properties.find(key);
+  if (found != bag->properties.end() && !found->second.configurable) return false;
+  bag->properties.erase(key);
+  bag->getters.erase(key);
+  bag->setters.erase(key);
+  bag->receiver_getters.erase(key);
+  bag->receiver_setters.erase(key);
+  std::size_t index = 0;
+  if (bag->is_array() && is_array_index(key, index) && index < bag->elements.size()) {
+    bag->elements[index] = Value::undefined();
+  }
+  return true;
+}
+
 // ------------------------------------------------------------ interpreter ----
 
 class Interpreter {
@@ -885,6 +909,36 @@ class Interpreter {
   Value eval_postfix_chain(const ast::Expr& expression, const ScopePtr& scope);
   static bool chain_has_optional(const ast::Expr& expression);
   Completion exec_block(const std::vector<ast::StmtPtr>& statements, const ScopePtr& parent);
+
+  /// A resolved name: a slot in a scope, a property of a `with` object, or nothing.
+  struct NameRef {
+    enum class Kind { Unresolvable, Slot, Property } kind = Kind::Unresolvable;
+    ScopePtr scope = nullptr;  // Kind::Slot
+    Value object;              // Kind::Property
+  };
+  NameRef resolve_name(ScopePtr scope, const std::string& name);
+  bool has_name(const ScopePtr& scope, const std::string& name);
+  Value read_name(const ScopePtr& scope, const std::string& name);
+  /// Stores `value` into `name`; false when the name resolves nowhere (the caller
+  /// then applies the sloppy/strict rule for undeclared writes).
+  bool write_name(const ScopePtr& scope, const std::string& name, const Value& value);
+  /// HasProperty over the whole chain, without running getters (10.2.1.2).
+  bool has_property_chain(const Value& object, const std::string& key);
+
+  /// Labels of the statements currently being executed (`a: for (…)`).
+  std::vector<std::string> label_stack_;
+  /// Labels pushed for the construct that is about to start (`a: for (…)` sits one
+  /// level above the loop itself, so the loop has to know how many of the labels on
+  /// the stack are its own).
+  std::size_t pending_labels_ = 0;
+  /// True when `label` names one of the labels attached to the construct entered
+  /// at `depth` entries on `label_stack_`.
+  bool label_belongs_to(std::size_t depth, const std::string& label) const {
+    for (std::size_t i = depth; i < label_stack_.size(); ++i) {
+      if (label_stack_[i] == label) return true;
+    }
+    return false;
+  }
 
   /// The `globalThis` object. Sloppy callees receive it as their `this` when they are
   /// invoked without a receiver (10.4.3.1: `this` is never undefined there).
@@ -949,6 +1003,11 @@ void copy_own_enumerable(const Value& source, Object& target, const std::functio
 Value Interpreter::get_member(const Value& object, const std::string& key) {
   if (object.is_nullish()) {
     throw thrown(type_error("cannot read property '" + key + "' of " + to_string(object)));
+  }
+  if (object.type == ValueType::Object && object.object != nullptr && object.object->is_global_object) {
+    // `this.x` / `globalThis.x` is the global variable `x` (10.2.1.2 Object Environment).
+    const auto global_variable = runtime_.global->variables.find(key);
+    if (global_variable != runtime_.global->variables.end()) return global_variable->second;
   }
 
   if (object.type == ValueType::Function && object.function != nullptr) {
@@ -1110,6 +1169,10 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
 }
 
 void Interpreter::set_member(const Value& object, const std::string& key, const Value& value, bool strict) {
+  if (object.type == ValueType::Object && object.object != nullptr && object.object->is_global_object) {
+    runtime_.global->variables[key] = value;  // creates or updates a global variable
+    return;
+  }
   if (object.type == ValueType::Function && object.object == nullptr) {
     const std::shared_ptr<Object> bag = property_bag(object);
     const auto existing = bag->properties.find(key);
@@ -1207,6 +1270,107 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
     return;
   }
   target->properties[key] = Property{value};
+}
+
+namespace {
+
+/// Own-property test that never runs getters or setters.
+bool own_has(const std::shared_ptr<Object>& object, const std::string& key) {
+  if (object == nullptr) return false;
+  if (object->properties.count(key) != 0 || object->getters.count(key) != 0 ||
+      object->setters.count(key) != 0 || object->receiver_getters.count(key) != 0 ||
+      object->receiver_setters.count(key) != 0) {
+    return true;
+  }
+  if (object->is_array()) {
+    if (key == "length") return true;
+    std::size_t index = 0;
+    if (is_array_index(key, index) && index < object->elements.size()) return true;
+  }
+  if (key == "constructor" && !object->owner_function.expired()) return true;
+  return false;
+}
+
+}  // namespace
+
+bool Interpreter::has_property_chain(const Value& object, const std::string& key) {
+  if (object.type == ValueType::Object && object.object != nullptr && object.object->is_global_object &&
+      runtime_.global->variables.find(key) != runtime_.global->variables.end()) {
+    return true;
+  }
+  if (object.is_string()) {
+    // A string primitive boxes to a String object: `length` and index properties.
+    std::size_t index = 0;
+    return key == "length" || (is_array_index(key, index) && index < object.text.size());
+  }
+  if (object.is_nullish()) return false;
+  if (!object.is_object() && object.type != ValueType::Function) return false;
+  const std::shared_ptr<Object> bag = property_bag(object);
+  if (bag == nullptr) return false;
+  for (std::shared_ptr<Object> node = bag; node != nullptr; node = node->prototype) {
+    if (own_has(node, key)) return true;
+  }
+  // The implicit prototypes (`Object.prototype`, `Array.prototype`,
+  // `Function.prototype`) are kept in the runtime instead of being linked into every
+  // object, so a `with` lookup has to consult them explicitly.
+  const std::shared_ptr<Object>& implicit = bag->is_array() ? runtime_.array_prototype
+                                              : (object.type == ValueType::Function
+                                                     ? runtime_.function_prototype
+                                                     : runtime_.object_prototype);
+  for (std::shared_ptr<Object> node = implicit; node != nullptr; node = node->prototype) {
+    if (own_has(node, key)) return true;
+  }
+  return false;
+}
+
+Interpreter::NameRef Interpreter::resolve_name(ScopePtr scope, const std::string& name) {
+  for (ScopePtr current = scope; current != nullptr; current = current->parent) {
+    if (current->variables.find(name) != current->variables.end()) {
+      NameRef reference;
+      reference.kind = NameRef::Kind::Slot;
+      reference.scope = current;
+      return reference;
+    }
+    if (!current->with_object.is_undefined() && has_property_chain(current->with_object, name)) {
+      NameRef reference;
+      reference.kind = NameRef::Kind::Property;
+      reference.object = current->with_object;
+      return reference;
+    }
+  }
+  return NameRef{};
+}
+
+bool Interpreter::has_name(const ScopePtr& scope, const std::string& name) {
+  return resolve_name(scope, name).kind != NameRef::Kind::Unresolvable;
+}
+
+Value Interpreter::read_name(const ScopePtr& scope, const std::string& name) {
+  const NameRef reference = resolve_name(scope, name);
+  switch (reference.kind) {
+    case NameRef::Kind::Slot:
+      return reference.scope->variables[name];
+    case NameRef::Kind::Property:
+      return get_member(reference.object, name);
+    case NameRef::Kind::Unresolvable:
+      break;
+  }
+  throw thrown(reference_error("'" + name + "' is not defined"));
+}
+
+bool Interpreter::write_name(const ScopePtr& scope, const std::string& name, const Value& value) {
+  const NameRef reference = resolve_name(scope, name);
+  switch (reference.kind) {
+    case NameRef::Kind::Slot:
+      reference.scope->variables[name] = value;
+      return true;
+    case NameRef::Kind::Property:
+      set_member(reference.object, name, value, strict_scope(scope));
+      return true;
+    case NameRef::Kind::Unresolvable:
+      break;
+  }
+  return false;
 }
 
 const Value& Interpreter::global_this() {
@@ -1375,10 +1539,21 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
                                                                 : exec(statement->alternate, current);
 
       case ast::StmtKind::While: {
+        const std::size_t labels_at_entry = label_stack_.size() - pending_labels_;
+        pending_labels_ = 0;
         int iterations = 0;
         while (to_boolean(eval(statement->expression, current))) {
           const Completion completion = exec(statement->body, current);
-          if (completion.type == CompletionType::Break) break;
+          if (completion.type == CompletionType::Break) {
+            // An unlabelled `break` leaves this loop; a labelled one only when the
+            // label is attached to this loop (`a: for (…) { break a; }`).
+            if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) break;
+            return completion;
+          }
+          if (completion.type == CompletionType::Continue && !completion.label.empty() &&
+              !label_belongs_to(labels_at_entry, completion.label)) {
+            return completion;
+          }
           if (completion.type == CompletionType::Return || completion.type == CompletionType::Throw) return completion;
           if (++iterations > 200000) throw thrown(make_error("Error", "loop iteration limit exceeded"));
         }
@@ -1386,10 +1561,21 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
       }
 
       case ast::StmtKind::DoWhile: {
+        const std::size_t labels_at_entry = label_stack_.size() - pending_labels_;
+        pending_labels_ = 0;
         int iterations = 0;
         do {
           const Completion completion = exec(statement->body, current);
-          if (completion.type == CompletionType::Break) break;
+          if (completion.type == CompletionType::Break) {
+            // An unlabelled `break` leaves this loop; a labelled one only when the
+            // label is attached to this loop (`a: for (…) { break a; }`).
+            if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) break;
+            return completion;
+          }
+          if (completion.type == CompletionType::Continue && !completion.label.empty() &&
+              !label_belongs_to(labels_at_entry, completion.label)) {
+            return completion;
+          }
           if (completion.type == CompletionType::Return || completion.type == CompletionType::Throw) return completion;
           if (++iterations > 200000) throw thrown(make_error("Error", "loop iteration limit exceeded"));
         } while (to_boolean(eval(statement->expression, current)));
@@ -1397,6 +1583,8 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
       }
 
       case ast::StmtKind::For: {
+        const std::size_t labels_at_entry = label_stack_.size() - pending_labels_;
+        pending_labels_ = 0;
         const ScopePtr loop_scope = runtime_.new_scope(current);
         if (statement->initializer != nullptr) {
           const Completion init = exec(statement->initializer, loop_scope);
@@ -1406,7 +1594,16 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
         for (;;) {
           if (statement->expression != nullptr && !to_boolean(eval(statement->expression, loop_scope))) break;
           const Completion completion = exec(statement->body, loop_scope);
-          if (completion.type == CompletionType::Break) break;
+          if (completion.type == CompletionType::Break) {
+            // An unlabelled `break` leaves this loop; a labelled one only when the
+            // label is attached to this loop (`a: for (…) { break a; }`).
+            if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) break;
+            return completion;
+          }
+          if (completion.type == CompletionType::Continue && !completion.label.empty() &&
+              !label_belongs_to(labels_at_entry, completion.label)) {
+            return completion;
+          }
           if (completion.type == CompletionType::Return || completion.type == CompletionType::Throw) return completion;
           if (statement->update_statement != nullptr) (void)exec(statement->update_statement, loop_scope);
           if (++iterations > 200000) throw thrown(make_error("Error", "loop iteration limit exceeded"));
@@ -1439,6 +1636,8 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
           throw thrown(type_error("value is not iterable"));
         }
 
+        const std::size_t labels_at_entry = label_stack_.size() - pending_labels_;
+        pending_labels_ = 0;
         for (const Value& item : items) {
           const ScopePtr iteration_scope = runtime_.new_scope(current);
           if (statement->declaration_kind == "var") {
@@ -1448,9 +1647,7 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
           } else if (!statement->values.empty() && statement->values.front() != nullptr) {
             const ast::ExprPtr& target = statement->values.front();
             if (target->kind == ast::ExprKind::Identifier) {
-              const Lookup found = lookup_scope(current, target->text);
-              if (found.found) found.scope->variables[target->text] = item;
-              else current->variables[target->text] = item;
+              if (!write_name(current, target->text, item)) global_->variables[target->text] = item;
             } else if (target->kind == ast::ExprKind::Member) {
               const Value object = eval(target->children[0], current);
               const std::string key = target->boolean ? to_string(eval(target->children[1], current)) : target->text;
@@ -1458,7 +1655,16 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
             }
           }
           const Completion completion = exec(statement->body, iteration_scope);
-          if (completion.type == CompletionType::Break) break;
+          if (completion.type == CompletionType::Break) {
+            // An unlabelled `break` leaves this loop; a labelled one only when the
+            // label is attached to this loop (`a: for (…) { break a; }`).
+            if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) break;
+            return completion;
+          }
+          if (completion.type == CompletionType::Continue && !completion.label.empty() &&
+              !label_belongs_to(labels_at_entry, completion.label)) {
+            return completion;
+          }
           if (completion.type == CompletionType::Return || completion.type == CompletionType::Throw) return completion;
         }
         return normal();
@@ -1480,13 +1686,95 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
       case ast::StmtKind::Break: {
         Completion completion;
         completion.type = CompletionType::Break;
+        completion.label = statement->declaration_kind;
         return completion;
       }
 
       case ast::StmtKind::Continue: {
         Completion completion;
         completion.type = CompletionType::Continue;
+        completion.label = statement->declaration_kind;
         return completion;
+      }
+
+      case ast::StmtKind::Labeled: {
+        const std::string& label = statement->declaration_kind;
+        // A label names the statement it prefixes: for a loop it is "this loop", so
+        // only loops get to see it in `label_stack_` (`break a` inside a labelled
+        // *block* is consumed by the label itself).
+        const bool body_is_loop =
+            statement->body != nullptr &&
+            (statement->body->kind == ast::StmtKind::While || statement->body->kind == ast::StmtKind::DoWhile ||
+             statement->body->kind == ast::StmtKind::For || statement->body->kind == ast::StmtKind::ForOf ||
+             statement->body->kind == ast::StmtKind::ForIn);
+        if (body_is_loop) {
+          label_stack_.push_back(label);
+          ++pending_labels_;
+        }
+        Completion completion = exec(statement->body, current);
+        if (body_is_loop) {
+          label_stack_.pop_back();
+          --pending_labels_;
+        }
+        if ((completion.type == CompletionType::Break || completion.type == CompletionType::Continue) &&
+            completion.label == label) {
+          return normal();
+        }
+        return completion;
+      }
+
+      case ast::StmtKind::With: {
+        // `with (object) statement` — ES2015 13.11. The object becomes a name
+        // environment in front of the current scope for the duration of the body.
+        const Value target = eval(statement->expression, current);
+        if (target.is_nullish()) {
+          throw thrown(type_error("cannot convert " + to_string(target) + " to object"));
+        }
+        auto environment = std::make_shared<Object>();
+        Value boxed = target;
+        if (!target.is_object() && target.type != ValueType::Function) {
+          // Primitives are boxed; strings expose their length and characters.
+          boxed = Value::object_of(environment);
+          if (target.is_string()) {
+            environment->properties["length"] =
+                Property{Value::number_of(static_cast<double>(target.text.size())), true, false, false};
+            for (std::size_t i = 0; i < target.text.size(); ++i) {
+              environment->properties[std::to_string(i)] =
+                  Property{Value::string_of(std::string(1, target.text[i])), true, true, false};
+            }
+          }
+        }
+        const ScopePtr with_scope = runtime_.new_scope(current);
+        with_scope->with_object = boxed;
+        return exec(statement->body, with_scope);
+      }
+
+      case ast::StmtKind::Switch: {
+        const Value discriminant = eval(statement->expression, current);
+        // Clause tests are evaluated in source order until one matches `===`;
+        // `default` (if any) is remembered for the case where nothing matches.
+        std::size_t start = statement->cases.size();
+        std::size_t default_clause = statement->cases.size();
+        for (std::size_t i = 0; i < statement->cases.size(); ++i) {
+          const ast::SwitchCase& clause = statement->cases[i];
+          if (clause.test == nullptr) {
+            default_clause = i;
+            continue;
+          }
+          if (strict_equals(eval(clause.test, current), discriminant)) {
+            start = i;
+            break;
+          }
+        }
+        if (start == statement->cases.size()) start = default_clause;
+        for (std::size_t i = start; i < statement->cases.size(); ++i) {
+          const Completion completion = exec_statements(statement->cases[i].statements, current);
+          if (completion.type == CompletionType::Normal) continue;
+          // `break` (unlabelled) leaves the switch; anything else propagates.
+          if (completion.type == CompletionType::Break && completion.label.empty()) return normal();
+          return completion;
+        }
+        return normal();
       }
 
       case ast::StmtKind::Throw:
@@ -1516,14 +1804,9 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
 
 void Interpreter::store_target(const ast::Expr& target, const Value& value, const ScopePtr& scope) {
   if (target.kind == ast::ExprKind::Identifier) {
-    const Lookup found = lookup_scope(scope, target.text);
-    if (found.found) {
-      found.scope->variables[target.text] = value;
-    } else if (strict_scope(scope)) {
-      throw thrown(reference_error("'" + target.text + "' is not defined"));
-    } else {
-      scope->variables[target.text] = value;  // sloppy: creates a global
-    }
+    if (write_name(scope, target.text, value)) return;
+    if (strict_scope(scope)) throw thrown(reference_error("'" + target.text + "' is not defined"));
+    global_->variables[target.text] = value;  // sloppy: creates a global
     return;
   }
   if (target.kind == ast::ExprKind::Member) {
@@ -1865,11 +2148,12 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::Undefined:
       return Value::undefined();
     case ast::ExprKind::This:
-      return scope->this_value;
+      // `this` comes from the innermost *function* scope: blocks and `with`
+      // environments create scopes too, and they must not shadow the receiver.
+      return lookup_this(scope);
 
     case ast::ExprKind::Identifier: {
-      const Lookup found = lookup_scope(scope, expression->text);
-      if (found.found) return found.scope->variables[expression->text];
+      if (has_name(scope, expression->text)) return read_name(scope, expression->text);
       if (expression->text == "undefined") return Value::undefined();
       // Reading an unresolvable reference is a ReferenceError (ES2015 6.2.3.3);
       // only `typeof` and `delete` are exempt.
@@ -1966,27 +2250,24 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         if (target->kind == ast::ExprKind::Member) {
           const Value object = eval(target->children[0], scope);
           const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
-          const std::shared_ptr<Object> bag = property_bag(object);
-          if (bag != nullptr) {
-            const auto found = bag->properties.find(key);
-            // `delete` only removes configurable properties (sloppy mode reports
-            // false rather than throwing — strict mode is ADR 0025's open item).
-            if (found != bag->properties.end() && !found->second.configurable) return Value::boolean_of(false);
-            bag->properties.erase(key);
-            bag->getters.erase(key);
-            bag->setters.erase(key);
-            bag->receiver_getters.erase(key);
-            bag->receiver_setters.erase(key);
-            std::size_t index = 0;
-            if (bag->is_array() && is_array_index(key, index)) {
-              if (index < bag->elements.size()) bag->elements[index] = Value::undefined();
+          // `delete` only removes configurable properties and reports failure as
+          // `false` (strict mode makes `delete <name>` a parse error instead).
+          if (!erase_own_property(property_bag(object), key)) return Value::boolean_of(false);
+        } else if (target->kind == ast::ExprKind::Identifier) {
+          // `delete name` through a `with` environment deletes the object's property.
+          const NameRef reference = resolve_name(scope, target->text);
+          if (reference.kind == NameRef::Kind::Property) {
+            if (!erase_own_property(property_bag(reference.object), target->text)) {
+              return Value::boolean_of(false);
             }
+          } else if (reference.kind == NameRef::Kind::Slot) {
+            return Value::boolean_of(false);  // a declared binding cannot be deleted
           }
         }
         return Value::boolean_of(true);
       }
       if (op == "typeof" && expression->children[0]->kind == ast::ExprKind::Identifier &&
-          !lookup_scope(scope, expression->children[0]->text).found) {
+          !has_name(scope, expression->children[0]->text)) {
         return Value::string_of("undefined");
       }
       const Value operand = eval(expression->children[0], scope);
@@ -2003,8 +2284,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       const double delta = expression->text == "++" ? 1.0 : -1.0;
       Value old_value;
       if (target->kind == ast::ExprKind::Identifier) {
-        const Lookup found = lookup_scope(scope, target->text);
-        old_value = found.found ? found.scope->variables[target->text] : Value::undefined();
+        old_value = has_name(scope, target->text) ? read_name(scope, target->text) : Value::undefined();
       } else if (target->kind == ast::ExprKind::Member) {
         const Value object = eval(target->children[0], scope);
         const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
@@ -2012,9 +2292,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       }
       const Value new_value = Value::number_of(to_number(old_value) + delta);
       if (target->kind == ast::ExprKind::Identifier) {
-        const Lookup found = lookup_scope(scope, target->text);
-        if (found.found) found.scope->variables[target->text] = new_value;
-        else scope->variables[target->text] = new_value;
+        if (!write_name(scope, target->text, new_value)) global_->variables[target->text] = new_value;
       } else if (target->kind == ast::ExprKind::Member) {
         const Value object = eval(target->children[0], scope);
         const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
@@ -2072,6 +2350,9 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         if (!right.is_object() || right.object == nullptr) return Value::boolean_of(false);
         std::size_t index = 0;
         if (right.object->is_array() && is_array_index(key, index) && index < right.object->elements.size()) {
+          return Value::boolean_of(true);
+        }
+        if (right.object->is_global_object && runtime_.global->variables.find(key) != runtime_.global->variables.end()) {
           return Value::boolean_of(true);
         }
         return Value::boolean_of(right.object->properties.find(key) != right.object->properties.end());
@@ -2139,15 +2420,14 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       };
       auto write_reference = [&](const Value& written) {
         if (target_is_identifier) {
-          const Lookup found = lookup_scope(scope, target->text);
-          if (found.found) {
-            found.scope->variables[target->text] = written;
-          } else if (strict_scope(scope)) {
+          if (write_name(scope, target->text, written)) return;
+          if (strict_scope(scope)) {
             // ES2015 8.1.1.1.1: a strict assignment to an unresolvable reference throws.
             throw thrown(reference_error("'" + target->text + "' is not defined"));
-          } else {
-            scope->variables[target->text] = written;  // sloppy: creates a global
           }
+          // Sloppy mode: an unresolvable assignment creates a global (not a local of
+          // whatever scope happens to be innermost — a `with` environment is a scope too).
+          global_->variables[target->text] = written;
         } else {
           set_member(object, key, written, strict_scope(scope));
         }
@@ -2319,6 +2599,12 @@ void install_builtins(RuntimeState& runtime) {
   });
   global->variables["isNaN"] = native_value("isNaN", [](const std::vector<Value>& arguments, Value) {
     return Value::boolean_of(arguments.empty() || std::isnan(to_number(arguments[0])));
+  });
+  // `isFinite` (18.2.2): non-numeric arguments are coerced; ±Infinity and NaN are not finite.
+  global->variables["isFinite"] = native_value("isFinite", [](const std::vector<Value>& arguments, Value) {
+    if (arguments.empty()) return Value::boolean_of(false);
+    const double number = to_number(arguments[0]);
+    return Value::boolean_of(std::isfinite(number) != 0);
   });
 
   // Builtins are installed before Object.prototype below, but the primitive
@@ -3806,7 +4092,11 @@ void install_builtins(RuntimeState& runtime) {
     set_arity(object_prototype, entry.first, entry.second);
   }
 
-  global->variables["globalThis"] = Value::object_of(std::make_shared<Object>());
+  {
+    auto global_object = std::make_shared<Object>();
+    global_object->is_global_object = true;
+    global->variables["globalThis"] = Value::object_of(std::move(global_object));
+  }
 }
 
 }  // namespace

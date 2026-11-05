@@ -100,7 +100,16 @@ enum class StmtKind {
   Continue,
   Throw,
   Try,
+  With,      // `with (object) body` — sloppy code only
+  Labeled,   // `label: body` (the label is in `declaration_kind`)
+  Switch,    // `switch (expression) { case … }` — clauses are in `cases`
   Empty,
+};
+
+/// One `case test:` / `default:` clause of a `switch` statement.
+struct SwitchCase {
+  ExprPtr test;                     // null for `default`
+  std::vector<StmtPtr> statements;
 };
 
 struct Stmt {
@@ -119,6 +128,8 @@ struct Stmt {
   std::vector<StmtPtr> statements;  // program / block contents
   FunctionPtr function;             // function declaration
   std::shared_ptr<ClassNode> class_node;  // class declaration
+
+  std::vector<SwitchCase> cases;    // switch clauses, in source order
 
   StmtPtr try_block;
   StmtPtr catch_block;

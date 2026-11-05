@@ -137,6 +137,9 @@ struct Object {
   std::weak_ptr<Function> owner_function;
   /// `Object.preventExtensions`/`freeze`: a non-extensible object cannot grow.
   bool extensible = true;
+  /// `globalThis`: its properties *are* the global variables (stage 32), so reads and
+  /// writes go through the global scope instead of the property maps below.
+  bool is_global_object = false;
   /// Accessor properties: how the bindings layer makes `el.textContent = 'x'`
   /// write through to the DOM without a special object kind.
   std::unordered_map<std::string, Getter> getters;
