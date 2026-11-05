@@ -38,6 +38,24 @@ const char* const kClearsFramesetOk[] = {"pre",   "listing", "form",     "li",  
                                          "wbr",   "input",    "hr",       "textarea", "xmp",  "iframe",
                                          "select"};
 
+// Start tags whose "in body" rule does *not* reconstruct the active formatting
+// elements before inserting (the spec says so for the block-ish ones, the void
+// ones, and everything handled in "in head"). Every other start tag — `span`, an
+// unknown element, `img`, `input`, `select`, … — goes through "any other start
+// tag", which reconstructs first. That single rule is what makes
+// `<div><i></div><option>` grow an `<i>` clone around the option.
+const char* const kNoReconstruct[] = {
+    "html",     "head",     "body",     "frameset", "frame",     "base",      "basefont",
+    "bgsound",  "link",     "meta",     "noframes", "script",    "style",     "template",
+    "title",    "noscript", "address",  "article",  "aside",     "blockquote", "center",
+    "details",  "dialog",   "dir",      "div",      "dl",        "fieldset",  "figcaption",
+    "figure",   "footer",   "header",   "hgroup",   "main",      "menu",      "nav",
+    "ol",       "p",        "section",  "search",   "summary",   "ul",        "h1",
+    "h2",       "h3",       "h4",       "h5",       "h6",        "pre",       "listing",
+    "form",     "li",       "dd",       "dt",       "plaintext", "table",     "hr",
+    "param",    "source",   "track",    "textarea", "xmp",       "iframe",    "noembed",
+    "rb",       "rtc",      "rp",       "rt"};
+
 // End tags with their own "in body" rule: generate implied end tags, then pop.
 // Everything else goes through "any other end tag", which stops at a special
 // element instead of climbing out of it.
@@ -71,6 +89,10 @@ const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link",     
 const char* const kRawText[] = {"script", "style", "xmp", "iframe", "noembed", "noframes"};
 const char* const kRcData[] = {"title", "textarea"};
 
+[[nodiscard]] bool is_ascii_space(char c) noexcept {
+  return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
+}
+
 [[nodiscard]] bool equals_ascii_ci(std::string_view a, std::string_view b) {
   if (a.size() != b.size()) return false;
   for (std::size_t i = 0; i < a.size(); ++i) {
@@ -85,13 +107,6 @@ const char* const kRcData[] = {"title", "textarea"};
 /// table; the value is matched case-insensitively ("hidDEN" counts).
 [[nodiscard]] bool is_hidden_input(const Token& token) {
   return equals_ascii_ci(std::string(token.attribute("type")), "hidden");
-}
-
-[[nodiscard]] bool token_has_attribute(const Token& token, std::string_view name, std::string_view value) {
-  for (const auto& [key, val] : token.attributes) {
-    if (key == name && val == value) return true;
-  }
-  return false;
 }
 
 template <std::size_t N>
@@ -181,6 +196,18 @@ class TreeBuilder {
       const std::string_view tag = tag_of(stack_[i - 1]);
       if (tag == "select") return true;
       if (tag == "table" || tag == "td" || tag == "th" || tag == "caption" || tag == "template") return false;
+    }
+    return false;
+  }
+
+  /// The *strict* "has a select in select scope" test: only optgroup/option are
+  /// transparent, so any other element above the select (a <button>, a <div>)
+  /// means an end tag for the select is a parse error and gets dropped.
+  [[nodiscard]] bool select_in_select_scope() const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view tag = tag_of(stack_[i - 1]);
+      if (tag == "select") return true;
+      if (tag != "optgroup" && tag != "option") return false;
     }
     return false;
   }
@@ -314,7 +341,10 @@ class TreeBuilder {
     // A block start tag closes the nearest open <p>, even when other phrasing
     // elements are open in between (`<p><b>x<div>`), but never across a scope
     // boundary such as <button>.
-    if (contains(kCloseParagraph, next) && p_in_scope()) close_open("p");
+    // `<table>` is the one block in the list that does *not* close a <p> in quirks
+    // mode (`<p><table></table>` keeps the table inside the paragraph).
+    const bool closes_p = contains(kCloseParagraph, next) && !(next == "table" && quirks_);
+    if (closes_p && p_in_scope()) close_open("p");
     if (next == "button" && tag_in_scope("button")) {
       generate_implied_end_tags();
       pop_through("button");
@@ -654,8 +684,17 @@ class TreeBuilder {
         return;
       }
       const dom::NodeId furthest_block = stack_[static_cast<std::size_t>(furthest_index)];
-      const dom::NodeId common_ancestor =
-          formatting_stack_index > 0 ? stack_[static_cast<std::size_t>(formatting_stack_index) - 1] : document_.root();
+      // The node below the formatting element. At the bottom of the stack that is
+      // the fake <html> root — or, for a fragment, the context element the built
+      // nodes really end up in.
+      dom::NodeId common_ancestor = document_.root();
+      if (formatting_stack_index > 1) {
+        common_ancestor = stack_[static_cast<std::size_t>(formatting_stack_index) - 1];
+      } else if (fragment_mode_) {
+        common_ancestor = context_;
+      } else if (formatting_stack_index > 0) {
+        common_ancestor = stack_[0];
+      }
 
       // 8.-15. Walk down from the furthest block towards the formatting element,
       //        cloning every active formatting element on the way and re-parenting
@@ -667,16 +706,18 @@ class TreeBuilder {
       int inner = 0;
       for (;;) {
         ++inner;
-        // 13.2: after four steps a node that is in the stack is dropped from it.
-        if (inner > 3 && node_index >= 0 && static_cast<std::size_t>(node_index) < stack_.size() &&
-            stack_[static_cast<std::size_t>(node_index)] == node) {
-          stack_.erase(stack_.begin() + node_index);
-        }
         const int above = node_index - 1;
         if (above < 0) break;  // nothing above: give up
         node_index = above;
         node = stack_[static_cast<std::size_t>(node_index)];
         if (node == formatting) break;  // 13.4: reached it
+        // 13.5: from the fourth step on the node is too far from the formatting
+        // element to be worth re-parenting: drop it from the stack and keep
+        // walking up instead of cloning it.
+        if (inner > 3) {
+          stack_.erase(stack_.begin() + node_index);
+          continue;
+        }
         const int node_afe_index = index_in_afe(node);
         if (node_afe_index < 0) {  // 13.5: not active, drop and keep walking up
           stack_.erase(stack_.begin() + node_index);
@@ -1113,12 +1154,28 @@ class TreeBuilder {
     return false;
   }
 
+  /// True when a real <colgroup> element is open above the nearest <table>,
+  /// <template> or <html>. A column group that exists only as a template
+  /// insertion mode has nothing to pop, so tokens there are simply dropped.
+  [[nodiscard]] bool colgroup_open() const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view tag = tag_of(stack_[i - 1]);
+      if (tag == "colgroup") return true;
+      if (tag == "table" || tag == "template" || tag == "html") return false;
+    }
+    return false;
+  }
+
   bool column_group_start(const Token& token) {
     if (token.name == "col") {
       insert_element(token, false);
       return true;
     }
     if (token.name == "template") return false;
+    if (!colgroup_open()) {
+      report("html.ignored_in_colgroup", "<" + std::string(token.name) + "> ignored inside <colgroup>");
+      return true;
+    }
     if (!pop_through("colgroup")) {  // fragment case: the context is not on the stack
       report("html.ignored_in_colgroup", "<" + std::string(token.name) + "> ignored inside <colgroup>");
       return true;
@@ -1158,8 +1215,14 @@ class TreeBuilder {
           }
         }
         if (open_a.valid()) {
+          // "Run the adoption agency algorithm for the token, then remove that
+          // element from the list of active formatting elements and the stack of
+          // open elements if the algorithm didn't already remove it" — the second
+          // half matters when the element is not in table scope, where the
+          // algorithm bails out without touching anything.
           adoption_agency("a");
-          remove_from_afe(open_a);
+          if (index_in_afe(open_a) >= 0) remove_from_afe(open_a);
+          if (const int at = index_in_stack(open_a); at >= 0) remove_from_stack(at);
         }
       }
       reconstruct_formatting();
@@ -1188,6 +1251,19 @@ class TreeBuilder {
     if (push) stack_.push_back(element);
   }
 
+  /// Appends every whitespace run of `text` to `target` and drops the rest — the
+  /// "only whitespace belongs here" rule of <frameset> and "after frameset".
+  void append_whitespace_runs(dom::NodeId target, std::string_view text) {
+    std::size_t i = 0;
+    while (i < text.size()) {
+      std::size_t run = i;
+      while (run < text.size() && is_ascii_space(text[run])) ++run;
+      if (run > i) document_.append_text(target, text.substr(i, run - i));
+      i = run;
+      while (i < text.size() && !is_ascii_space(text[i])) ++i;
+    }
+  }
+
   void append_text(std::string_view text) {
     if (text.empty()) return;
     if (table_context() && !trim(text).empty()) {  // text inside a table is moved out
@@ -1207,18 +1283,44 @@ class TreeBuilder {
     // "After body": comments keep landing on the <html> element until real content
     // arrives (which switches back to "in body") — what makes `</html><!--x-->`
     // put the comment next to <head>/<body> rather than inside <body>.
+    if (after_html_) {
+      // "After after body": a comment is the last child of the Document, anything
+      // else puts the parser back into "in body" and the token is reprocessed.
+      // The one exception is `<noframes>` in "after after frameset", which the
+      // spec hands to the "in head" rules *without* leaving the mode — that is why
+      // `<frameset></frameset></html><noframes></noframes><!--x-->` still puts the
+      // comment on the Document.
+      if (token.type == TokenType::Comment) {
+        document_.append_child(document_.root(), document_.create_comment(token.data));
+        return;
+      }
+      // `<noframes>` (and the RAWTEXT it swallows) is handled by the "in head"
+      // rules without leaving the mode.
+      const bool noframes_tag =
+          token.name == "noframes" && (token.type == TokenType::StartTag || token.type == TokenType::EndTag);
+      const bool noframes_text = token.type == TokenType::Characters && has_open("noframes");
+      const bool stays = frameset_document() && (noframes_tag || noframes_text);
+      // Whitespace is inserted with the "in body" rules but does not leave the mode.
+      const bool space = token.type == TokenType::Characters && trim(token.data).empty();
+      if (token.type != TokenType::EndOfFile && !stays && !space) after_html_ = false;
+    }
     if (after_body_) {
       if (token.type == TokenType::Comment && html_.valid()) {
         document_.append_child(html_, document_.create_comment(token.data));
         return;
       }
-      if (token.type != TokenType::EndOfFile) after_body_ = false;
+      const bool space = token.type == TokenType::Characters && trim(token.data).empty();
+      if (token.type != TokenType::EndOfFile && !space) after_body_ = false;
     }
     if (ignore_next_lf_ && token.type != TokenType::Characters) ignore_next_lf_ = false;
     switch (token.type) {
       case TokenType::Doctype:
-        // Only the first doctype, before any element, counts; later ones are ignored.
-        if (document_element_seen_) return;
+        // Only the very first doctype counts; later ones are ignored.
+        if (document_element_seen_ || doctype_seen_) return;
+        doctype_seen_ = true;
+        // A missing or non-"html" doctype leaves the document in quirks mode; the
+        // only rule that cares here is the `<p>`/`<table>` interaction above.
+        quirks_ = !equals_ascii_ci(token.data, "html");
         document_.append_child(document_.root(), document_.create_doctype(token.data));
         return;
       case TokenType::Comment: {
@@ -1232,6 +1334,10 @@ class TreeBuilder {
             // "after frameset" keeps comments on <html>, "after after frameset" (past
             // </html>) puts them back on the Document.
             target = after_html_ ? document_.root() : html_;
+          }
+          if (tag_of(target) == "template") {  // the comment belongs to the contents
+            const dom::NodeId content = template_content(target);
+            if (content.valid()) target = content;
           }
         }
         document_.append_child(target, document_.create_comment(token.data));
@@ -1287,17 +1393,14 @@ class TreeBuilder {
     }
     const std::string_view top = tag_of(current());
     if (top == "frameset" || top == "frame") {  // only whitespace survives here
-      if (trim(text).empty()) {
-        document_.append_text(current(), text);
-      } else {
-        report("html.ignored_in_frameset", "text ignored inside <frameset>");
-      }
+      append_whitespace_runs(current(), text);
+      if (!trim(text).empty()) report("html.ignored_in_frameset", "text ignored inside <frameset>");
       return;
     }
     // A frameset document has no body: whitespace still lands in <html>, anything
     // else after </frameset> is dropped (<noframes>/<template> keep real content).
     if (frameset_document() && !has_open("noframes") && !has_open("template")) {
-      if (!in_frameset() && trim(text).empty()) document_.append_text(html_, text);
+      if (!in_frameset()) append_whitespace_runs(html_, text);
       return;
     }
     if (!body_created()) {
@@ -1307,8 +1410,15 @@ class TreeBuilder {
         append_text(text);
         return;
       }
-      // Whitespace between tags before <body> is not rendered by anyone.
-      if (trim(text).empty() && !options_.keep_whitespace_in_head) return;
+      // html5lib's tokenizer emits whitespace runs as their own tokens, so the
+      // leading run of a mixed token is handled on its own: "before head" drops it,
+      // "in head"/"after head" inserts it into the current node (head/html) — and
+      // only the rest of the token creates the body.
+      std::size_t lead = 0;
+      while (lead < text.size() && is_ascii_space(text[lead])) ++lead;
+      if (lead > 0 && head_.valid()) document_.append_text(current(), text.substr(0, lead));
+      if (lead == text.size()) return;
+      text.remove_prefix(lead);
       ensure_body();
     }
     const Mode current_mode = mode();
@@ -1317,9 +1427,17 @@ class TreeBuilder {
         document_.append_text(current(), text);  // whitespace stays in the colgroup
         return;
       }
+      // Mixed text: the leading whitespace run still belongs to the colgroup, the
+      // rest pops it and is reprocessed (html5lib splits character tokens that way).
+      std::size_t lead = 0;
+      while (lead < text.size() && is_ascii_space(text[lead])) ++lead;
+      if (lead > 0) {
+        document_.append_text(current(), text.substr(0, lead));
+        text.remove_prefix(lead);
+      }
       // "Anything else": pop the colgroup and let the table rules reprocess the text
       // (the fragment case has nothing to pop, so it is dropped there).
-      if (!pop_through("colgroup")) {
+      if (!colgroup_open() || !pop_through("colgroup")) {
         report("html.ignored_in_colgroup", "text ignored inside <colgroup>");
         return;
       }
@@ -1380,6 +1498,10 @@ class TreeBuilder {
     }
 
     if (name == "html") {
+      if (has_open("template")) {  // "if the stack has a template element, ignore"
+        report("html.ignored_in_template", "<html> ignored inside <template>");
+        return;
+      }
       if (!html_.valid()) {
         ensure_html();
       }
@@ -1397,6 +1519,10 @@ class TreeBuilder {
     }
 
     if (name == "body") {
+      if (has_open("template")) {  // same: attributes must not reach the body either
+        report("html.ignored_in_template", "<body> ignored inside <template>");
+        return;
+      }
       if (body_.valid()) {
         for (const auto& [key, value] : token.attributes) {
           if (document_.attribute(body_, key).empty()) document_.set_attribute(body_, key, value);
@@ -1437,6 +1563,13 @@ class TreeBuilder {
         report("html.ignored_frameset", "<frameset> ignored: the body already has content");
         return;
       }
+      // "in body": a frameset can only replace a body. While a <template> is open
+      // the stack has no body below the content (`<template><div><frameset>`), so
+      // the tag is a parse error and gets dropped.
+      if (has_open("template")) {
+        report("html.ignored_frameset", "<frameset> ignored: a <template> is open");
+        return;
+      }
       ensure_html();
       if (!head_created()) {
         ensure_head();
@@ -1461,7 +1594,7 @@ class TreeBuilder {
         insert_element(token, false);
         return;
       }
-      if (name != "template" && name != "noframes") {
+      if (name != "noframes") {  // <template> is not honoured inside a frameset either
         report("html.ignored_in_frameset", "<" + std::string(name) + "> ignored inside <frameset>");
         return;
       }
@@ -1475,44 +1608,7 @@ class TreeBuilder {
       if (temporary_head) stack_.push_back(head_);
       insert_element(token, !contains(kVoid, name));
       if (temporary_head) remove_from_stack(index_in_stack(head_));
-      if (name == "li" || name == "dd" || name == "dt") {
-      if (!tag_in_scope(name, true)) {
-        report("html.ignored_end_tag", "</" + std::string(name) + "> without a matching list item");
-        return;
-      }
-      generate_implied_end_tags(name);
-      pop_through(name);
-      return;
-    }
-    if (is_heading(name)) {
-      if (!tag_in_scope("h1") && !tag_in_scope("h2") && !tag_in_scope("h3") && !tag_in_scope("h4") &&
-          !tag_in_scope("h5") && !tag_in_scope("h6")) {
-        report("html.ignored_end_tag", "</" + std::string(name) + "> without an open heading");
-        return;
-      }
-      generate_implied_end_tags();
-      while (!stack_.empty()) {  // pop through whichever heading is open
-        const bool heading = is_heading(tag_of(stack_.back()));
-        stack_.pop_back();
-        if (heading) break;
-      }
-      return;
-    }
-    if (name == "button") {
-      if (!tag_in_scope("button")) {
-        report("html.ignored_end_tag", "</button> without an open button");
-        return;
-      }
-      generate_implied_end_tags();
-      pop_through("button");
-      return;
-    }
-    if (name == "form") {
-      form_ = dom::NodeId{};  // the pointer is cleared even when no form is in scope
-      close_open("form");
-      return;
-    }
-    if (name == "template") {
+      if (name == "template") {  // a template opened in "in head"/"after head"
         push_marker();
         template_modes_.push_back(Mode::Body);
       }
@@ -1533,6 +1629,8 @@ class TreeBuilder {
     // insertion modes: inside a table it is fostered out and then eats everything.
     if (name == "plaintext") {
       if (!body_created() && !has_open("template")) ensure_body();
+      // "in column group" hands the token to "in table", which fosters it out.
+      if (mode() == Mode::ColumnGroup && colgroup_open()) pop_through("colgroup");
       implied_end_tags(name);
       const dom::NodeId element = make_element(token);
       insert_node(element);  // fosters out of a table
@@ -1558,36 +1656,42 @@ class TreeBuilder {
     }
 
     // --- "in select" insertion mode ---------------------------------------
-    // Inside <select> only option/optgroup/script/template survive; the rest is
-    // either ignored or (input/keygen/textarea) forcibly closes the select. Real
-    // pages rely on it: `<select><b><option>` must not grow a <b> wrapper.
+    // Options and optgroups are the elements <select> is *about*; `input`,
+    // `keygen` and `textarea` close the select outright. Everything else is no
+    // longer dropped: the modern (customizable <select>) content model lets
+    // ordinary content — <div>, <button>, <datalist>, <selectedcontent>, … — be
+    // parsed with the "in body" rules, so those tokens simply fall through.
     if (select_context()) {
       if (name == "option" || name == "optgroup") {
         if (current_is("option")) stack_.pop_back();
         if (name == "optgroup" && current_is("optgroup")) stack_.pop_back();
+        reconstruct_formatting();
         insert_element(token, true);
         return;
       }
-      if (name == "hr") {
+      if (name == "hr") {  // `<hr>` is allowed inside a <select> as a separator
         if (current_is("option")) stack_.pop_back();
         if (current_is("optgroup")) stack_.pop_back();
         insert_element(token, false);
         return;
       }
       if (name == "select") {
+        // "Parse error. Ignore the token. Pop elements from the stack of open
+        // elements until a select element has been popped from the stack."
         report("html.nested_select", "<select> nested in <select> closes the outer one");
         close_open("select");
         return;
       }
-      if (name == "input" || name == "keygen" || name == "textarea") {
+      if (name == "input") {
+        if (!select_in_select_scope()) {
+          report("html.ignored_in_select", "<" + std::string(name) + "> ignored: not in select scope");
+          return;
+        }
         if (!close_open("select")) {  // fragment case: nothing on the stack to close
           report("html.ignored_in_select", "<" + std::string(name) + "> ignored inside <select>");
           return;
         }
         report("html.select_closed_by_input", "<" + std::string(name) + "> inside <select> closes it");
-      } else if (name != "script" && name != "template") {
-        report("html.ignored_in_select", "<" + std::string(name) + "> ignored inside <select>");
-        return;
       }
     }
 
@@ -1656,6 +1760,7 @@ class TreeBuilder {
     }
 
     implied_end_tags(name);
+    if (!contains(kNoReconstruct, name)) reconstruct_formatting();  // "any other start tag"
     const bool is_void = contains(kVoid, name);
     insert_element(token, !is_void);
     if (name == "form") form_ = current();
@@ -1676,9 +1781,13 @@ class TreeBuilder {
       ensure_html();
     }
 
-    if (in_head_noscript() && name != "noscript") {
-      close_open("noscript");  // "anything else": back to "in head" and reprocess
-      handle_end_tag_name(name);
+    if (in_head_noscript() && name != "noscript" && name != "template") {
+      if (name == "br") {  // "anything else": back to "in head" and reprocess
+        close_open("noscript");
+        handle_end_tag_name(name);
+        return;
+      }
+      report("html.ignored_in_head_noscript", "</" + std::string(name) + "> ignored in <noscript>");
       return;
     }
 
@@ -1735,7 +1844,11 @@ class TreeBuilder {
       // "after head" rules), so a following comment lands after them.
       if (!fragment_mode_ && !body_.valid()) ensure_body();
       if (body_.valid() && tag_in_scope("body")) after_body_ = true;
-      if (name == "html") after_html_ = true;  // "after after body" / "after after frameset"
+      // `</html>` reaches "after after body" / "after after frameset", where a
+      // comment is a child of the Document instead of <html>. A fragment has no
+      // document to fall out of, so there the tag is simply ignored (see
+      // parse_fragment(), which folds stray Document comments back into the root).
+      if (name == "html" && !fragment_mode_) after_html_ = true;
       return;
     }
 
@@ -1745,20 +1858,27 @@ class TreeBuilder {
       return;
     }
     if (name == "head") {
+      if (!fragment_mode_ && !head_.valid()) ensure_head();  // "before head" implies it
       close_head();
       return;
     }
     if (name == "br") {
       if (!body_created()) ensure_body();  // "in head" treats a stray </br> as content
-      insert_element(Token{TokenType::StartTag, "br", {}, {}, true}, false);
+      // It behaves exactly like a <br> start tag, fostering out of a table.
+      const dom::NodeId element = make_element(Token{TokenType::StartTag, "br", {}, {}, true});
+      insert_node(element);
       return;
     }
     if (name == "p") {
       // "If the stack does not have a p element in button scope": a <p> *inside*
       // a <button> does not count, so a new (empty) paragraph is created instead.
       if (!p_in_scope()) {
-        Token synthetic{TokenType::StartTag, "p", {}, {}, false};
-        insert_element(synthetic, false);
+        // "Insert an HTML element for a 'p' start tag token with no attributes,
+        // then close a p element" — an empty paragraph, fostered out of a table.
+        const dom::NodeId element = make_element(Token{TokenType::StartTag, "p", {}, {}, false});
+        insert_node(element);
+        stack_.push_back(element);
+        close_open("p");
         report("html.stray_end_tag", "</p> without an open <p>");
       } else {
         close_open("p");
@@ -1786,14 +1906,25 @@ class TreeBuilder {
         if (current_is("optgroup")) stack_.pop_back();
         return;
       }
+      if (name == "hr") {
+        if (!select_in_select_scope()) {  // nothing to close: drop the tag
+          report("html.ignored_in_select", "</hr> ignored: not in select scope");
+          return;
+        }
+        generate_implied_end_tags();
+        pop_through("hr");
+        return;
+      }
       if (name == "select") {
+        if (!select_in_select_scope()) {  // `</select>` with a <button> open: ignored
+          report("html.ignored_in_select", "</select> ignored: not in select scope");
+          return;
+        }
         close_open("select");
         return;
       }
-      if (name != "template") {  // every other end tag is dropped inside <select>
-        report("html.ignored_in_select", "</" + std::string(name) + "> ignored inside <select>");
-        return;
-      }
+      // Every other end tag falls through: the modern content model parses the
+      // select's children with the "in body" rules (`<select><div><i></div>`).
     }
     if (name == "li" || name == "dd" || name == "dt") {
       if (!tag_in_scope(name, true)) {
@@ -1816,6 +1947,19 @@ class TreeBuilder {
         stack_.pop_back();
         if (heading) break;
       }
+      return;
+    }
+    if (name == "applet" || name == "marquee" || name == "object") {
+      // The element pushed a marker onto the active-formatting list; closing it
+      // drops everything that was opened inside (`<marquee><a></marquee>` must not
+      // keep reconstructing that <a>).
+      if (!tag_in_scope(name)) {
+        report("html.ignored_end_tag", "</" + std::string(name) + "> without a matching element");
+        return;
+      }
+      generate_implied_end_tags();
+      pop_through(name);
+      clear_to_last_marker();
       return;
     }
     if (name == "button") {
@@ -1863,6 +2007,8 @@ class TreeBuilder {
   bool after_body_ = false;  // "after body": true once </body> or </html> was seen
   dom::NodeId form_;  // the form element pointer (null when no form is open)
   bool after_html_ = false;  // </html> seen: "after after body" / "after after frameset"
+  bool doctype_seen_ = false;  // a DOCTYPE token was already accepted
+  bool quirks_ = true;         // no doctype yet: quirks mode
   bool ignore_next_lf_ = false;  // <pre>/<listing>/<textarea> swallow the first newline
   dom::NodeId context_;  // fragment parsing: the element whose children we build
   Mode fragment_initial_mode_ = Mode::Body;  // "reset the insertion mode", fragment case
@@ -1900,7 +2046,24 @@ dom::NodeId parse_fragment(std::string_view bytes, std::string_view context_tag,
     // <head> and <body> under <html>, and those are exactly the children the
     // fragment consists of, so no synthetic context element is needed.
     builder.run(bytes);
-    return builder.html_element();
+    const dom::NodeId root = builder.html_element();
+    // A comment past `</html>` is a child of the Document in the document
+    // algorithm; the fragment's result *is* the html element, so it has to move
+    // back inside it to survive.
+    bool after_root = false;
+    std::vector<dom::NodeId> strays;
+    for (const dom::NodeId child : document.children(document.root())) {
+      if (child == root) {
+        after_root = true;
+        continue;
+      }
+      if (after_root && document.type(child) == dom::NodeType::Comment) strays.push_back(child);
+    }
+    for (const dom::NodeId stray : strays) {
+      document.unlink(stray);
+      document.append_child(root, stray);
+    }
+    return root;
   }
   builder.set_fragment_context(context_tag);
   builder.run(bytes);

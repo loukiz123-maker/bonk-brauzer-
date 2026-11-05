@@ -217,9 +217,13 @@ BONK_TEST(html, ruby_annotations_become_siblings) {
            std::string("<html><head></head><body><ruby>a<rtc>b<rt>c</rt></rtc></ruby></body></html>"));
 }
 
-BONK_TEST(html, select_ignores_foreign_tags) {
+BONK_TEST(html, select_parses_ordinary_content) {
+  // The relaxed <select> content model: anything but option/optgroup/input is parsed
+  // with the "in body" rules, so a <b> inside a select really is an element.
   CHECK_EQ(parse_and_serialize("<select><b><option>x"),
-           std::string("<html><head></head><body><select><option>x</option></select></body></html>"));
+           std::string("<html><head></head><body><select><b><option>x</option></b></select></body></html>"));
+  CHECK_EQ(parse_and_serialize("<select><div>d</div></select>"),
+           std::string("<html><head></head><body><select><div>d</div></select></body></html>"));
   // A nested <select> closes the outer one and is then dropped, so the second
   // <option> ends up as a stray child of <body> — which is what html5lib expects.
   CHECK_EQ(parse_and_serialize("<select><option>a<select><option>b"),
@@ -351,8 +355,10 @@ BONK_TEST(html, closing_a_table_returns_to_the_body) {
 }
 
 BONK_TEST(html, nested_button_closes_the_outer_one) {
+  // Closing the outer button leaves the <b> in the active formatting list, and the
+  // new button is inserted after a reconstruction — hence the cloned <b>.
   CHECK_EQ(parse_and_serialize("<button>a<b>b<button>c"),
-           std::string("<html><head></head><body><button>a<b>b</b></button><button><b>c</b></button></body></html>"));
+           std::string("<html><head></head><body><button>a<b>b</b></button><b><button>c</button></b></body></html>"));
 }
 
 BONK_TEST(html, headings_close_one_at_a_time) {
@@ -462,13 +468,57 @@ BONK_TEST(html, fragment_context_element_hangs_off_the_document) {
   CHECK_EQ(document.children(document.root()).size(), static_cast<std::size_t>(2));  // <html> + context
 }
 
-BONK_TEST(html, comment_after_html_end_tag_stays_on_the_html_element) {
-  // "After body": the tree is closed, so a trailing comment lands next to <head> and
-  // <body> instead of inside the body.
+BONK_TEST(html, comment_after_html_end_tag_goes_to_the_document) {
+  // "After after body": a comment past `</html>` is a child of the Document, not of
+  // <html> and certainly not of <body>.
   CHECK_EQ(parse_and_serialize("<p>a</p></html><!--x-->"),
-           std::string("<html><head></head><body><p>a</p></body><!--x--></html>"));
+           std::string("<html><head></head><body><p>a</p></body></html><!--x-->"));
   CHECK_EQ(parse_and_serialize("</html><!--x-->"),
-           std::string("<html><head></head><body></body><!--x--></html>"));
+           std::string("<html><head></head><body></body></html><!--x-->"));
+}
+
+BONK_TEST(html, formatting_walk_stops_cloning_after_four_steps) {
+  // The inner loop of the adoption agency drops the nodes it cannot re-parent once
+  // it is four steps away from the furthest block, which is why the <em> wrapper
+  // disappears here but survives in `<b><em><foo><foo><aside></b>`.
+  CHECK_EQ(parse_and_serialize("<b><em><foo><foo><foo><aside></b></em>"),
+           std::string("<html><head></head><body><b><em><foo><foo><foo></foo></foo></foo></em></b>"
+                       "<aside><b></b></aside></body></html>"));
+  CHECK_EQ(parse_and_serialize("<b><em><foo><foo><aside></b></em>"),
+           std::string("<html><head></head><body><b><em><foo><foo></foo></foo></em></b>"
+                       "<em></em><aside><em><b></b></em></aside></body></html>"));
+}
+
+BONK_TEST(html, whitespace_after_head_stays_in_the_html_element) {
+  // "After head" inserts whitespace instead of dropping it; only "before head" is
+  // allowed to throw it away.
+  CHECK_EQ(parse_and_serialize("<head></head>\n<body></body>"),
+           std::string("<html><head></head>\n<body></body></html>"));
+}
+
+BONK_TEST(html, quirks_mode_keeps_a_table_inside_a_paragraph) {
+  // No doctype means quirks mode, where `<table>` does not close an open <p>.
+  CHECK_EQ(parse_and_serialize("<p><table></table>"),
+           std::string("<html><head></head><body><p><table></table></p></body></html>"));
+  CHECK_EQ(parse_and_serialize("<!DOCTYPE html><p><table></table>"),
+           std::string("<!DOCTYPE html><html><head></head><body><p></p><table></table></body></html>"));
+}
+
+BONK_TEST(html, marquee_drops_the_formatting_children_it_enclosed) {
+  // <marquee> pushes a marker on the active-formatting list; closing it clears them.
+  CHECK_EQ(parse_and_serialize("<marquee><a href=b>x</marquee>y"),
+           std::string("<html><head></head><body><marquee><a href=\"b\">x</a></marquee>y</body></html>"));
+}
+
+BONK_TEST(html, template_ignores_html_and_body_tags) {
+  CHECK_EQ(parse_and_serialize("<template><div></div><body c=d>x</template>"),
+           std::string("<html><head><template><div></div>x</template></head><body></body></html>"));
+}
+
+BONK_TEST(html, plaintext_in_a_colgroup_is_fostered_out) {
+  CHECK_EQ(parse_and_serialize("<table><colgroup><plaintext>x"),
+           std::string("<html><head></head><body><plaintext>x</plaintext>"
+                       "<table><colgroup></colgroup></table></body></html>"));
 }
 
 BONK_TEST(html, frameset_ok_ignores_ordinary_blocks) {

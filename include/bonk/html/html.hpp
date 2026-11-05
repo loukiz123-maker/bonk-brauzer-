@@ -18,8 +18,7 @@
 namespace bonk::html {
 
 struct ParseOptions {
-  bool scripting_enabled = false;    // <noscript> content is parsed as markup when disabled
-  bool keep_whitespace_in_head = false;
+  bool scripting_enabled = false;  // <noscript> content is parsed as markup when disabled
 };
 
 /// Parses `bytes` (UTF-8; the caller decodes charsets in the net layer) into `document`.

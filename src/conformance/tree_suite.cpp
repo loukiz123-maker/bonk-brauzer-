@@ -117,7 +117,12 @@ struct Case {
     }
     if (in_document) {
       if (line.empty()) continue;
-      current.expected.push_back(trim_copy(line));
+      // Indentation matters: html5lib prints the continuation lines of a text node
+      // that contains a newline verbatim, leading spaces and all. Only a CR from a
+      // CRLF checkout is stripped.
+      std::string_view kept = line;
+      while (!kept.empty() && kept.back() == '\r') kept.remove_suffix(1);
+      current.expected.push_back(std::string(kept));
       continue;
     }
     (void)in_errors;

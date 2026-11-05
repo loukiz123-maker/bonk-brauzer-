@@ -277,6 +277,29 @@ construction — 1 446/1 535 (94.2 %, было 87.3 %), токенайзер —
 рендеринг frameset'ов.
 
 
+## Этап 15 — `<select>` без режима, adoption agency и пробелы в head
+
+Внутренний цикл adoption agency приведён к порядку стандарта: узел, до которого
+осталось больше четырёх шагов, выбрасывается из стека, а не клонируется, —
+поэтому `<b><em><foo>×10<aside></b>` даёт правильное дерево, а `common ancestor`
+во фрагменте указывает на контекстный элемент. `<select>` перестал быть режимом
+вставки: `option`/`optgroup`/`hr`/`select`/`input` остались особыми правилами,
+всё остальное (`<div>`, `<button>`, `<datalist>`, `<b>`, …) разбирается «in body».
+Пробельные прогоны токенов обрабатываются отдельными шагами (head/after head,
+frameset, after body), `<html>`/`<body>` внутри `<template>` игнорируются,
+комментарий попадает в `template.content`, плюс quirks-`<table>`, маркер
+`<marquee>` и foster-`</p>`. Подробности: [`docs/STAGE-15.md`](STAGE-15.md),
+решение — [`docs/adr/0017-select-adoption-agency-and-whitespace.md`](adr/0017-select-adoption-agency-and-whitespace.md).
+
+**Критерий выхода**: дерево совпадает с html5lib на всех фрагментах и на
+«обычных» документах, регрессий нет. Сейчас: tree construction —
+1 519/1 535 (99.0 %, было 94.2 %; фрагментных 155/155), токенайзер —
+6 281/6 820 (92.1 %), test262 — 2 673/13 254 (20.2 %), reftests — 7/7,
+юнит-тестов 385. Открыто: template-таблицы, `<selectedcontent>`, caption-режим,
+«Noah's Ark» с атрибутами, foster + formatting-элементы, внешний контент
+SVG/MathML, DOCTYPE-идентификаторы, рендеринг frameset'ов.
+
+
 ---
 
 ## Риски и как их снимаем

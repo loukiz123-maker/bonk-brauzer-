@@ -497,9 +497,9 @@ void Bindings::Impl::set_inner_html(NodeId node, const std::string& html) {
   if (document.type(node) != NodeType::Element) return;
   const std::string tag(document.tag_name(node));
   Document scratch(document.source_url());
-  const NodeId context = html::parse_fragment(html, tag, scratch, nullptr, {});
-  if (!context.valid()) return;
-  NodeId child = scratch.first_child(context);
+  const NodeId context_element = html::parse_fragment(html, tag, scratch, nullptr, {});
+  if (!context_element.valid()) return;
+  NodeId child = scratch.first_child(context_element);
   while (child.valid()) {
     copy_into(scratch, child, node);
     child = scratch.next_sibling(child);
