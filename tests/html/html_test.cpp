@@ -339,3 +339,38 @@ BONK_TEST(html, template_switches_to_table_modes) {
   CHECK_EQ(parse_and_serialize("<template><tr></tr><td></td></template>"),
            std::string("<html><head><template><tr></tr><tr><td></td></tr></template></head><body></body></html>"));
 }
+
+// --- "in body" rules and table scope ----------------------------------------
+// These rules decide where a token is *allowed* to go: a row/cell/section is only
+// closed when it is in table scope, a heading is popped one at a time, and a
+// nested <button> closes the outer one.
+
+BONK_TEST(html, closing_a_table_returns_to_the_body) {
+  CHECK_EQ(parse_and_serialize("<table><td>A</table>B"),
+           std::string("<html><head></head><body><table><tbody><tr><td>A</td></tr></tbody></table>B</body></html>"));
+}
+
+BONK_TEST(html, nested_button_closes_the_outer_one) {
+  CHECK_EQ(parse_and_serialize("<button>a<b>b<button>c"),
+           std::string("<html><head></head><body><button>a<b>b</b></button><button><b>c</b></button></body></html>"));
+}
+
+BONK_TEST(html, headings_close_one_at_a_time) {
+  CHECK_EQ(parse_and_serialize("<h1>one<h2>two"),
+           std::string("<html><head></head><body><h1>one</h1><h2>two</h2></body></html>"));
+  // A <div> in between stops the implicit close: the spec pops only a heading that
+  // is the current node.
+  CHECK_EQ(parse_and_serialize("<h1>one<div>two<h2>three"),
+           std::string("<html><head></head><body><h1>one<div>two<h2>three</h2></div></h1></body></html>"));
+}
+
+BONK_TEST(html, nul_characters_are_dropped_in_body) {
+  const std::string input("<p>a\0a</p>", 11);
+  CHECK_EQ(parse_and_serialize(input),
+           std::string("<html><head></head><body><p>aa</p></body></html>"));
+}
+
+BONK_TEST(html, search_closes_a_paragraph) {
+  CHECK_EQ(parse_and_serialize("<p>foo<search>bar<p>baz"),
+           std::string("<html><head></head><body><p>foo</p><search>bar<p>baz</p></search></body></html>"));
+}

@@ -12,6 +12,6 @@
      "initialStates": ["Script data state"], "output": [["Character", "a &amp; b"]]},
     {"description": "two-code-point entity", "input": "&NotEqualTilde;", "output": [["Character", "\u2242\u0338"]]},
     {"description": "double escaped nul", "doubleEscaped": true, "input": "\\u0041\\u0000",
-     "output": [["Character", "\\u0041\\uFFFD"]]}
+     "output": [["Character", "\\u0041\u0000"]]}
   ]
 }

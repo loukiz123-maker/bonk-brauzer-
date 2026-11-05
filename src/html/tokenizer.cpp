@@ -249,9 +249,9 @@ Token Tokenizer::next() {
           decode_character_reference(character_buffer_, false);
           continue;
         }
-        if (c == '\0') {  // unexpected-null-character: U+FFFD
+        if (c == '\0') {  // data state: NUL is passed through, the tree builder decides
           advance();
-          emit_character(kReplacementCharacter);
+          character_buffer_.push_back(c);
           continue;
         }
         character_buffer_.push_back(c);

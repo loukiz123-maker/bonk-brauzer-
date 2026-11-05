@@ -21,7 +21,7 @@ const char* const kCloseParagraph[] = {"address", "article", "aside",  "blockquo
                                        "figure",  "footer",  "form",   "h1",         "h2",       "h3",
                                        "h4",      "h5",      "h6",     "header",     "hgroup",   "hr",
                                        "listing", "main",    "menu",   "nav",        "ol",       "p",
-                                       "plaintext", "pre",   "section", "summary",   "table",    "ul",
+                                       "plaintext", "pre",   "search",  "section", "summary",   "table",    "ul",
                                        "xmp"};
 
 // Start tags that leave the "frameset-ok" flag alone. The spec clears the flag for
@@ -233,12 +233,21 @@ class TreeBuilder {
     }
   }
 
+  [[nodiscard]] static bool is_heading(std::string_view tag) {
+    return tag.size() == 2 && tag[0] == 'h' && tag[1] >= '1' && tag[1] <= '6';
+  }
+
+  /// "Close a p element" / heading / button scope juggling for start tags.
   void implied_end_tags(std::string_view next) {
     // A block start tag closes the nearest open <p>, even when other phrasing
     // elements are open in between (`<p><b>x<div>`), but never across a scope
     // boundary such as <button>.
     if (contains(kCloseParagraph, next) && p_in_scope()) close_open("p");
-    if (next == "button" && has_open("button")) close_open("button");
+    if (next == "button" && tag_in_scope("button")) {
+      generate_implied_end_tags();
+      pop_through("button");
+      report("html.nested_button", "<button> inside <button> closes the outer one");
+    }
 
     if (next == "li") {
       // Only inside the same list: `<ul><li>a<ul><li>b` must nest, not flatten.
@@ -262,8 +271,10 @@ class TreeBuilder {
       generate_implied_end_tags();
     } else if (next == "rt" || next == "rp") {
       generate_implied_end_tags("rtc");  // an <rtc> stays open around its <rt>s
-    } else if (next.size() == 2 && next[0] == 'h' && next[1] >= '1' && next[1] <= '6') {
-      for (const char* heading : {"h1", "h2", "h3", "h4", "h5", "h6"}) close_open(heading);
+    } else if (is_heading(next)) {
+      // `<h1>` closes only a heading that is the current node, not one buried
+      // under a <div>: the spec pops exactly one.
+      if (is_heading(tag_of(current()))) stack_.pop_back();
     }
   }
 
@@ -618,6 +629,17 @@ class TreeBuilder {
     }
   }
 
+  /// "Table scope": the same walk as tag_in_scope(), but only html/table/template
+  /// stop it — a cell or a row does not.
+  [[nodiscard]] bool in_table_scope(std::string_view tag) const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view top = tag_of(stack_[i - 1]);
+      if (top == tag) return true;
+      if (top == "html" || top == "table" || top == "template") return false;
+    }
+    return false;
+  }
+
   /// True when `tag` is open above the nearest scope boundary.
   [[nodiscard]] bool tag_in_scope(std::string_view tag, bool list_scope = false) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
@@ -837,7 +859,7 @@ class TreeBuilder {
   /// "In table" end tags.
   bool table_end(std::string_view name) {
     if (name == "table") {
-      if (!tag_in_scope("table")) {
+      if (!in_table_scope("table")) {
         report("html.ignored_end_tag", "</table> without a table in scope");
         return true;
       }
@@ -869,6 +891,10 @@ class TreeBuilder {
     }
     if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
         name == "thead") {
+      if (!in_table_scope("tbody") && !in_table_scope("thead") && !in_table_scope("tfoot")) {
+        report("html.ignored_in_table", "<" + std::string(name) + "> ignored: no table body in scope");
+        return true;
+      }
       pop_through("tbody", "thead", "tfoot");
       handle_start_tag(token);  // reprocess in the "in table" mode
       return true;
@@ -878,11 +904,12 @@ class TreeBuilder {
 
   bool table_body_end(std::string_view name) {
     if (name == "tbody" || name == "tfoot" || name == "thead") {
-      if (!tag_in_scope(name)) return true;
+      if (!in_table_scope(name)) return true;
       pop_through(name);
       return true;
     }
     if (name == "table") {
+      if (!in_table_scope("tbody") && !in_table_scope("thead") && !in_table_scope("tfoot")) return true;
       pop_through("tbody", "thead", "tfoot");
       handle_end_tag_name(name);
       return true;
@@ -905,6 +932,10 @@ class TreeBuilder {
     }
     if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
         name == "thead" || name == "tr") {
+      if (!in_table_scope("tr")) {
+        report("html.ignored_in_table", "<" + std::string(name) + "> ignored: no row in scope");
+        return true;
+      }
       pop_through("tr");
       handle_start_tag(token);  // reprocess in the "in table body" mode
       return true;
@@ -914,7 +945,7 @@ class TreeBuilder {
 
   bool row_end(std::string_view name) {
     if (name == "tr") {
-      if (!tag_in_scope("tr")) return true;
+      if (!in_table_scope("tr")) return true;
       pop_through("tr");
       return true;
     }
@@ -924,7 +955,7 @@ class TreeBuilder {
       return true;
     }
     if (name == "tbody" || name == "tfoot" || name == "thead") {
-      if (!tag_in_scope(name)) return true;
+      if (!in_table_scope(name)) return true;
       pop_through("tr");
       handle_end_tag_name(name);
       return true;
@@ -941,14 +972,14 @@ class TreeBuilder {
     if (!is_table_part(token.name) || token.name == "td" || token.name == "th") {
       if (token.name == "caption" || token.name == "col" || token.name == "colgroup" || token.name == "tbody" ||
           token.name == "tfoot" || token.name == "thead" || token.name == "tr") {
-        if (!tag_in_scope("td") && !tag_in_scope("th")) return true;
+        if (!in_table_scope("td") && !in_table_scope("th")) return true;
         close_cell();
         handle_start_tag(token);
         return true;
       }
       return false;  // ordinary content inside a cell: "in body" rules
     }
-    if (!tag_in_scope("td") && !tag_in_scope("th")) return true;
+    if (!in_table_scope("td") && !in_table_scope("th")) return true;
     close_cell();
     handle_start_tag(token);
     return true;
@@ -956,12 +987,12 @@ class TreeBuilder {
 
   bool cell_end(std::string_view name) {
     if (name == "td" || name == "th") {
-      if (!tag_in_scope(name)) return true;
+      if (!in_table_scope(name)) return true;
       close_cell();
       return true;
     }
     if (name == "table" || name == "tbody" || name == "tfoot" || name == "thead" || name == "tr") {
-      if (!tag_in_scope(name)) return true;
+      if (!in_table_scope(name)) return true;
       close_cell();
       handle_end_tag_name(name);
       return true;
@@ -1093,6 +1124,23 @@ class TreeBuilder {
     }
   }
 
+  /// NUL characters reach the tree builder from the tokenizer (the data state
+  /// passes them through). "In body" ignores them, table text turns them into
+  /// U+FFFD — exactly what the spec asks for.
+  [[nodiscard]] static std::string sanitize_text(std::string_view text, bool replacement) {
+    if (text.find('\0') == std::string_view::npos) return std::string(text);
+    std::string out;
+    out.reserve(text.size());
+    for (const char c : text) {
+      if (c != '\0') {
+        out.push_back(c);
+      } else if (replacement) {
+        out.append("\xEF\xBF\xBD");  // U+FFFD
+      }
+    }
+    return out;
+  }
+
   void handle_characters(std::string_view text) {
     const std::string_view top = tag_of(current());
     if (top == "frameset" || top == "frame") {  // only whitespace survives here
@@ -1121,7 +1169,15 @@ class TreeBuilder {
       ensure_body();
     }
     const Mode current_mode = mode();
-    if (current_mode == Mode::Table || current_mode == Mode::TableBody || current_mode == Mode::Row) {
+    const bool in_table_text = current_mode == Mode::Table || current_mode == Mode::TableBody ||
+                               current_mode == Mode::Row;
+    std::string sanitized;  // keeps the cleaned text alive while we use the view
+    if (text.find('\0') != std::string_view::npos) {
+      sanitized = sanitize_text(text, in_table_text);
+      text = sanitized;
+    }
+    if (text.empty()) return;
+    if (in_table_text) {
       if (trim(text).empty()) {
         document_.append_text(current(), text);  // whitespace may stay inside the table
       } else {
@@ -1210,7 +1266,39 @@ class TreeBuilder {
     if (!body_created() && contains(kHeadElements, name)) {
       ensure_head();
       insert_element(token, true);
-      if (name == "template") {
+      if (name == "li" || name == "dd" || name == "dt") {
+      if (!tag_in_scope(name, true)) {
+        report("html.ignored_end_tag", "</" + std::string(name) + "> without a matching list item");
+        return;
+      }
+      generate_implied_end_tags(name);
+      pop_through(name);
+      return;
+    }
+    if (is_heading(name)) {
+      if (!tag_in_scope("h1") && !tag_in_scope("h2") && !tag_in_scope("h3") && !tag_in_scope("h4") &&
+          !tag_in_scope("h5") && !tag_in_scope("h6")) {
+        report("html.ignored_end_tag", "</" + std::string(name) + "> without an open heading");
+        return;
+      }
+      generate_implied_end_tags();
+      while (!stack_.empty()) {  // pop through whichever heading is open
+        const bool heading = is_heading(tag_of(stack_.back()));
+        stack_.pop_back();
+        if (heading) break;
+      }
+      return;
+    }
+    if (name == "button") {
+      if (!tag_in_scope("button")) {
+        report("html.ignored_end_tag", "</button> without an open button");
+        return;
+      }
+      generate_implied_end_tags();
+      pop_through("button");
+      return;
+    }
+    if (name == "template") {
         push_marker();
         template_modes_.push_back(Mode::Body);
       }
@@ -1406,6 +1494,38 @@ class TreeBuilder {
         report("html.ignored_in_select", "</" + std::string(name) + "> ignored inside <select>");
         return;
       }
+    }
+    if (name == "li" || name == "dd" || name == "dt") {
+      if (!tag_in_scope(name, true)) {
+        report("html.ignored_end_tag", "</" + std::string(name) + "> without a matching list item");
+        return;
+      }
+      generate_implied_end_tags(name);
+      pop_through(name);
+      return;
+    }
+    if (is_heading(name)) {
+      if (!tag_in_scope("h1") && !tag_in_scope("h2") && !tag_in_scope("h3") && !tag_in_scope("h4") &&
+          !tag_in_scope("h5") && !tag_in_scope("h6")) {
+        report("html.ignored_end_tag", "</" + std::string(name) + "> without an open heading");
+        return;
+      }
+      generate_implied_end_tags();
+      while (!stack_.empty()) {  // pop through whichever heading is open
+        const bool heading = is_heading(tag_of(stack_.back()));
+        stack_.pop_back();
+        if (heading) break;
+      }
+      return;
+    }
+    if (name == "button") {
+      if (!tag_in_scope("button")) {
+        report("html.ignored_end_tag", "</button> without an open button");
+        return;
+      }
+      generate_implied_end_tags();
+      pop_through("button");
+      return;
     }
     if (name == "template") {
       // Pop everything up to and including the template element, then drop the
