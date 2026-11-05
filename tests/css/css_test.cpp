@@ -294,3 +294,35 @@ BONK_TEST(css, float_accepts_the_logical_keywords) {
   REQUIRE(a.valid());
   CHECK(page.styles.get(page.document, a).float_side == css::FloatSide::Left);
 }
+
+BONK_TEST(css, overflow_shorthand_and_longhands) {
+  StyledPage page("<body><div id=a></div><div id=b></div><div id=c></div></body>",
+                  "#a { overflow: hidden } #b { overflow: hidden auto } #c { overflow-x: hidden }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  const dom::NodeId b = page.document.query_selector(page.document.root(), "#b");
+  const dom::NodeId c = page.document.query_selector(page.document.root(), "#c");
+  REQUIRE(a.valid() && b.valid() && c.valid());
+  CHECK(page.styles.get(page.document, a).overflow_x == css::Overflow::Hidden);
+  CHECK(page.styles.get(page.document, a).overflow_y == css::Overflow::Hidden);
+  CHECK(page.styles.get(page.document, a).clips_overflow());
+  CHECK(page.styles.get(page.document, b).overflow_x == css::Overflow::Hidden);
+  CHECK(page.styles.get(page.document, b).overflow_y == css::Overflow::Auto);
+  // CSS: a `visible` axis next to a clipping one computes to `auto`.
+  CHECK(page.styles.get(page.document, c).overflow_x == css::Overflow::Hidden);
+  CHECK(page.styles.get(page.document, c).overflow_y == css::Overflow::Auto);
+}
+
+BONK_TEST(css, overflow_clip_behaves_like_hidden) {
+  StyledPage page("<body><div id=a></div></body>", "#a { overflow: clip }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  REQUIRE(a.valid());
+  CHECK(page.styles.get(page.document, a).overflow_x == css::Overflow::Hidden);
+  CHECK(page.styles.get(page.document, a).overflow_y == css::Overflow::Hidden);
+}
+
+BONK_TEST(css, overflow_unknown_value_keeps_the_previous_one) {
+  StyledPage page("<body><div id=a></div></body>", "#a { overflow: hidden } #a { overflow: sideways }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  REQUIRE(a.valid());
+  CHECK(page.styles.get(page.document, a).overflow_x == css::Overflow::Hidden);
+}

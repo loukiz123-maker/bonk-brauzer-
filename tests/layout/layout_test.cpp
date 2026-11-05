@@ -507,3 +507,73 @@ BONK_TEST(layout, floated_image_inside_a_paragraph_wraps_the_text) {
   }
   CHECK(wrapped_back);
 }
+
+// --- overflow (stage 22) ------------------------------------------------------
+
+BONK_TEST(layout, overflow_hidden_clips_to_the_padding_box) {
+  LayoutFixture fixture("<div id=\"clip\"><div id=\"inner\"></div></div>",
+                        "div { display: block }"
+                        "#clip { width: 100px; height: 50px; padding: 5px; border: 2px solid #000; overflow: hidden }"
+                        "#inner { width: 300px; height: 300px }");
+  const layout::Box* clip = fixture.find_block("#clip");
+  REQUIRE(clip != nullptr);
+  REQUIRE(clip->has_clip);
+  // Padding box: the border is outside the clip, the padding inside.
+  CHECK_EQ(clip->clip.x, clip->border_box.x + clip->border[3]);
+  CHECK_EQ(clip->clip.y, clip->border_box.y + clip->border[0]);
+  CHECK_EQ(clip->clip.width, 100.0f + 10.0f);
+  CHECK_EQ(clip->clip.height, 50.0f + 10.0f);
+}
+
+BONK_TEST(layout, overflow_visible_does_not_clip) {
+  LayoutFixture fixture("<div id=\"no\">x</div>", "#no { width: 40px; height: 20px }");
+  const layout::Box* box = fixture.find_block("#no");
+  REQUIRE(box != nullptr);
+  CHECK(!box->has_clip);
+}
+
+BONK_TEST(layout, overflow_hidden_contains_floats) {
+  LayoutFixture fixture("<div id=\"bfc\"><div id=\"f\"></div></div><div id=\"after\">after</div>",
+                        "div { display: block }"
+                        "#bfc { overflow: hidden; width: 200px }"
+                        "#f { float: left; width: 50px; height: 45px }"
+                        "#after { height: 10px }");
+  const layout::Box* bfc = fixture.find_block("#bfc");
+  const layout::Box* after = fixture.find_block("#after");
+  REQUIRE(bfc != nullptr);
+  REQUIRE(after != nullptr);
+  // The BFC root grows to contain its float — the second way to "clear", next to
+  // `clear: both`. With `overflow: visible` this height would be 0 (see stage 21).
+  CHECK_EQ(bfc->border_box.height, 45.0f);
+  CHECK_EQ(after->border_box.y, 45.0f);
+}
+
+BONK_TEST(layout, a_single_axis_overflow_still_clips_both) {
+  LayoutFixture fixture("<div id=\"clip\"><div id=\"inner\"></div></div>",
+                        "div { display: block }"
+                        "#clip { width: 80px; height: 40px; overflow-x: hidden }"
+                        "#inner { width: 200px; height: 200px }");
+  const layout::Box* clip = fixture.find_block("#clip");
+  REQUIRE(clip != nullptr);
+  REQUIRE(clip->has_clip);
+  // `overflow-x: hidden` computes the other axis to `auto` (see the CSS test), and an
+  // `auto` axis clips as well: the clip is the padding box on both axes.
+  CHECK_EQ(clip->clip.width, 80.0f);
+  CHECK_EQ(clip->clip.height, 40.0f);
+}
+
+BONK_TEST(layout, hit_test_ignores_clipped_content) {
+  LayoutFixture fixture("<div id=\"clip\"><div id=\"inner\"></div></div>",
+                        "div { display: block }"
+                        "#clip { width: 60px; height: 30px; overflow: hidden }"
+                        "#inner { width: 200px; height: 200px }");
+  const dom::NodeId inner = fixture.document.query_selector(fixture.document.root(), "#inner");
+  REQUIRE(inner.valid());
+  // Inside the box the inner element wins (it is deeper) ...
+  const layout::Box* inside = layout::hit_test(fixture.result.root, 20.0f, 10.0f);
+  REQUIRE(inside != nullptr);
+  CHECK(inside->node == inner);
+  // ... but not outside the clip rectangle.
+  const layout::Box* outside = layout::hit_test(fixture.result.root, 120.0f, 100.0f);
+  CHECK(outside == nullptr);
+}

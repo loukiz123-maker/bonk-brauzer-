@@ -308,6 +308,53 @@ class StyleComputer {
       }
       return;
     }
+    if (property == "overflow" || property == "overflow-x" || property == "overflow-y") {
+      const auto parse_overflow = [](std::string_view keyword, Overflow& out) {
+        if (detail::equals_keyword(keyword, "visible")) {
+          out = Overflow::Visible;
+        } else if (detail::equals_keyword(keyword, "hidden")) {
+          out = Overflow::Hidden;
+        } else if (detail::equals_keyword(keyword, "clip")) {
+          out = Overflow::Hidden;  // `clip` forbids scrolling; we have no scrollers yet
+        } else if (detail::equals_keyword(keyword, "auto")) {
+          out = Overflow::Auto;
+        } else if (detail::equals_keyword(keyword, "scroll")) {
+          out = Overflow::Scroll;
+        } else {
+          return false;
+        }
+        return true;
+      };
+
+      std::size_t seen = 0;
+      for (const std::string_view piece : detail::split_top_level(value, ' ')) {
+        Overflow parsed = Overflow::Visible;
+        if (!parse_overflow(detail::trim_view(piece), parsed)) continue;
+        if (property == "overflow-x") {
+          style.overflow_x = parsed;
+          break;
+        }
+        if (property == "overflow-y") {
+          style.overflow_y = parsed;
+          break;
+        }
+        // `overflow: <x> [<y>]` — the second value defaults to the first.
+        if (seen == 0) {
+          style.overflow_x = parsed;
+          style.overflow_y = parsed;
+        } else {
+          style.overflow_y = parsed;
+        }
+        if (++seen == 2) break;
+      }
+      // CSS: if one axis is `visible` and the other is not, `visible` computes to `auto`.
+      if (style.overflow_x != Overflow::Visible && style.overflow_y == Overflow::Visible) {
+        style.overflow_y = Overflow::Auto;
+      } else if (style.overflow_y != Overflow::Visible && style.overflow_x == Overflow::Visible) {
+        style.overflow_x = Overflow::Auto;
+      }
+      return;
+    }
     if (property == "clear") {
       if (detail::equals_keyword(value, "left")) {
         style.clear = ClearSide::Left;

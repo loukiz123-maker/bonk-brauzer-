@@ -71,6 +71,11 @@ enum class Position { Static, Relative, Absolute, Fixed };
 
 /// `float`. `InlineStart`/`InlineEnd` from the modern spec collapse onto left/right.
 enum class FloatSide { None, Left, Right };
+
+/// `overflow`. `auto`/`scroll` scroll in a browser; here they clip the same way as
+/// `hidden` (nested scrollers are not implemented yet) but are kept distinct so the
+/// computed value is not lost.
+enum class Overflow { Visible, Hidden, Auto, Scroll };
 enum class ClearSide { None, Left, Right, Both };
 
 enum class TextAlign { Left, Right, Center, Justify };
@@ -116,6 +121,11 @@ struct ComputedStyle {
   FloatSide float_side = FloatSide::None;
   ClearSide clear = ClearSide::None;
 
+  // Overflow: anything but `visible` clips the box to its padding box and makes it a
+  // block formatting context (which is the other way to contain floats, next to clear).
+  Overflow overflow_x = Overflow::Visible;
+  Overflow overflow_y = Overflow::Visible;
+
   // Flexbox container / item properties.
   FlexDirection flex_direction = FlexDirection::Row;
   FlexWrap flex_wrap = FlexWrap::NoWrap;
@@ -142,6 +152,9 @@ struct ComputedStyle {
   }
 
   [[nodiscard]] bool is_floating() const noexcept { return float_side != FloatSide::None; }
+  [[nodiscard]] bool clips_overflow() const noexcept {
+    return overflow_x != Overflow::Visible || overflow_y != Overflow::Visible;
+  }
   [[nodiscard]] bool is_flex_container() const noexcept { return display == Display::Flex; }
   [[nodiscard]] bool is_grid_container() const noexcept { return display == Display::Grid; }
 

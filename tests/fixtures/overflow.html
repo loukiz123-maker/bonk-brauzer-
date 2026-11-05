@@ -1,0 +1,43 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>overflow</title>
+  <style>
+    body { margin: 0; background: #f4f4f6; font-family: sans-serif }
+    h1 { margin: 0; padding: 12px 16px; font-size: 17px; color: #ffffff; background: #1f2933 }
+    .row { padding: 16px }
+    .frame { width: 170px; height: 90px; margin-right: 12px; float: left; background: #ffffff; border: 1px solid #c8ccd4 }
+    .frame p { margin: 6px 0 0 6px; font-size: 12px; color: #52606d }
+    .window { width: 158px; height: 56px; margin: 6px; overflow: hidden }
+    .column { width: 158px }
+    .bar { height: 26px }
+    .clear { clear: both; height: 1px }
+  </style>
+</head>
+<body>
+  <h1>overflow: hidden clips to the padding box</h1>
+  <div class="row">
+    <div class="frame">
+      <p>overflow: hidden</p>
+      <div class="window">
+        <div class="column">
+          <div class="bar" style="background:#224466"></div>
+          <div class="bar" style="background:#446688"></div>
+          <div class="bar" style="background:#6688aa"></div>
+        </div>
+      </div>
+    </div>
+    <div class="frame">
+      <p>overflow: visible</p>
+      <div class="window" style="overflow:visible">
+        <div class="column">
+          <div class="bar" style="background:#224466"></div>
+          <div class="bar" style="background:#446688"></div>
+          <div class="bar" style="background:#6688aa"></div>
+        </div>
+      </div>
+    </div>
+    <div class="clear"></div>
+  </div>
+</body>
+</html>

@@ -1087,6 +1087,18 @@ class LayoutEngine {
     return std::max(0.0f, y - container.content_box.y - (row_count > 0 ? row_gap : 0.0f));
   }
 
+  /// `overflow: hidden|auto|scroll` clips to the padding box, so the clip rectangle is
+  /// only known once the box's height is final.
+  static void apply_clip(Box& box, const css::ComputedStyle& style) {
+    if (!style.clips_overflow()) return;
+    // CSS turns a `visible` axis into `auto` as soon as the other axis clips, so the
+    // clip is always the padding box on both axes.
+    box.clip = Rect{box.border_box.x + box.border[3], box.border_box.y + box.border[0],
+                    box.content_box.width + box.padding[1] + box.padding[3],
+                    box.content_box.height + box.padding[0] + box.padding[2]};
+    box.has_clip = true;
+  }
+
   // --- floats (stage 21) -------------------------------------------------
 
   /// An inline-block, an absolutely positioned box or a flex container starts a new
@@ -1203,6 +1215,7 @@ class LayoutEngine {
     box.content_box.height = total_height;
     box.border_box.height = total_height + box.padding[0] + box.padding[2] + box.border[0] + box.border[2];
 
+    apply_clip(box, style);
     floats_.push_back(FloatRect{box.border_box, style.float_side});
     return box;
   }
@@ -1343,6 +1356,8 @@ class LayoutEngine {
     total_height = std::max(total_height, style.min_height);
     box.content_box.height = total_height;
     box.border_box.height = total_height + box.padding[0] + box.padding[2] + box.border[0] + box.border[2];
+
+    apply_clip(box, style);
 
     const float top = style.inset[0].is_auto() ? -1.0f : resolve(style.inset[0], style.font_size, cb.height);
     const float bottom = style.inset[2].is_auto() ? -1.0f : resolve(style.inset[2], style.font_size, cb.height);
@@ -1506,16 +1521,29 @@ class LayoutEngine {
         const float content_x_child =
             style.display == css::Display::ListItem ? child_box.content_box.x + kListIndent : child_box.content_box.x;
 
+        const auto layout_children = [&]() -> float {
+          if (style.display == css::Display::Flex || style.display == css::Display::Grid ||
+              style.display == css::Display::TableRow) {
+            return layout_content(child_box, inner_width);
+          }
+          if (has_block_children(child)) {
+            // Mixed content: layout_block_children() already appends the element's
+            // loose inline content after its block children (see the comment there).
+            return layout_block_children(child_box, content_x_child, child_box.content_box.y, inner_width);
+          }
+          return layout_inline(child_box, content_x_child, child_box.content_box.y, inner_width);
+        };
+
         float height = 0.0f;
-        if (style.display == css::Display::Flex || style.display == css::Display::Grid ||
-            style.display == css::Display::TableRow) {
-          height = layout_content(child_box, inner_width);
-        } else if (has_block_children(child)) {
-          // Mixed content: layout_block_children() already appends the element's
-          // loose inline content after its block children (see the comment there).
-          height = layout_block_children(child_box, content_x_child, child_box.content_box.y, inner_width);
+        if (style.clips_overflow()) {
+          // The box is a block formatting context: outer floats do not reach in, and
+          // it contains its own floats (this is the second way to "clear", next to
+          // `clear: both`).
+          FloatGuard guard(floats_);
+          height = layout_children();
+          height = std::max(height, floats_bottom() - child_box.content_box.y);
         } else {
-          height = layout_inline(child_box, content_x_child, child_box.content_box.y, inner_width);
+          height = layout_children();
         }
 
         float explicit_height = -1.0f;
@@ -1533,6 +1561,7 @@ class LayoutEngine {
           child_box.has_marker = true;
           child_box.marker_x = child_box.content_box.x - kListIndent + 4.0f;
         }
+        apply_clip(child_box, style);
 
         y = child_box.border_box.bottom();
         previous_margin_bottom = child_box.margin[2];
@@ -1579,6 +1608,11 @@ namespace {
 const Box* hit_test_box(const Box& box, float x, float y, float scroll_y, bool in_fixed) {
   const bool is_fixed = in_fixed || box.fixed;
   const float point_y = is_fixed ? y - scroll_y : y;
+  // Clipped content is not there as far as the pointer is concerned.
+  if (box.has_clip && (x < box.clip.x || x >= box.clip.x + box.clip.width || point_y < box.clip.y ||
+                       point_y >= box.clip.y + box.clip.height)) {
+    return nullptr;
+  }
   // Positioned boxes paint above the flow, so they are hit first — from the highest
   // z-index down, which is the reverse of the paint order.
   if (!box.positioned.empty()) {

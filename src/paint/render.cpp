@@ -38,16 +38,40 @@ void paint_border(Canvas& canvas, const layout::Box& box, const Offset& offset) 
   }
 }
 
+void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
+               const Offset& offset);
+
 /// Paints a box's out-of-flow children in z-index order. Positioned boxes always go
 /// above the in-flow content of the box that contains them.
 void paint_positioned(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
                       const Offset& offset);
+
+/// Paints the content of `box` with its `overflow` clip in force. The box's own
+/// background and border are painted by the caller, *before* the clip: `overflow`
+/// clips the contents, not the box itself.
+void paint_children(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
+                    const Offset& offset) {
+  const Rect previous = canvas.clip();
+  if (box.has_clip) {
+    const Rect clip = to_paint_rect(box.clip, offset);
+    // Intersect with the clip already in force so nested clips nest properly.
+    const float x0 = std::max(clip.x, previous.x);
+    const float y0 = std::max(clip.y, previous.y);
+    const float x1 = std::min(clip.x + clip.width, previous.x + previous.width);
+    const float y1 = std::min(clip.y + clip.height, previous.y + previous.height);
+    canvas.set_clip(Rect{x0, y0, std::max(0.0f, x1 - x0), std::max(0.0f, y1 - y0)});
+  }
+  for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
+  paint_positioned(canvas, box, font, options, offset);
+  canvas.set_clip(previous);
+}
 
 void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
                const Offset& offset_in) {
   // `position: fixed` is anchored to the viewport, so the scroll offset must not
   // move it (the whole subtree is painted with a zero offset).
   const Offset offset = box.fixed ? Offset{0.0f, 0.0f} : offset_in;
+
   switch (box.kind) {
     case layout::BoxKind::Block: {
       if (box.style != nullptr) {
@@ -60,9 +84,8 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
           canvas.stroke_rect(to_paint_rect(box.border_box, offset), css::Color{255, 0, 200, 90}, 1.0f);
         }
       }
-      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
-      paint_positioned(canvas, box, font, options, offset);
-      return;
+      paint_children(canvas, box, font, options, offset);
+      break;
     }
     case layout::BoxKind::Text: {
       if (box.style == nullptr) return;
@@ -107,8 +130,7 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
       if (box.style != nullptr && box.style->background_color.a > 0) {
         canvas.fill_rect(to_paint_rect(box.border_box, offset), box.style->background_color);
       }
-      for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
-      paint_positioned(canvas, box, font, options, offset);
+      paint_children(canvas, box, font, options, offset);
       return;
     }
   }

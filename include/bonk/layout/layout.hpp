@@ -5,14 +5,15 @@
 // em/rem/%/auto resolution, list markers, inline-block images and canvases as
 // atomic inlines, (stage 5) flexbox + grid containers and (stage 20) positioning:
 // `position: relative | absolute | fixed` with `top/right/bottom/left`, containing
-// block resolution and `z-index` paint order.
+// block resolution and `z-index` paint order, (stage 21) floats + `clear`, and
+// (stage 22) `overflow` clipping with its block formatting context.
 //
 // Flexbox: row/column and their reverse, nowrap/wrap, justify-content, align-items,
 // gap, flex-grow/shrink/basis. Grid: explicit `grid-template-columns/rows` with
 // px/%/fr/auto and `repeat()`, auto-placement row by row, row/column gaps.
-// Not implemented yet: floats, `position: sticky`, overflow clipping, tables in the
-// HTML sense (only the `display: table*` boxes exist), bidi text, grid areas /
-// explicit placement (grid-column/grid-row).
+// Not implemented yet: `position: sticky`, nested scrollers (`overflow: auto/scroll`
+// clip but do not scroll), tables in the HTML sense (only the `display: table*` boxes
+// exist), bidi text, grid areas / explicit placement (grid-column/grid-row).
 #pragma once
 
 #include <string>
@@ -69,6 +70,10 @@ struct Box {
   bool out_of_flow = false;
   /// Anchored to the viewport: painting ignores the scroll offset.
   bool fixed = false;
+  /// `overflow` other than `visible`: the padding box becomes a clip rectangle for
+  /// painting and hit-testing (`clip` is set when `has_clip` is true).
+  bool has_clip = false;
+  Rect clip;
   int z_index = 0;  // effective z-index (0 unless `position` is not static and it is set)
 
   std::vector<Box> children;      // in-flow children, in document/paint order

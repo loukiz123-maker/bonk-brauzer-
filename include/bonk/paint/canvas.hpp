@@ -37,6 +37,12 @@ class Canvas {
   [[nodiscard]] const std::vector<std::uint8_t>& pixels() const noexcept { return pixels_; }
 
   void clear(css::Color color);
+  /// Restricts every following drawing operation to `rect` (intersected with the
+  /// canvas). Painting a clipped subtree sets this from the box's `overflow` clip and
+  /// restores the previous rectangle afterwards.
+  void set_clip(Rect rect);
+  void reset_clip();
+  [[nodiscard]] Rect clip() const noexcept;
   void fill_rect(Rect rect, css::Color color);
   void stroke_rect(Rect rect, css::Color color, float thickness);
   void blend_pixel(int x, int y, css::Color color);
@@ -57,6 +63,10 @@ class Canvas {
  private:
   int width_ = 0;
   int height_ = 0;
+  int clip_x0_ = 0;
+  int clip_y0_ = 0;
+  int clip_x1_ = 0;
+  int clip_y1_ = 0;
   std::vector<std::uint8_t> pixels_;
 };
 

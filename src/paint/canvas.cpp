@@ -80,7 +80,29 @@ std::uint8_t blend_channel(std::uint8_t destination, std::uint8_t source, float 
 Canvas::Canvas(int width, int height)
     : width_(std::max(1, width)),
       height_(std::max(1, height)),
+      // The clip starts as the whole canvas; `set_clip` narrows it for clipped subtrees.
+      clip_x1_(std::max(1, width)),
+      clip_y1_(std::max(1, height)),
       pixels_(static_cast<std::size_t>(std::max(1, width)) * static_cast<std::size_t>(std::max(1, height)) * 4, 255) {}
+
+void Canvas::set_clip(Rect rect) {
+  clip_x0_ = std::max(0, static_cast<int>(std::floor(rect.x)));
+  clip_y0_ = std::max(0, static_cast<int>(std::floor(rect.y)));
+  clip_x1_ = std::min(width_, static_cast<int>(std::ceil(rect.x + rect.width)));
+  clip_y1_ = std::min(height_, static_cast<int>(std::ceil(rect.y + rect.height)));
+}
+
+void Canvas::reset_clip() {
+  clip_x0_ = 0;
+  clip_y0_ = 0;
+  clip_x1_ = width_;
+  clip_y1_ = height_;
+}
+
+Rect Canvas::clip() const noexcept {
+  return Rect{static_cast<float>(clip_x0_), static_cast<float>(clip_y0_),
+              static_cast<float>(clip_x1_ - clip_x0_), static_cast<float>(clip_y1_ - clip_y0_)};
+}
 
 void Canvas::clear(css::Color color) {
   for (std::size_t i = 0; i < pixels_.size(); i += 4) {
@@ -92,7 +114,7 @@ void Canvas::clear(css::Color color) {
 }
 
 void Canvas::blend_pixel(int x, int y, css::Color color) {
-  if (x < 0 || y < 0 || x >= width_ || y >= height_) return;
+  if (x < clip_x0_ || y < clip_y0_ || x >= clip_x1_ || y >= clip_y1_) return;
   if (color.a == 0) return;
   const std::size_t index = (static_cast<std::size_t>(y) * static_cast<std::size_t>(width_) +
                              static_cast<std::size_t>(x)) * 4;
