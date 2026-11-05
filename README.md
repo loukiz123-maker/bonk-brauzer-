@@ -11,7 +11,8 @@ Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 и интерпретатором**, flexbox, grid, позиционирование (`relative`/`absolute`/`fixed`
 с `z-index`), floats с `clear` и `overflow` с обрезкой и BFC, дескрипторы свойств
 и статика `Object` (`defineProperty`/`keys`/`create`/`freeze`…), `Array.prototype`
-с обобщёнными методами, объект `arguments`, `eval`, Canvas 2D,
+с обобщёнными методами, прототипы `String`/`Number`/`Boolean` с обёртками,
+объект `arguments`, `eval`, Canvas 2D,
 формы с отправкой GET/POST,
 cookies и `localStorage`, Same-Origin Policy с CORS и CSP, процесс на вкладку
 через `fork()`+pipe, собственные devtools и прогон по внешним наборам тестов
@@ -60,7 +61,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 462 юнит-теста
+$ make test               # 472 юнит-теста
 $ make conformance        # прогон по html5lib-tests/test262/reftests -> docs/conformance.md
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j

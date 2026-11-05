@@ -119,6 +119,10 @@ struct Object {
   bool prototype_is_null = false;
   /// `arguments`: only affects `Object.prototype.toString` ([object Arguments]).
   bool is_arguments_object = false;
+  /// `new String('x')` / `new Number(1)` / `new Boolean(true)` wrappers: the boxed
+  /// primitive. Coercions unwrap it, `typeof` keeps saying "object".
+  bool is_wrapper = false;
+  Value wrapper_value;
   /// Set on a function's `prototype` object so `f.prototype.constructor === f`
   /// without a shared_ptr cycle (the prototype only *observes* the function).
   std::weak_ptr<Function> owner_function;

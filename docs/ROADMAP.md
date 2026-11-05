@@ -495,6 +495,28 @@ reftests 13/13, токенайзер 6 792/6 820 (99.6 %), tree construction
 strict-режим, `RegExp`/`Date`/`Promise`/`Symbol`.
 
 
+## Этап 25 — прототипы примитивов и обёртки
+
+Методы `String`, `Number` и `Boolean` переехали из значений в общие прототипы
+(тот же приём, что `Array.prototype` этапом раньше), поэтому заработали
+`String.prototype.trim.call(s)`, `"abc".constructor === String` и
+`Number.prototype.toFixed`. Появились обёртки `new String('x')` /
+`new Number(1)` / `new Boolean(true)` с корректными `typeof`,
+`Object.prototype.toString` и разворачиванием в приведениях, статика `String.fromCharCode`/
+`fromCodePoint` и `Number.MAX_SAFE_INTEGER`/`isInteger`/…, а также все составные
+присваивания (`<<=`, `>>=`, `>>>=`, `&=`, `|=`, `^=`, `**=`) с честными
+`ToInt32`/`ToUint32`. Подробности: [`docs/STAGE-25.md`](STAGE-25.md), решение —
+[`docs/adr/0027-primitive-prototypes-and-wrappers.md`](adr/0027-primitive-prototypes-and-wrappers.md).
+
+**Критерий выхода**: `String`/`Number`/`Boolean` перестают быть «методам на
+значении», а строковые операции покрывают то, что нужно странице. Сейчас: test262 —
+**5 130/14 759 (34.8 %)**, `String` — 24.8 % (было 12.7 %), reftests 13/13,
+токенайзер 6 792/6 820 (99.6 %), tree construction 1 792/1 792 (100 %),
+юнит-тестов **472**. Открыто: `Function.prototype`, `class`, деструктуризация,
+spread/`for-of`/`with`, strict-режим, UTF-16-семантика строк,
+`RegExp`/`Date`/`Promise`/`Symbol`/`Map`/`Set`.
+
+
 ---
 
 ## Риски и как их снимаем

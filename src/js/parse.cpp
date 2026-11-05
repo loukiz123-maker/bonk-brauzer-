@@ -218,7 +218,8 @@ struct Lexer {
       return token;
     }
 
-    static const char* kPunctuators[] = {"===", "!==", ">>>", "**=", "=>", "==", "!=", "<=", ">=", "&&", "||", "??",
+    static const char* kPunctuators[] = {"===", "!==", ">>>=", ">>>", "**=", "<<=", ">>=", "&=", "|=", "^=", "=>",
+                                         "==",  "!=",  "<=",   ">=",  "&&",  "||",  "??",
                                          "?.",  "++",  "--",  "+=",  "-=", "*=", "/=", "%=", "<<", ">>", "**",
         "{",   "}",   "(",   ")",   "[",   "]",   ";",   ",",   "<",   ">",   "+",  "-",  "*",  "/",  "%",
         "&",   "|",   "^",   "!",   "~",   "?",   ":",   "=",   "."};
@@ -593,6 +594,16 @@ struct Parser {
     return -1;
   }
 
+  /// `=`, the arithmetic compounds, the bitwise compounds and `**=`.
+  bool is_assignment_operator() const {
+    static const char* kOperators[] = {"=",  "+=", "-=", "*=",  "/=", "%=",
+                                       "<<=", ">>=", ">>>=", "&=", "|=", "^=", "**="};
+    for (const char* candidate : kOperators) {
+      if (is(candidate)) return true;
+    }
+    return false;
+  }
+
   /// Early error: only identifiers and member expressions may be assigned to
   /// (ES2015 12.14.1 AssignmentTargetType). `1 = 2`, `f() = 2`, `this = 1` and
   /// `(a, b) = 1` are SyntaxErrors, not runtime errors.
@@ -618,7 +629,7 @@ struct Parser {
 
   ExprPtr parse_assignment() {
     ExprPtr left = parse_binary(0);
-    if (is("=") || is("+=") || is("-=") || is("*=") || is("/=") || is("%=")) {
+    if (is_assignment_operator()) {
       auto assign = make(ExprKind::Assign);
       assign->text = take().text;
       if (assign->text == "=") {

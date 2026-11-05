@@ -336,6 +336,11 @@ struct RuntimeState {
   /// The one Array.prototype (stage 24): array methods live here, so
   /// `Array.prototype.slice.call(arguments)` works on any array-like.
   std::shared_ptr<Object> array_prototype;
+  /// Primitive prototypes (stage 25): string/number/boolean methods live here, so
+  /// `"abc".trim()` is `String.prototype.trim` and `.call` works on any receiver.
+  std::shared_ptr<Object> string_prototype;
+  std::shared_ptr<Object> number_prototype;
+  std::shared_ptr<Object> boolean_prototype;
 
   void log(ConsoleEntry::Level level, const std::string& message) {
     console.push_back(ConsoleEntry{level, message});
@@ -666,6 +671,54 @@ void read_descriptor(const Value& descriptor, DescriptorInput& out) {
   if (const auto attribute = read("configurable")) out.configurable = to_boolean(*attribute);
 }
 
+std::int32_t to_int32(const Value& value);
+std::uint32_t to_uint32(const Value& value);
+
+/// Arithmetic shared by binary expressions and compound assignments
+/// (`x <<= 1` must mean exactly `x = x << 1`).
+Value apply_arithmetic(const std::string& op, const Value& left, const Value& right) {
+  if (op == "+") {
+    if (left.is_string() || right.is_string()) return Value::string_of(to_string(left) + to_string(right));
+    return Value::number_of(to_number(left) + to_number(right));
+  }
+  if (op == "-") return Value::number_of(to_number(left) - to_number(right));
+  if (op == "*") return Value::number_of(to_number(left) * to_number(right));
+  if (op == "/") return Value::number_of(to_number(left) / to_number(right));
+  if (op == "%") return Value::number_of(std::fmod(to_number(left), to_number(right)));
+  if (op == "**") return Value::number_of(std::pow(to_number(left), to_number(right)));
+  if (op == "&") return Value::number_of(static_cast<double>(to_int32(left) & to_int32(right)));
+  if (op == "|") return Value::number_of(static_cast<double>(to_int32(left) | to_int32(right)));
+  if (op == "^") return Value::number_of(static_cast<double>(to_int32(left) ^ to_int32(right)));
+  if (op == "<<") return Value::number_of(static_cast<double>(to_int32(left) << (to_uint32(right) & 31)));
+  if (op == ">>") return Value::number_of(static_cast<double>(to_int32(left) >> (to_uint32(right) & 31)));
+  if (op == ">>>") {
+    return Value::number_of(static_cast<double>(to_uint32(left) >> (to_uint32(right) & 31)));
+  }
+  return Value::undefined();
+}
+
+/// ToInt32/ToUint32 (ES2015 7.1.5/7.1.6) — shifts and bitwise ops depend on them.
+std::int32_t to_int32(const Value& value) {
+  const double number = to_number(value);
+  if (!std::isfinite(number) || number == 0.0) return 0;
+  const double truncated = std::trunc(number);
+  const double wrapped = std::fmod(truncated, 4294967296.0);
+  const double positive = wrapped < 0 ? wrapped + 4294967296.0 : wrapped;
+  if (positive >= 2147483648.0) return static_cast<std::int32_t>(positive - 4294967296.0);
+  return static_cast<std::int32_t>(positive);
+}
+
+std::uint32_t to_uint32(const Value& value) { return static_cast<std::uint32_t>(to_int32(value)); }
+
+/// Operators `apply_arithmetic` implements.
+bool is_arithmetic_operator(const std::string& op) {
+  static const char* kOperators[] = {"+", "-", "*", "/", "%", "**", "&", "|", "^", "<<", ">>", ">>>"};
+  for (const char* candidate : kOperators) {
+    if (op == candidate) return true;
+  }
+  return false;
+}
+
 // ------------------------------------------------------------ interpreter ----
 
 class Interpreter {
@@ -752,132 +805,27 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   }
 
   if (object.is_string()) {
-    const std::string text = object.text;
+    const std::string& text = object.text;
     if (key == "length") return Value::number_of(static_cast<double>(text.size()));
-    if (key == "toUpperCase" || key == "toLowerCase") {
-      return native_value(key, [text, key](const std::vector<Value>&, Value) {
-        std::string out = text;
-        for (char& c : out) {
-          if (key == "toUpperCase" && c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
-          if (key == "toLowerCase" && c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
-        }
-        return Value::string_of(out);
-      });
-    }
-    if (key == "trim") {
-      return native_value("trim", [text](const std::vector<Value>&, Value) {
-        const std::size_t begin = text.find_first_not_of(" \t\n\r");
-        if (begin == std::string::npos) return Value::string_of(std::string());
-        const std::size_t end = text.find_last_not_of(" \t\n\r");
-        return Value::string_of(text.substr(begin, end - begin + 1));
-      });
-    }
-    if (key == "indexOf") {
-      return native_value("indexOf", [text](const std::vector<Value>& arguments, Value) {
-        const std::string needle = arguments.empty() ? std::string() : to_string(arguments[0]);
-        const std::size_t found = text.find(needle);
-        return Value::number_of(found == std::string::npos ? -1.0 : static_cast<double>(found));
-      });
-    }
-    if (key == "includes") {
-      return native_value("includes", [text](const std::vector<Value>& arguments, Value) {
-        const std::string needle = arguments.empty() ? std::string() : to_string(arguments[0]);
-        return Value::boolean_of(text.find(needle) != std::string::npos);
-      });
-    }
-    if (key == "startsWith") {
-      return native_value("startsWith", [text](const std::vector<Value>& arguments, Value) {
-        const std::string needle = arguments.empty() ? std::string() : to_string(arguments[0]);
-        return Value::boolean_of(text.rfind(needle, 0) == 0);
-      });
-    }
-    if (key == "endsWith") {
-      return native_value("endsWith", [text](const std::vector<Value>& arguments, Value) {
-        const std::string needle = arguments.empty() ? std::string() : to_string(arguments[0]);
-        return Value::boolean_of(text.size() >= needle.size() &&
-                                 text.compare(text.size() - needle.size(), needle.size(), needle) == 0);
-      });
-    }
-    if (key == "slice" || key == "substring") {
-      return native_value(key, [text](const std::vector<Value>& arguments, Value) {
-        const auto length = static_cast<long>(text.size());
-        long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
-        long end = arguments.size() < 2 ? length : static_cast<long>(to_number(arguments[1]));
-        if (begin < 0) begin = std::max(0L, length + begin);
-        if (end < 0) end = std::max(0L, length + end);
-        begin = std::min(begin, length);
-        end = std::min(end, length);
-        if (end < begin) std::swap(begin, end);
-        return Value::string_of(text.substr(static_cast<std::size_t>(begin), static_cast<std::size_t>(end - begin)));
-      });
-    }
-    if (key == "charAt") {
-      return native_value("charAt", [text](const std::vector<Value>& arguments, Value) {
-        const auto index = arguments.empty() ? 0 : static_cast<std::size_t>(to_number(arguments[0]));
-        if (index >= text.size()) return Value::string_of(std::string());
-        return Value::string_of(std::string(1, text[index]));
-      });
-    }
-    if (key == "split") {
-      return native_value("split", [text](const std::vector<Value>& arguments, Value) {
-        std::vector<Value> parts;
-        if (arguments.empty() || arguments[0].is_undefined()) {
-          parts.push_back(Value::string_of(text));
-        } else {
-          const std::string separator = to_string(arguments[0]);
-          if (separator.empty()) {
-            for (const char c : text) parts.push_back(Value::string_of(std::string(1, c)));
-          } else {
-            std::size_t start = 0;
-            for (;;) {
-              const std::size_t found = text.find(separator, start);
-              if (found == std::string::npos) {
-                parts.push_back(Value::string_of(text.substr(start)));
-                break;
-              }
-              parts.push_back(Value::string_of(text.substr(start, found - start)));
-              start = found + separator.size();
-            }
-          }
-        }
-        return Value::object_of(make_array(std::move(parts)));
-      });
-    }
-    if (key == "replace") {
-      return native_value("replace", [text](const std::vector<Value>& arguments, Value) {
-        if (arguments.size() < 2) return Value::string_of(text);
-        const std::string needle = to_string(arguments[0]);
-        const std::string replacement = to_string(arguments[1]);
-        const std::size_t found = text.find(needle);
-        if (found == std::string::npos) return Value::string_of(text);
-        return Value::string_of(text.substr(0, found) + replacement + text.substr(found + needle.size()));
-      });
-    }
-    if (key == "toString" || key == "valueOf") {
-      return native_value(key, [text](const std::vector<Value>&, Value) { return Value::string_of(text); });
-    }
     std::size_t index = 0;
-    if (is_array_index(key, index)) {
-      if (index < text.size()) return Value::string_of(std::string(1, text[index]));
-    }
+    if (is_array_index(key, index) && index < text.size()) return Value::string_of(std::string(1, text[index]));
+    Value found;
+    if (runtime_.string_prototype != nullptr && lookup_property(runtime_.string_prototype, key, found)) return found;
+    if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found)) return found;
     return Value::undefined();
   }
 
   if (object.is_number()) {
-    const double number = object.number;
-    if (key == "toFixed") {
-      return native_value("toFixed", [number](const std::vector<Value>& arguments, Value) {
-        const int digits = arguments.empty() ? 0 : static_cast<int>(to_number(arguments[0]));
-        char buffer[64];
-        std::snprintf(buffer, sizeof(buffer), "%.*f", std::max(0, std::min(20, digits)), number);
-        return Value::string_of(buffer);
-      });
-    }
-    if (key == "toString" || key == "valueOf") {
-      return native_value(key, [number](const std::vector<Value>&, Value) {
-        return Value::string_of(number_to_raw_string(number));
-      });
-    }
+    Value found;
+    if (runtime_.number_prototype != nullptr && lookup_property(runtime_.number_prototype, key, found)) return found;
+    if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found)) return found;
+    return Value::undefined();
+  }
+
+  if (object.is_boolean()) {
+    Value found;
+    if (runtime_.boolean_prototype != nullptr && lookup_property(runtime_.boolean_prototype, key, found)) return found;
+    if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found)) return found;
     return Value::undefined();
   }
 
@@ -888,6 +836,16 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
     if (key == "length") return Value::number_of(static_cast<double>(target->elements.size()));
     std::size_t index = 0;
     if (is_array_index(key, index) && index < target->elements.size()) return target->elements[index];
+  }
+
+  if (target->is_wrapper && target->wrapper_value.is_string() && key == "length") {
+    return Value::number_of(static_cast<double>(target->wrapper_value.text.size()));
+  }
+  if (target->is_wrapper && target->wrapper_value.is_string()) {
+    std::size_t index = 0;
+    if (is_array_index(key, index) && index < target->wrapper_value.text.size()) {
+      return Value::string_of(std::string(1, target->wrapper_value.text[index]));
+    }
   }
 
   Value found;
@@ -1428,15 +1386,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       const std::string& op = expression->text;
       const Value left = eval(expression->children[0], scope);
       const Value right = eval(expression->children[1], scope);
-      if (op == "+") {
-        if (left.is_string() || right.is_string()) return Value::string_of(to_string(left) + to_string(right));
-        return Value::number_of(to_number(left) + to_number(right));
-      }
-      if (op == "-") return Value::number_of(to_number(left) - to_number(right));
-      if (op == "*") return Value::number_of(to_number(left) * to_number(right));
-      if (op == "/") return Value::number_of(to_number(left) / to_number(right));
-      if (op == "%") return Value::number_of(std::fmod(to_number(left), to_number(right)));
-      if (op == "**") return Value::number_of(std::pow(to_number(left), to_number(right)));
+      if (is_arithmetic_operator(op)) return apply_arithmetic(op, left, right);
       if (op == "==") return Value::boolean_of(loose_equals(left, right));
       if (op == "!=") return Value::boolean_of(!loose_equals(left, right));
       if (op == "===") return Value::boolean_of(strict_equals(left, right));
@@ -1508,19 +1458,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
           current_value = get_member(object, key);
         }
         const std::string op = expression->text.substr(0, expression->text.size() - 1);
-        if (op == "+" && (current_value.is_string() || value.is_string())) {
-          value = Value::string_of(to_string(current_value) + to_string(value));
-        } else if (op == "+") {
-          value = Value::number_of(to_number(current_value) + to_number(value));
-        } else if (op == "-") {
-          value = Value::number_of(to_number(current_value) - to_number(value));
-        } else if (op == "*") {
-          value = Value::number_of(to_number(current_value) * to_number(value));
-        } else if (op == "/") {
-          value = Value::number_of(to_number(current_value) / to_number(value));
-        } else if (op == "%") {
-          value = Value::number_of(std::fmod(to_number(current_value), to_number(value)));
-        }
+        value = apply_arithmetic(op, current_value, value);
       }
 
       if (target->kind == ast::ExprKind::Identifier) {
@@ -1668,15 +1606,467 @@ void install_builtins(RuntimeState& runtime) {
     return Value::boolean_of(arguments.empty() || std::isnan(to_number(arguments[0])));
   });
 
-  global->variables["Number"] = native_value("Number", [](const std::vector<Value>& arguments, Value) {
-    return Value::number_of(arguments.empty() ? 0.0 : to_number(arguments[0]));
+  // Builtins are installed before Object.prototype below, but the primitive
+  // prototypes need it as their own prototype link; that is patched at the end.
+  runtime.string_prototype = std::make_shared<Object>();
+  runtime.number_prototype = std::make_shared<Object>();
+  runtime.boolean_prototype = std::make_shared<Object>();
+  const std::shared_ptr<Object> string_prototype = runtime.string_prototype;
+  const std::shared_ptr<Object> number_prototype = runtime.number_prototype;
+  const std::shared_ptr<Object> boolean_prototype = runtime.boolean_prototype;
+
+  // `this` of a String/Number/Boolean prototype method: a primitive or its wrapper.
+  auto string_this = [](const Value& this_value, const char* method) -> std::string {
+    if (this_value.is_string()) return this_value.text;
+    if (this_value.is_object() && this_value.object != nullptr && this_value.object->is_wrapper &&
+        this_value.object->wrapper_value.is_string()) {
+      return this_value.object->wrapper_value.text;
+    }
+    throw thrown(type_error(std::string("String.prototype.") + method + " called on " +
+                            typeof_string(this_value)));
+  };
+  auto number_this = [](const Value& this_value, const char* method) -> double {
+    if (this_value.is_number()) return this_value.number;
+    if (this_value.is_object() && this_value.object != nullptr && this_value.object->is_wrapper &&
+        this_value.object->wrapper_value.is_number()) {
+      return this_value.object->wrapper_value.number;
+    }
+    throw thrown(type_error(std::string("Number.prototype.") + method + " called on " +
+                            typeof_string(this_value)));
+  };
+  auto boolean_this = [](const Value& this_value, const char* method) -> bool {
+    if (this_value.is_boolean()) return this_value.boolean;
+    if (this_value.is_object() && this_value.object != nullptr && this_value.object->is_wrapper &&
+        this_value.object->wrapper_value.is_boolean()) {
+      return this_value.object->wrapper_value.boolean;
+    }
+    throw thrown(type_error(std::string("Boolean.prototype.") + method + " called on " +
+                            typeof_string(this_value)));
+  };
+
+  // ---- String.prototype ----
+  auto add_string_method = [&](const char* name, Function::Native native) {
+    string_prototype->properties[name] = Property{native_value(name, std::move(native))};
+  };
+  add_string_method("toString", [string_this](const std::vector<Value>&, Value this_value) {
+    return Value::string_of(string_this(this_value, "toString"));
   });
-  global->variables["String"] = native_value("String", [](const std::vector<Value>& arguments, Value) {
-    return Value::string_of(arguments.empty() ? std::string() : to_string(arguments[0]));
+  add_string_method("valueOf", [string_this](const std::vector<Value>&, Value this_value) {
+    return Value::string_of(string_this(this_value, "valueOf"));
   });
-  global->variables["Boolean"] = native_value("Boolean", [](const std::vector<Value>& arguments, Value) {
-    return Value::boolean_of(!arguments.empty() && to_boolean(arguments[0]));
+  for (const char* name : {"toUpperCase", "toLowerCase"}) {
+    const std::string method = name;
+    const bool upper = method == "toUpperCase";
+    add_string_method(name, [string_this, upper, method](const std::vector<Value>&, Value this_value) {
+      std::string text = string_this(this_value, method.c_str());
+      for (char& c : text) {
+        if (upper && c >= 'a' && c <= 'z') c = static_cast<char>(c - 'a' + 'A');
+        if (!upper && c >= 'A' && c <= 'Z') c = static_cast<char>(c - 'A' + 'a');
+      }
+      return Value::string_of(text);
+    });
+  }
+  for (const char* name : {"trim", "trimStart", "trimEnd"}) {
+    const std::string method = name;
+    const bool left = method != "trimEnd";
+    const bool right = method != "trimStart";
+    add_string_method(name, [string_this, left, right, method](const std::vector<Value>&, Value this_value) {
+      const std::string text = string_this(this_value, method.c_str());
+      std::size_t begin = 0;
+      std::size_t end = text.size();
+      if (left) {
+        while (begin < end && (text[begin] == ' ' || text[begin] == '\t' || text[begin] == '\n' ||
+                              text[begin] == '\r')) {
+          ++begin;
+        }
+      }
+      if (right) {
+        while (end > begin && (text[end - 1] == ' ' || text[end - 1] == '\t' || text[end - 1] == '\n' ||
+                               text[end - 1] == '\r')) {
+          --end;
+        }
+      }
+      return Value::string_of(text.substr(begin, end - begin));
+    });
+  }
+  add_string_method("charAt", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "charAt");
+    const double raw = arguments.empty() ? 0.0 : to_number(arguments[0]);
+    if (!(raw >= 0.0)) return Value::string_of(std::string());
+    const auto index = static_cast<std::size_t>(raw);
+    if (index >= text.size()) return Value::string_of(std::string());
+    return Value::string_of(std::string(1, text[index]));
   });
+  add_string_method("charCodeAt", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "charCodeAt");
+    const double raw = arguments.empty() ? 0.0 : to_number(arguments[0]);
+    if (!(raw >= 0.0)) return Value::number_of(std::nan(""));
+    const auto index = static_cast<std::size_t>(raw);
+    if (index >= text.size()) return Value::number_of(std::nan(""));
+    return Value::number_of(static_cast<double>(static_cast<unsigned char>(text[index])));
+  });
+  add_string_method("codePointAt", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "codePointAt");
+    const auto index = arguments.empty() ? 0.0 : to_number(arguments[0]);
+    if (!(index >= 0.0) || static_cast<std::size_t>(index) >= text.size()) return Value::undefined();
+    return Value::number_of(static_cast<double>(static_cast<unsigned char>(text[static_cast<std::size_t>(index)])));
+  });
+  add_string_method("at", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "at");
+    const auto length = static_cast<long>(text.size());
+    long index = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    if (index < 0) index += length;
+    if (index < 0 || index >= length) return Value::undefined();
+    return Value::string_of(std::string(1, text[static_cast<std::size_t>(index)]));
+  });
+  add_string_method("indexOf", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "indexOf");
+    const std::string needle = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    std::size_t from = 0;
+    if (arguments.size() > 1) {
+      const double position = to_number(arguments[1]);
+      if (position > 0.0) from = std::min(text.size(), static_cast<std::size_t>(position));
+    }
+    const std::size_t found = text.find(needle, from);
+    return Value::number_of(found == std::string::npos ? -1.0 : static_cast<double>(found));
+  });
+  add_string_method("lastIndexOf", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "lastIndexOf");
+    const std::string needle = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    const std::size_t found = text.rfind(needle);
+    return Value::number_of(found == std::string::npos ? -1.0 : static_cast<double>(found));
+  });
+  add_string_method("includes", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "includes");
+    const std::string needle = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    return Value::boolean_of(text.find(needle) != std::string::npos);
+  });
+  add_string_method("startsWith", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "startsWith");
+    const std::string needle = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    return Value::boolean_of(text.rfind(needle, 0) == 0);
+  });
+  add_string_method("endsWith", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "endsWith");
+    const std::string needle = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    return Value::boolean_of(text.size() >= needle.size() &&
+                             text.compare(text.size() - needle.size(), needle.size(), needle) == 0);
+  });
+  add_string_method("concat", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    std::string text = string_this(this_value, "concat");
+    for (const Value& argument : arguments) text += to_string(argument);
+    return Value::string_of(text);
+  });
+  add_string_method("slice", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "slice");
+    const auto length = static_cast<long>(text.size());
+    long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    long end = arguments.size() < 2 || arguments[1].is_undefined() ? length
+                                                                  : static_cast<long>(to_number(arguments[1]));
+    if (begin < 0) begin = std::max(0L, length + begin);
+    if (end < 0) end = std::max(0L, length + end);
+    begin = std::min(begin, length);
+    end = std::min(end, length);
+    if (end < begin) end = begin;
+    return Value::string_of(text.substr(static_cast<std::size_t>(begin), static_cast<std::size_t>(end - begin)));
+  });
+  add_string_method("substring", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "substring");
+    const auto length = static_cast<long>(text.size());
+    long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    long end = arguments.size() < 2 || arguments[1].is_undefined() ? length
+                                                                  : static_cast<long>(to_number(arguments[1]));
+    begin = std::max(0L, std::min(begin, length));
+    end = std::max(0L, std::min(end, length));
+    if (end < begin) std::swap(begin, end);
+    return Value::string_of(text.substr(static_cast<std::size_t>(begin), static_cast<std::size_t>(end - begin)));
+  });
+  add_string_method("substr", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "substr");
+    const auto length = static_cast<long>(text.size());
+    long begin = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    if (begin < 0) begin = std::max(0L, length + begin);
+    begin = std::min(begin, length);
+    long count = arguments.size() < 2 || arguments[1].is_undefined() ? length - begin
+                                                                    : static_cast<long>(to_number(arguments[1]));
+    count = std::max(0L, std::min(count, length - begin));
+    return Value::string_of(text.substr(static_cast<std::size_t>(begin), static_cast<std::size_t>(count)));
+  });
+  for (const char* name : {"padStart", "padEnd"}) {
+    const std::string method = name;
+    const bool start = method == "padStart";
+    add_string_method(name, [string_this, start, method](const std::vector<Value>& arguments, Value this_value) {
+      std::string text = string_this(this_value, method.c_str());
+      const auto target = arguments.empty() ? 0L : static_cast<long>(to_number(arguments[0]));
+      const std::string filler = arguments.size() > 1 ? to_string(arguments[1]) : std::string(" ");
+      if (target <= static_cast<long>(text.size()) || filler.empty()) return Value::string_of(text);
+      std::string padding;
+      while (static_cast<long>(text.size() + padding.size()) < target) padding += filler;
+      padding.resize(static_cast<std::size_t>(target) - text.size());
+      return Value::string_of(start ? padding + text : text + padding);
+    });
+  }
+  add_string_method("repeat", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "repeat");
+    const long count = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    if (count < 0) throw thrown(make_error("RangeError", "Invalid count value"));
+    std::string out;
+    for (long i = 0; i < count; ++i) out += text;
+    return Value::string_of(out);
+  });
+  add_string_method("split", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "split");
+    const long limit = arguments.size() > 1 && !arguments[1].is_undefined()
+                           ? static_cast<long>(to_number(arguments[1]))
+                           : -1;
+    std::vector<Value> parts;
+    auto push = [&parts, limit](std::string part) {
+      if (limit >= 0 && static_cast<long>(parts.size()) >= limit) return;
+      parts.push_back(Value::string_of(std::move(part)));
+    };
+    if (arguments.empty() || arguments[0].is_undefined()) {
+      push(text);
+    } else {
+      const std::string separator = to_string(arguments[0]);
+      if (separator.empty()) {
+        for (const char c : text) push(std::string(1, c));
+      } else {
+        std::size_t start = 0;
+        for (;;) {
+          const std::size_t found = text.find(separator, start);
+          if (found == std::string::npos) {
+            push(text.substr(start));
+            break;
+          }
+          push(text.substr(start, found - start));
+          start = found + separator.size();
+        }
+      }
+    }
+    return Value::object_of(make_array(std::move(parts)));
+  });
+  // String patterns only (RegExp is not implemented): a string is replaced once,
+  // a function receives (match, offset, whole).
+  add_string_method("replace", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "replace");
+    if (arguments.size() < 2) return Value::string_of(text);
+    const std::string needle = to_string(arguments[0]);
+    const std::size_t found = text.find(needle);
+    if (found == std::string::npos) return Value::string_of(text);
+    std::string replacement;
+    if (arguments[1].type == ValueType::Function) {
+      replacement = to_string(call_function(arguments[1], Value::undefined(),
+                                            {Value::string_of(needle),
+                                             Value::number_of(static_cast<double>(found)),
+                                             Value::string_of(text)}));
+    } else {
+      replacement = to_string(arguments[1]);
+    }
+    return Value::string_of(text.substr(0, found) + replacement + text.substr(found + needle.size()));
+  });
+  add_string_method("localeCompare", [string_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = string_this(this_value, "localeCompare");
+    const std::string other = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+    return Value::number_of(text < other ? -1.0 : (text > other ? 1.0 : 0.0));
+  });
+  add_string_method("toStringTagProbe", [](const std::vector<Value>&, Value) { return Value::undefined(); });
+  string_prototype->properties.erase("toStringTagProbe");
+
+  // ---- Number.prototype ----
+  auto add_number_method = [&](const char* name, Function::Native native) {
+    number_prototype->properties[name] = Property{native_value(name, std::move(native))};
+  };
+  add_number_method("valueOf", [number_this](const std::vector<Value>&, Value this_value) {
+    return Value::number_of(number_this(this_value, "valueOf"));
+  });
+  add_number_method("toString", [number_this](const std::vector<Value>& arguments, Value this_value) {
+    const double number = number_this(this_value, "toString");
+    const int radix = arguments.empty() || arguments[0].is_undefined() ? 10
+                                                                      : static_cast<int>(to_number(arguments[0]));
+    if (radix < 2 || radix > 36) throw thrown(make_error("RangeError", "toString() radix must be between 2 and 36"));
+    if (radix == 10) return Value::string_of(number_to_raw_string(number));
+    if (!std::isfinite(number) || std::trunc(number) != number) return Value::string_of(number_to_raw_string(number));
+    double remaining = std::fabs(number);
+    std::string digits;
+    do {
+      const int digit = static_cast<int>(std::fmod(remaining, static_cast<double>(radix)));
+      digits.insert(digits.begin(), static_cast<char>(digit < 10 ? '0' + digit : 'a' + digit - 10));
+      remaining = std::floor(remaining / static_cast<double>(radix));
+    } while (remaining >= 1.0);
+    return Value::string_of((number < 0 ? "-" : "") + digits);
+  });
+  add_number_method("toFixed", [number_this](const std::vector<Value>& arguments, Value this_value) {
+    const double number = number_this(this_value, "toFixed");
+    const int digits = arguments.empty() ? 0 : static_cast<int>(to_number(arguments[0]));
+    if (digits < 0 || digits > 20) throw thrown(make_error("RangeError", "toFixed() digits out of range"));
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*f", digits, number);
+    return Value::string_of(buffer);
+  });
+  add_number_method("toPrecision", [number_this](const std::vector<Value>& arguments, Value this_value) {
+    const double number = number_this(this_value, "toPrecision");
+    if (arguments.empty() || arguments[0].is_undefined()) return Value::string_of(number_to_raw_string(number));
+    const int precision = static_cast<int>(to_number(arguments[0]));
+    if (precision < 1 || precision > 21) throw thrown(make_error("RangeError", "toPrecision() out of range"));
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, number);
+    return Value::string_of(buffer);
+  });
+  add_number_method("toExponential", [number_this](const std::vector<Value>& arguments, Value this_value) {
+    const double number = number_this(this_value, "toExponential");
+    const int digits = arguments.empty() || arguments[0].is_undefined() ? 6
+                                                                       : static_cast<int>(to_number(arguments[0]));
+    char buffer[64];
+    std::snprintf(buffer, sizeof(buffer), "%.*e", digits, number);
+    return Value::string_of(buffer);
+  });
+
+  // ---- Boolean.prototype ----
+  boolean_prototype->properties["valueOf"] = Property{native_value(
+      "valueOf", [boolean_this](const std::vector<Value>&, Value this_value) {
+        return Value::boolean_of(boolean_this(this_value, "valueOf"));
+      })};
+  boolean_prototype->properties["toString"] = Property{native_value(
+      "toString", [boolean_this](const std::vector<Value>&, Value this_value) {
+        return Value::string_of(boolean_this(this_value, "toString") ? "true" : "false");
+      })};
+
+  const Value number_constructor = native_value("Number", [](const std::vector<Value>& arguments, Value this_value) {
+    const double number = arguments.empty() ? 0.0 : to_number(arguments[0]);
+    if (this_value.is_object() && this_value.object != nullptr) {
+      this_value.object->is_wrapper = true;
+      this_value.object->wrapper_value = Value::number_of(number);
+    }
+    return Value::number_of(number);
+  });
+  number_constructor.function->prototype_object = number_prototype;
+  number_prototype->owner_function = number_constructor.function;
+  number_constructor.function->statics = std::make_shared<Object>();
+  auto add_number_static = [&](const char* name, Value value) {
+    number_constructor.function->statics->properties[name] = Property{std::move(value)};
+  };
+  add_number_static("MAX_VALUE", Value::number_of(1.7976931348623157e308));
+  add_number_static("MIN_VALUE", Value::number_of(5e-324));
+  add_number_static("EPSILON", Value::number_of(2.220446049250313e-16));
+  add_number_static("MAX_SAFE_INTEGER", Value::number_of(9007199254740991.0));
+  add_number_static("MIN_SAFE_INTEGER", Value::number_of(-9007199254740991.0));
+  add_number_static("POSITIVE_INFINITY", Value::number_of(INFINITY));
+  add_number_static("NEGATIVE_INFINITY", Value::number_of(-INFINITY));
+  add_number_static("NaN", Value::number_of(std::nan("")));
+  add_number_static("isNaN", native_value("isNaN", [](const std::vector<Value>& arguments, Value) {
+                      return Value::boolean_of(arguments.empty() ||
+                                               (arguments[0].is_number() && std::isnan(arguments[0].number)));
+                    }));
+  add_number_static("isFinite", native_value("isFinite", [](const std::vector<Value>& arguments, Value) {
+                      return Value::boolean_of(!arguments.empty() && arguments[0].is_number() &&
+                                               std::isfinite(arguments[0].number));
+                    }));
+  add_number_static("isInteger", native_value("isInteger", [](const std::vector<Value>& arguments, Value) {
+                      return Value::boolean_of(!arguments.empty() && arguments[0].is_number() &&
+                                               std::isfinite(arguments[0].number) &&
+                                               std::trunc(arguments[0].number) == arguments[0].number);
+                    }));
+  add_number_static("parseFloat", native_value("parseFloat", [](const std::vector<Value>& arguments, Value) {
+                      if (arguments.empty()) return Value::number_of(std::nan(""));
+                      return Value::number_of(to_number(Value::string_of(to_string(arguments[0]))));
+                    }));
+  add_number_static("parseInt", native_value("parseInt", [](const std::vector<Value>& arguments, Value) {
+                      if (arguments.empty()) return Value::number_of(std::nan(""));
+                      const std::string text = to_string(arguments[0]);
+                      const int base = arguments.size() > 1 ? static_cast<int>(to_number(arguments[1])) : 10;
+                      if (base < 2 || base > 36) return Value::number_of(std::nan(""));
+                      std::size_t position = 0;
+                      while (position < text.size() && (text[position] == ' ' || text[position] == '\t')) ++position;
+                      bool negative = false;
+                      if (position < text.size() && (text[position] == '-' || text[position] == '+')) {
+                        negative = text[position] == '-';
+                        ++position;
+                      }
+                      double result = 0.0;
+                      bool any = false;
+                      while (position < text.size()) {
+                        const char c = text[position];
+                        int digit = -1;
+                        if (c >= '0' && c <= '9') digit = c - '0';
+                        else if (c >= 'a' && c <= 'z') digit = c - 'a' + 10;
+                        else if (c >= 'A' && c <= 'Z') digit = c - 'A' + 10;
+                        if (digit < 0 || digit >= base) break;
+                        result = result * base + digit;
+                        any = true;
+                        ++position;
+                      }
+                      if (!any) return Value::number_of(std::nan(""));
+                      return Value::number_of(negative ? -result : result);
+                    }));
+  global->variables["Number"] = number_constructor;
+
+  const Value string_constructor = native_value("String", [](const std::vector<Value>& arguments, Value this_value) {
+    const std::string text = arguments.empty() ? std::string() : to_string(arguments[0]);
+    if (this_value.is_object() && this_value.object != nullptr) {
+      this_value.object->is_wrapper = true;
+      this_value.object->wrapper_value = Value::string_of(text);
+    }
+    return Value::string_of(text);
+  });
+  string_constructor.function->prototype_object = string_prototype;
+  string_prototype->owner_function = string_constructor.function;
+  string_constructor.function->statics = std::make_shared<Object>();
+  string_constructor.function->statics->properties["fromCharCode"] = Property{native_value(
+      "fromCharCode", [](const std::vector<Value>& arguments, Value) {
+        std::string text;
+        for (const Value& argument : arguments) {
+          const auto code = static_cast<unsigned long>(to_number(argument));
+          const unsigned long code_unit = code % 65536;
+          if (code_unit < 0x80) {
+            text.push_back(static_cast<char>(code_unit));
+          } else if (code_unit < 0x800) {
+            text.push_back(static_cast<char>(0xC0 | (code_unit >> 6)));
+            text.push_back(static_cast<char>(0x80 | (code_unit & 0x3F)));
+          } else {
+            text.push_back(static_cast<char>(0xE0 | (code_unit >> 12)));
+            text.push_back(static_cast<char>(0x80 | ((code_unit >> 6) & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code_unit & 0x3F)));
+          }
+        }
+        return Value::string_of(text);
+      })};
+  string_constructor.function->statics->properties["fromCodePoint"] = Property{native_value(
+      "fromCodePoint", [](const std::vector<Value>& arguments, Value) {
+        std::string text;
+        for (const Value& argument : arguments) {
+          const long code = static_cast<long>(to_number(argument));
+          if (code < 0 || code > 0x10FFFF) throw thrown(make_error("RangeError", "Invalid code point"));
+          if (code < 0x80) {
+            text.push_back(static_cast<char>(code));
+          } else if (code < 0x800) {
+            text.push_back(static_cast<char>(0xC0 | (code >> 6)));
+            text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+          } else if (code < 0x10000) {
+            text.push_back(static_cast<char>(0xE0 | (code >> 12)));
+            text.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+          } else {
+            text.push_back(static_cast<char>(0xF0 | (code >> 18)));
+            text.push_back(static_cast<char>(0x80 | ((code >> 12) & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | ((code >> 6) & 0x3F)));
+            text.push_back(static_cast<char>(0x80 | (code & 0x3F)));
+          }
+        }
+        return Value::string_of(text);
+      })};
+  global->variables["String"] = string_constructor;
+
+  const Value boolean_constructor = native_value("Boolean", [](const std::vector<Value>& arguments, Value this_value) {
+    const bool value = !arguments.empty() && to_boolean(arguments[0]);
+    if (this_value.is_object() && this_value.object != nullptr) {
+      this_value.object->is_wrapper = true;
+      this_value.object->wrapper_value = Value::boolean_of(value);
+    }
+    return Value::boolean_of(value);
+  });
+  boolean_constructor.function->prototype_object = boolean_prototype;
+  boolean_prototype->owner_function = boolean_constructor.function;
+  global->variables["Boolean"] = boolean_constructor;
   const Value array_constructor = native_value("Array", [](const std::vector<Value>& arguments, Value) {
     if (arguments.size() == 1 && arguments[0].is_number()) {
       return Value::object_of(make_array(std::vector<Value>(static_cast<std::size_t>(to_number(arguments[0])))));
@@ -2061,6 +2451,9 @@ void install_builtins(RuntimeState& runtime) {
         tag = "Error";
       } else if (this_value.object->is_arguments_object) {
         tag = "Arguments";
+      } else if (this_value.object->is_wrapper) {
+        const Value& boxed = this_value.object->wrapper_value;
+        tag = boxed.is_string() ? "String" : (boxed.is_number() ? "Number" : "Boolean");
       }
     }
     return Value::string_of("[object " + tag + "]");
@@ -2081,6 +2474,10 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::object_of(std::make_shared<Object>());
   });
+  // Primitive prototypes are ordinary objects: they inherit from Object.prototype.
+  string_prototype->prototype = object_prototype;
+  number_prototype->prototype = object_prototype;
+  boolean_prototype->prototype = object_prototype;
   object_constructor.function->prototype_object = object_prototype;
   object_prototype->owner_function = object_constructor.function;
   object_constructor.function->statics = std::make_shared<Object>();
@@ -2410,6 +2807,9 @@ double to_number(const Value& value) {
     }
     case ValueType::Object:
     case ValueType::Function:
+      if (value.type == ValueType::Object && value.object != nullptr && value.object->is_wrapper) {
+        return to_number(value.object->wrapper_value);
+      }
       return std::nan("");
   }
   return std::nan("");
@@ -2432,6 +2832,7 @@ std::string to_string(const Value& value) {
     case ValueType::Object: {
       if (value.object == nullptr) return "null";
       const Object& object = *value.object;
+      if (object.is_wrapper) return to_string(object.wrapper_value);
       if (object.is_array()) {
         std::string out;
         for (std::size_t i = 0; i < object.elements.size(); ++i) {
