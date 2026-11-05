@@ -344,8 +344,16 @@ struct SandboxOutcome {
   std::string message;
 };
 
-[[nodiscard]] SandboxOutcome evaluate_source(const std::string& path, const std::string& source) {
+// `onlyStrict` tests are meant to run with a `"use strict"` directive prepended; the
+// test262 runner does exactly that, so the engine is measured on the mode the file
+// asks for rather than the sloppy interpretation of it.
+[[nodiscard]] std::string strict_prefix(const std::string& source, bool strict) {
+  return strict ? std::string("\"use strict\";\n") + source : source;
+}
+
+[[nodiscard]] SandboxOutcome evaluate_source(const std::string& path, const std::string& body, bool strict) {
   SandboxOutcome outcome;
+  const std::string source = strict_prefix(body, strict);
 
   auto evaluate_here = [&path, &source](js::ExecutionResult& result, std::string& preamble_message) {
     js::Context context;
@@ -456,7 +464,8 @@ struct SandboxOutcome {
 
 [[nodiscard]] bool run_source(const std::string& path, const std::string& source, const Metadata& metadata,
                               std::string& detail) {
-  const SandboxOutcome sandbox = evaluate_source(path, source);
+  const bool strict = contains(metadata.flags, "onlyStrict");
+  const SandboxOutcome sandbox = evaluate_source(path, source, strict);
   struct ResultView {
     bool ok;
     std::string message;

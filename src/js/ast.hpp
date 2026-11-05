@@ -45,6 +45,8 @@ enum class ExprKind {
 /// One method of a class body: `m() {}`, `static m() {}`, `get m() {}`, `set m(v) {}`.
 struct ClassMethod {
   std::string key;
+  /// `class A { [expr]() {} }` — when set, the key is computed at run time.
+  ExprPtr computed_key;
   FunctionPtr function;
   bool is_static = false;
   bool is_get = false;
@@ -63,6 +65,8 @@ struct PropertyDef {
   /// `{...o}` copies own enumerable properties.
   enum class Kind { Data, Get, Set, Spread } kind = Kind::Data;
   std::string key;
+  /// `{[expr]: value}` — when set, the key is computed at run time (and `key` is empty).
+  ExprPtr computed_key;
   ExprPtr value;
 };
 
@@ -123,6 +127,7 @@ struct Stmt {
 
   bool is_for_of = false;           // for-of vs for-in
   bool declares_iteration = false;  // `for (let x of …)`
+  bool is_strict = false;           // program node: the source started with "use strict"
 };
 
 struct FunctionNode {
@@ -132,6 +137,7 @@ struct FunctionNode {
   std::vector<StmtPtr> body;
   bool is_arrow = false;
   bool expression_body = false;  // arrow with a single expression instead of a block
+  bool is_strict = false;         // body runs in strict mode (directive or inherited)
 };
 
 }  // namespace bonk::js::ast

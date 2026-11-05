@@ -34,6 +34,7 @@ struct Scope {
   Scope* parent = nullptr;
   Value this_value;
   bool is_function_scope = false;
+  bool is_strict = false;
 };
 
 using ScopePtr = Scope*;
@@ -180,6 +181,14 @@ std::string number_to_raw_string(double value) {
   out += scientific >= 0 ? "+" : "-";
   out += std::to_string(scientific >= 0 ? scientific : -scientific);
   return out;
+}
+
+/// Strictness of the code that owns `scope` (the nearest function/global scope).
+bool strict_scope(const Scope* scope) {
+  for (const Scope* current = scope; current != nullptr; current = current->parent) {
+    if (current->is_function_scope) return current->is_strict;
+  }
+  return false;
 }
 
 std::string join_values(const std::vector<Value>& values, const std::string& separator) {
@@ -856,7 +865,7 @@ class Interpreter {
   Completion exec_statements(const std::vector<ast::StmtPtr>& statements, const ScopePtr& scope);
   Value call(const Value& callee, const Value& this_value, std::vector<Value> arguments);
   Value get_member(const Value& object, const std::string& key);
-  void set_member(const Value& object, const std::string& key, const Value& value);
+  void set_member(const Value& object, const std::string& key, const Value& value, bool strict = false);
   /// `[a, b] = value` / `({a} = value)`: unpacks a pattern into existing bindings.
   void assign_pattern(const ast::Expr& pattern, const Value& value, const ScopePtr& scope);
   /// Stores `value` into an identifier or member target.
@@ -876,6 +885,11 @@ class Interpreter {
   Value eval_postfix_chain(const ast::Expr& expression, const ScopePtr& scope);
   static bool chain_has_optional(const ast::Expr& expression);
   Completion exec_block(const std::vector<ast::StmtPtr>& statements, const ScopePtr& parent);
+
+  /// The `globalThis` object. Sloppy callees receive it as their `this` when they are
+  /// invoked without a receiver (10.4.3.1: `this` is never undefined there).
+  const Value& global_this();
+  Value global_this_;
 
   RuntimeState& runtime_;
   ScopePtr global_;
@@ -1095,15 +1109,22 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   return Value::undefined();
 }
 
-void Interpreter::set_member(const Value& object, const std::string& key, const Value& value) {
+void Interpreter::set_member(const Value& object, const std::string& key, const Value& value, bool strict) {
   if (object.type == ValueType::Function && object.object == nullptr) {
     const std::shared_ptr<Object> bag = property_bag(object);
     const auto existing = bag->properties.find(key);
     if (existing != bag->properties.end()) {
-      if (existing->second.writable) existing->second.value = value;
+      if (existing->second.writable) {
+        existing->second.value = value;
+      } else if (strict) {
+        throw thrown(type_error("cannot assign to read only property '" + key + "'"));
+      }
       return;
     }
-    if (!bag->extensible) return;
+    if (!bag->extensible) {
+      if (strict) throw thrown(type_error("cannot add property '" + key + "', object is not extensible"));
+      return;
+    }
     bag->properties[key] = Property{value};
     return;
   }
@@ -1111,6 +1132,17 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
     throw thrown(type_error("cannot set property '" + key + "' of " + typeof_string(object)));
   }
   const std::shared_ptr<Object> target = object.object;
+  if (!target->extensible) {
+    const bool exists = target->properties.count(key) != 0 || target->receiver_setters.count(key) != 0;
+    if (!exists) {
+      if (strict) throw thrown(type_error("cannot add property '" + key + "', object is not extensible"));
+      return;
+    }
+  }
+  if (target->is_array() && !target->extensible && key == "length") {
+    if (strict) throw thrown(type_error("cannot assign to read only property 'length'"));
+    return;
+  }
   if (target->is_array()) {
     if (key == "length") {
       const double length = to_number(value);
@@ -1163,27 +1195,43 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
   const auto existing = target->properties.find(key);
   if (existing != target->properties.end()) {
     if (!existing->second.writable) {
-      // Sloppy mode ignores the write; strict mode throws (tracked in ADR 0025).
+      // Sloppy mode ignores the write; strict mode throws (stage 31).
+      if (strict) throw thrown(type_error("cannot assign to read only property '" + key + "'"));
       return;
     }
     existing->second.value = value;
     return;
   }
-  if (!target->extensible) return;
+  if (!target->extensible) {
+    if (strict) throw thrown(type_error("cannot add property '" + key + "', object is not extensible"));
+    return;
+  }
   target->properties[key] = Property{value};
 }
 
-Value Interpreter::call(const Value& callee, const Value& this_value, std::vector<Value> arguments) {
+const Value& Interpreter::global_this() {
+  if (global_this_.is_undefined()) {
+    const auto found = global_->variables.find("globalThis");
+    if (found != global_->variables.end()) global_this_ = found->second;
+  }
+  return global_this_;
+}
+
+Value Interpreter::call(const Value& callee, const Value& this_value_in, std::vector<Value> arguments) {
   if (callee.type != ValueType::Function || callee.function == nullptr) {
     throw thrown(type_error(to_string(callee) + " is not a function"));
   }
   const std::shared_ptr<Function> function = callee.function;
-  if (function->is_native()) return function->native(arguments, this_value);
+  if (function->is_native()) return function->native(arguments, this_value_in);
 
   const auto code = std::static_pointer_cast<ast::FunctionNode>(function->code);
   const auto closure = static_cast<Scope*>(function->closure);
   const ScopePtr scope = runtime_.new_scope(closure);
   scope->is_function_scope = true;
+  // Strict code inherits strictness from where the function was defined.
+  scope->is_strict = code->is_strict || (closure != nullptr && strict_scope(closure));
+  // Sloppy callees substitute the global object for a nullish receiver.
+  const Value& this_value = (!scope->is_strict && this_value_in.is_nullish()) ? global_this() : this_value_in;
   scope->this_value = this_value;
   for (std::size_t i = 0; i < code->parameters.size(); ++i) {
     scope->variables[code->parameters[i]] = i < arguments.size() ? arguments[i] : Value::undefined();
@@ -1207,7 +1255,9 @@ Value Interpreter::call(const Value& callee, const Value& this_value, std::vecto
         Property{Value::function_of(function), true, false, true};
     for (std::size_t i = 0; i < arguments.size(); ++i) {
       const std::string key = std::to_string(i);
-      if (i < code->parameters.size()) {
+      // Strict functions always get an *unmapped* arguments object (10.4.4.7): assigning
+      // to a parameter must not be visible through `arguments[i]`.
+      if (i < code->parameters.size() && !scope->is_strict) {
         const std::string parameter = code->parameters[i];
         Scope* captured = scope;
         arguments_object->getters[key] = [captured, parameter]() {
@@ -1225,6 +1275,7 @@ Value Interpreter::call(const Value& callee, const Value& this_value, std::vecto
     scope->variables["arguments"] = Value::object_of(std::move(arguments_object));
   }
   if (!code->name.empty()) scope->variables[code->name] = callee;
+  function->is_strict = code->is_strict;
   if (const std::shared_ptr<Function> parent = function->super_function.lock()) {
     scope->variables["super"] = Value::function_of(parent);
   }
@@ -1466,14 +1517,19 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
 void Interpreter::store_target(const ast::Expr& target, const Value& value, const ScopePtr& scope) {
   if (target.kind == ast::ExprKind::Identifier) {
     const Lookup found = lookup_scope(scope, target.text);
-    if (found.found) found.scope->variables[target.text] = value;
-    else scope->variables[target.text] = value;  // sloppy: creates a global
+    if (found.found) {
+      found.scope->variables[target.text] = value;
+    } else if (strict_scope(scope)) {
+      throw thrown(reference_error("'" + target.text + "' is not defined"));
+    } else {
+      scope->variables[target.text] = value;  // sloppy: creates a global
+    }
     return;
   }
   if (target.kind == ast::ExprKind::Member) {
     const Value object = eval(target.children[0], scope);
     const std::string key = target.boolean ? to_string(eval(target.children[1], scope)) : target.text;
-    set_member(object, key, value);
+    set_member(object, key, value, strict_scope(scope));
     return;
   }
   throw thrown(reference_error("invalid destructuring target"));
@@ -1515,8 +1571,10 @@ void Interpreter::assign_pattern(const ast::Expr& pattern, const Value& value, c
         assign_pattern(*property.value, Value::object_of(std::move(rest)), scope);
         continue;
       }
-      excluded.push_back(property.key);
-      assign_pattern(*property.value, value.is_nullish() ? Value::undefined() : get_member(value, property.key), scope);
+      const std::string key =
+          property.computed_key != nullptr ? to_string(eval(property.computed_key, scope)) : property.key;
+      excluded.push_back(key);
+      assign_pattern(*property.value, value.is_nullish() ? Value::undefined() : get_member(value, key), scope);
     }
     return;
   }
@@ -1534,9 +1592,18 @@ Value Interpreter::make_class(const std::shared_ptr<ast::ClassNode>& node, const
   }
   const bool derived = super_value.type == ValueType::Function;
 
+  // Computed method keys are evaluated once, in source order, before any method is
+  // installed (15.7.14 ClassDefinitionEvaluation).
+  std::vector<std::string> keys;
+  keys.reserve(node->methods.size());
+  for (const ast::ClassMethod& method : node->methods) {
+    keys.push_back(method.computed_key != nullptr ? to_string(eval(method.computed_key, scope)) : method.key);
+  }
+
   const ast::ClassMethod* constructor_method = nullptr;
   for (const ast::ClassMethod& method : node->methods) {
-    if (!method.is_static && !method.is_get && !method.is_set && method.key == "constructor") {
+    if (!method.computed_key && !method.is_static && !method.is_get && !method.is_set &&
+        method.key == "constructor") {
       constructor_method = &method;
       break;
     }
@@ -1572,35 +1639,37 @@ Value Interpreter::make_class(const std::shared_ptr<ast::ClassNode>& node, const
     function->statics->prototype = super_value.function->statics;
   }
 
-  for (const ast::ClassMethod& method : node->methods) {
-    const bool is_constructor = !method.is_static && !method.is_get && !method.is_set &&
-                                method.key == "constructor";
+  for (std::size_t index = 0; index < node->methods.size(); ++index) {
+    const ast::ClassMethod& method = node->methods[index];
+    const std::string& key = keys[index];
+    const bool is_constructor = !method.computed_key && !method.is_static && !method.is_get &&
+                                !method.is_set && method.key == "constructor";
     if (is_constructor) continue;
     Value method_value = make_function(method.function, scope);
     if (method_value.function != nullptr) {
-      method_value.function->name = method.key;
+      method_value.function->name = key;
       if (derived) method_value.function->super_function = super_value.function;
     }
     std::shared_ptr<Object> target = method.is_static ? function->statics : function->prototype_object;
     if (method.is_get) {
       const Value getter = method_value;
-      target->receiver_getters[method.key] = [getter](const Value& self) {
+      target->receiver_getters[key] = [getter](const Value& self) {
         return call_function(getter, self, {});
       };
       Property marker{Value::undefined(), true, false, true};
-      target->properties[method.key] = marker;  // class members are non-enumerable
+      target->properties[key] = marker;  // class members are non-enumerable
     } else if (method.is_set) {
       const Value setter = method_value;
-      target->receiver_setters[method.key] = [setter](const Value& self, const Value& value) {
+      target->receiver_setters[key] = [setter](const Value& self, const Value& value) {
         call_function(setter, self, {value});
         return;
       };
       Property marker{Value::undefined(), true, false, true};
-      target->properties[method.key] = marker;
+      target->properties[key] = marker;
     } else {
       Property property{method_value};
       property.enumerable = false;  // class methods are non-enumerable
-      target->properties[method.key] = property;
+      target->properties[key] = property;
     }
   }
   return constructor;
@@ -1610,6 +1679,15 @@ Value Interpreter::eval_source(const std::string& source, const ScopePtr& scope)
   Result<ast::StmtPtr> program = parse_script(source);
   if (program.is_error()) {
     throw thrown(make_error("SyntaxError", program.error().message));
+  }
+  if (program.value() != nullptr && program.value()->is_strict) {
+    // A strict script makes the scope it runs in strict for its duration.
+    for (Scope* current = scope; current != nullptr; current = current->parent) {
+      if (current->is_function_scope) {
+        current->is_strict = true;
+        break;
+      }
+    }
   }
   const Completion completion = exec_statements(program.value()->statements, scope);
   if (completion.type == CompletionType::Throw) throw completion;
@@ -1819,27 +1897,31 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::ObjectLiteral: {
       auto object = std::make_shared<Object>();
       for (const ast::PropertyDef& property : expression->properties) {
-        const Value value = eval(property.value, scope);
         if (property.kind == ast::PropertyDef::Kind::Spread) {
+          const Value value = eval(property.value, scope);
           copy_own_enumerable(value, *object, [this, &scope](const Value& source, const std::string& key) {
             return get_member(source, key);
           });
           continue;
         }
+        // A computed key is evaluated before its value (12.2.6.7 PropertyDefinitionEvaluation).
+        const std::string key =
+            property.computed_key != nullptr ? to_string(eval(property.computed_key, scope)) : property.key;
+        const Value value = eval(property.value, scope);
         if (property.kind == ast::PropertyDef::Kind::Data) {
-          object->properties[property.key] = Property{value};
+          object->properties[key] = Property{value};
           continue;
         }
         if (property.kind == ast::PropertyDef::Kind::Get) {
-          object->receiver_getters[property.key] = [value](const Value& self) {
+          object->receiver_getters[key] = [value](const Value& self) {
             return call_function(value, self, {});
           };
         } else {
-          object->receiver_setters[property.key] = [value](const Value& self, const Value& argument) {
+          object->receiver_setters[key] = [value](const Value& self, const Value& argument) {
             call_function(value, self, {argument});
           };
         }
-        object->properties[property.key] = Property{Value::undefined(), true, true, true};
+        object->properties[key] = Property{Value::undefined(), true, true, true};
       }
       return Value::object_of(std::move(object));
     }
@@ -2058,10 +2140,16 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       auto write_reference = [&](const Value& written) {
         if (target_is_identifier) {
           const Lookup found = lookup_scope(scope, target->text);
-          if (found.found) found.scope->variables[target->text] = written;
-          else scope->variables[target->text] = written;  // sloppy: creates a global
+          if (found.found) {
+            found.scope->variables[target->text] = written;
+          } else if (strict_scope(scope)) {
+            // ES2015 8.1.1.1.1: a strict assignment to an unresolvable reference throws.
+            throw thrown(reference_error("'" + target->text + "' is not defined"));
+          } else {
+            scope->variables[target->text] = written;  // sloppy: creates a global
+          }
         } else {
-          set_member(object, key, written);
+          set_member(object, key, written, strict_scope(scope));
         }
       };
 
@@ -3944,6 +4032,12 @@ Context::Context() : impl_(std::make_unique<Impl>()) {
   impl_->runtime.global = impl_->runtime.new_scope(nullptr);
   impl_->runtime.global->is_function_scope = true;
   install_builtins(impl_->runtime);
+  // Global code's `this` is the global object (10.2.1.2): `this === globalThis` holds at
+  // the top level, and sloppy functions inherit it when called without a receiver.
+  if (const auto found = impl_->runtime.global->variables.find("globalThis");
+      found != impl_->runtime.global->variables.end()) {
+    impl_->runtime.global->this_value = found->second;
+  }
   impl_->interpreter = std::make_unique<Interpreter>(impl_->runtime, impl_->runtime.global);
   g_eval_source_for_function = [interpreter = impl_->interpreter.get()](const std::string& source,
                                                                       const ScopePtr& scope) {
@@ -3982,6 +4076,11 @@ ExecutionResult Context::evaluate(std::string_view source, std::string_view orig
   Interpreter* previous = g_interpreter;
   g_interpreter = impl_->interpreter.get();
 
+  // `"use strict"` at the top of the source makes the global code strict for its run
+  // (ES2015 10.2.1); the previous state is restored when evaluation ends.
+  const bool was_strict = impl_->runtime.global->is_strict;
+  if (program.value()->is_strict) impl_->runtime.global->is_strict = true;
+
   ExecutionResult result;
   try {
     const Completion completion = impl_->interpreter->exec_statements(program.value()->statements,
@@ -4003,6 +4102,7 @@ ExecutionResult Context::evaluate(std::string_view source, std::string_view orig
     result.exception = make_error("Error", error.what());
   }
 
+  impl_->runtime.global->is_strict = was_strict || program.value()->is_strict;
   g_interpreter = previous;
   return result;
 }

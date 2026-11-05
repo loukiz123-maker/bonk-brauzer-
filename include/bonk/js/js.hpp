@@ -89,6 +89,9 @@ struct Function {
   /// For a class constructor/method: the parent constructor, so `super(…)` and
   /// `super.m(…)` resolve without a special `this`-scope object (stage 28).
   std::weak_ptr<Function> super_function;
+  /// Strict-mode function (stage 31): writes to undeclared names throw instead of
+  /// creating globals, and writes to read-only properties throw `TypeError`.
+  bool is_strict = false;
 
   [[nodiscard]] bool is_native() const noexcept { return static_cast<bool>(native); }
 };

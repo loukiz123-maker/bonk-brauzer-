@@ -33,6 +33,8 @@ struct Token {
   std::size_t line = 1;
   std::size_t column = 1;
   bool newline_before = false;
+  bool octal_literal = false;
+  bool octal_escape = false;
 };
 
 const std::unordered_set<std::string>& keywords() {
@@ -51,6 +53,10 @@ struct Lexer {
   std::size_t line = 1;
   std::size_t column = 1;
   std::string error;
+  /// Set when a numeric literal looks like a legacy octal (`010`) or a string
+  /// contains an octal escape (`'\1'`): both are SyntaxErrors in strict code.
+  bool saw_octal_literal = false;
+  bool saw_octal_escape = false;
 
   [[nodiscard]] bool at_end() const { return position >= source.size(); }
   char peek(std::size_t offset = 0) const {
@@ -112,6 +118,8 @@ struct Lexer {
     token.newline_before = saw_newline;
     token.line = line;
     token.column = column;
+    saw_octal_literal = false;
+    saw_octal_escape = false;
     if (at_end()) {
       token.type = Token::Type::EndOfFile;
       return token;
@@ -147,17 +155,45 @@ struct Lexer {
         }
         token.number = static_cast<double>(std::strtoull(digits.c_str(), nullptr, radix));
       } else {
+        bool seen_dot = false;
         while (!at_end() && ((peek() >= '0' && peek() <= '9') || peek() == '.' || peek() == 'e' || peek() == 'E' ||
                              peek() == '_' ||
                              ((peek() == '-' || peek() == '+') && !digits.empty() &&
                               (digits.back() == 'e' || digits.back() == 'E')))) {
+          // At most one decimal point belongs to the literal: in `1.5.toString()` the
+          // second dot starts a member access, not a malformed number. A dot after an
+          // exponent must be a member access too (`1e3.toString()` is valid).
+          if (peek() == '.') {
+            if (seen_dot || digits.find_first_of("eE") != std::string::npos) break;
+            seen_dot = true;
+          }
           const char digit = advance();
           if (digit == '_') continue;  // `1_000_000` is `1000000`
           digits.push_back(digit);
         }
         token.number = std::strtod(digits.c_str(), nullptr);
+        // A numeric literal may not run straight into an identifier: `1.toString` lexes
+        // as `1.` followed by `toString`, which the grammar rejects (25.3.1).
+        if (!at_end() && !digits.empty() && digits.back() == '.') {
+          const char after = peek();
+          if (std::isalpha(static_cast<unsigned char>(after)) != 0 || after == '_' || after == '$' ||
+              after == '\\') {
+            error = "a numeric literal must not be followed by an identifier";
+          }
+        }
+        // `010` is a legacy octal literal; `0.5`, `0e1` and `08` are not.
+        if (digits.size() > 1 && digits[0] == '0' && digits[1] >= '0' && digits[1] <= '9' &&
+            digits.find_first_of(".eE") == std::string::npos) {
+          saw_octal_literal = true;
+          // Sloppy code still *reads* such a literal as octal: `010` is 8, not 10.
+          // Digits 8 and 9 make it a NonOctalDecimalIntegerLiteral (`08` is 8).
+          if (digits.find_first_of("89") == std::string::npos) {
+            token.number = static_cast<double>(std::strtoull(digits.c_str(), nullptr, 8));
+          }
+        }
       }
       token.text = digits;
+      token.octal_literal = saw_octal_literal;
       return token;
     }
 
@@ -177,6 +213,12 @@ struct Lexer {
             case 'f': value.push_back('\f'); break;
             case 'v': value.push_back('\v'); break;
             case '0': value.push_back('\0'); break;
+            case '1': case '2': case '3': case '4':
+            case '5': case '6': case '7': case '8': case '9':
+              // Legacy octal escape: legal in sloppy code, a SyntaxError in strict.
+              saw_octal_escape = true;
+              value.push_back(escape);
+              break;
             case '\n': break;  // line continuation
             case 'u': {
               std::string hex;
@@ -211,6 +253,7 @@ struct Lexer {
         advance();  // closing quote
       }
       token.text = value;
+      token.octal_escape = saw_octal_escape;
       return token;
     }
 
@@ -230,6 +273,7 @@ struct Lexer {
       if (at_end()) error = "unterminated template literal";
       else advance();
       token.text = value;
+      token.octal_escape = saw_octal_escape;
       return token;
     }
 
@@ -296,7 +340,14 @@ struct Parser {
            current().text == text;
   }
   bool is_text(std::string_view text) const { return current().text == text; }
-  bool is_identifier() const { return current().type == Token::Type::Identifier; }
+  bool is_identifier() const {
+    if (current().type == Token::Type::Identifier) return true;
+    // `let`, `static` and `yield` are keywords here only because they are reserved in
+    // strict mode; sloppy code is free to use them as ordinary names. (`eval` and
+    // `arguments` never reach this path: the lexer already reports them as identifiers
+    // and the strict checks reject them by name.)
+    return !strict && current().type == Token::Type::Keyword && is_strict_reserved(current().text);
+  }
   Token take() { return tokens[index < tokens.size() - 1 ? index++ : index]; }
   bool match(std::string_view text) {
     if (is(text)) {
@@ -333,15 +384,40 @@ struct Parser {
 
   StmtPtr parse_program() {
     auto program = make_stmt(StmtKind::Block);
+    directive_position = true;
     while (current().type != Token::Type::EndOfFile && error.empty()) {
       StmtPtr statement = parse_statement();
       if (statement == nullptr) break;
+      note_directive(statement);
       program->statements.push_back(std::move(statement));
     }
+    program->is_strict = strict;
     return program;
   }
 
+  /// A directive prologue is the run of string-literal statements at the top of a
+  /// program or function body; `"use strict"` in it switches the whole code to strict.
+  void note_directive(const StmtPtr& statement) {
+    if (!directive_position) return;
+    if (statement == nullptr || statement->kind != StmtKind::Expression || statement->expression == nullptr ||
+        statement->expression->kind != ExprKind::String) {
+      directive_position = false;
+      return;
+    }
+    if (statement->expression->text == "use strict") strict = true;
+  }
+
   StmtPtr parse_statement() {
+    if (directive_position) {
+      // Only a string-literal expression statement can be a directive.
+      const bool could_be_directive = error.empty() && current().type == Token::Type::String;
+      if (!could_be_directive) directive_position = false;
+    }
+    StmtPtr statement = parse_statement_inner();
+    return statement;
+  }
+
+  StmtPtr parse_statement_inner() {
     if (error.empty() && is(";")) {
       take();
       return make_stmt(StmtKind::Empty);
@@ -383,6 +459,14 @@ struct Parser {
       statement->class_node = parse_class();
       return statement;
     }
+    if (is("with")) {
+      if (strict) {
+        error = "'with' is not allowed in strict mode";
+        return nullptr;
+      }
+      error = "'with' statements are not supported by this engine yet";
+      return nullptr;
+    }
     if (is("switch") || is("import") || is("export")) {
       error = "'" + current().text + "' statements are not supported by this engine yet";
       return nullptr;
@@ -404,6 +488,11 @@ struct Parser {
       node->super_class = parse_call_member();
     }
     if (!expect("{")) return node;
+    // The heritage expression is ordinary code, but everything inside the braces is a
+    // ClassBody, which the standard makes strict mode code unconditionally — so methods
+    // inherit strictness even when the surrounding script is sloppy.
+    const bool outer_strict = strict;
+    strict = true;
     while (!is("}") && current().type != Token::Type::EndOfFile && error.empty()) {
       ast::ClassMethod method;
       if (is("static") && !(peek().text == "(")) {
@@ -415,31 +504,42 @@ struct Parser {
         method.is_set = is_text("set");
         take();
       }
-      if (is_identifier() || current().type == Token::Type::Keyword || current().type == Token::Type::String ||
-          current().type == Token::Type::Number) {
+      if (is("[")) {
+        take();
+        method.computed_key = parse_expression();
+        expect("]");
+      } else if (is_identifier() || current().type == Token::Type::Keyword ||
+                 current().type == Token::Type::String || current().type == Token::Type::Number) {
         method.key = take().text;
       } else {
         if (error.empty()) error = "expected a method name";
         break;
       }
       method.function = parse_function(false, false);
+      if (method.is_get || method.is_set) require_accessor_arity(method.function, method.is_get);
       method.function->name = method.key;
       node->methods.push_back(std::move(method));
       match(";");
     }
+    strict = outer_strict;
     expect("}");
     return node;
   }
 
-  StmtPtr parse_block() {
+  StmtPtr parse_block(bool function_body = false) {
     auto block = make_stmt(StmtKind::Block);
+    const bool outer_directive_position = directive_position;
+    // Only a function body may carry a "use strict" directive.
+    directive_position = function_body;
     expect("{");
     while (!is("}") && current().type != Token::Type::EndOfFile && error.empty()) {
       StmtPtr statement = parse_statement();
       if (statement == nullptr) break;
+      if (function_body) note_directive(statement);
       block->statements.push_back(std::move(statement));
     }
     expect("}");
+    directive_position = outer_directive_position;
     return block;
   }
 
@@ -466,6 +566,7 @@ struct Parser {
     for (;;) {
       if (is_identifier()) {
         const std::string name = take().text;
+        require_valid_binding_name(name, "a variable name");
         statement->names.push_back(name);
         if (match("=")) {
           statement->values.push_back(parse_assignment());
@@ -497,6 +598,25 @@ struct Parser {
   // evaluated exactly once (`var [a] = [f()]` calls `f` once, defaults included).
 
   std::size_t destructuring_temp = 0;
+
+  /// Names that may not be assigned to or bound in strict code (ES2015 12.1.1).
+  static bool is_strict_reserved(const std::string& name) {
+    static const std::unordered_set<std::string> reserved = {
+        "implements", "interface", "let",   "package",  "private",
+        "protected",  "public",    "static", "yield",   "eval",  "arguments"};
+    return reserved.count(name) != 0;
+  }
+
+  /// Early error for an identifier used as a binding or an assignment target.
+  void require_valid_binding_name(const std::string& name, const char* what) {
+    if (error.empty() && strict && is_strict_reserved(name)) {
+      error = std::string("'") + name + "' is not allowed as " + what + " in strict mode";
+    }
+  }
+
+  // ------------------------------------------------------------- strict mode --
+  bool strict = false;             // current code is strict
+  bool directive_position = true;  // next statement may be a directive prologue entry
 
   std::string new_temp_name() { return "__bonk$d" + std::to_string(destructuring_temp++); }
 
@@ -597,8 +717,12 @@ struct Parser {
           bind(property.value, call_of("__bonk$objectRest", {value, keys}));
           continue;
         }
-        excluded.push_back(literal_of(property.key));
-        unpack_element(property.value, member_of(value, literal_of(property.key)), make_temp, bind);
+        // `{[k]: v}` — a computed key is folded into a computed member access, so the
+        // key expression is evaluated when the binding is initialised.
+        const ExprPtr key =
+            property.computed_key != nullptr ? property.computed_key : literal_of(property.key);
+        excluded.push_back(key);
+        unpack_element(property.value, member_of(value, key), make_temp, bind);
       }
       return;
     }
@@ -615,6 +739,17 @@ struct Parser {
     unpack_pattern(element, slot, make_temp, bind);
   }
 
+  /// `get a() {...}` takes no parameters and `set a(v) {...}` takes exactly one.
+  void require_accessor_arity(const FunctionPtr& function, bool is_getter) {
+    if (!error.empty() || function == nullptr) return;
+    const std::size_t count = function->parameters.size();
+    if (is_getter) {
+      if (count != 0) error = "a getter must not have parameters";
+    } else if (count != 1 || !function->rest_parameter.empty()) {
+      error = "a setter must have exactly one parameter";
+    }
+  }
+
   FunctionPtr parse_function(bool is_arrow, bool require_name) {
     auto function = std::make_shared<FunctionNode>();
     function->is_arrow = is_arrow;
@@ -626,6 +761,10 @@ struct Parser {
     if (!expect("(")) return function;
     // Parameter patterns and defaults become statements at the top of the body, so
     // the interpreter only ever sees plain parameter names (stage 30).
+    const bool outer_strict = strict;
+    std::unordered_set<std::string> seen_parameters;
+    std::string duplicate_parameter;
+    bool simple_parameters = true;
     std::vector<StmtPtr> prologue;
     auto prologue_temp = [&](const ExprPtr& value) {
       auto declaration = make_stmt(StmtKind::Var);
@@ -640,6 +779,9 @@ struct Parser {
         if (error.empty()) error = "invalid destructuring target in parameter";
         return;
       }
+      // Names bound by a pattern are parameters too: `function f([a], [a])` repeats `a`.
+      if (!seen_parameters.insert(target->text).second) duplicate_parameter = target->text;
+      require_valid_binding_name(target->text, "a parameter name");
       auto declaration = make_stmt(StmtKind::Var);
       declaration->names.push_back(target->text);
       declaration->values.push_back(value);
@@ -653,19 +795,28 @@ struct Parser {
           break;
         }
         function->rest_parameter = take().text;
+        simple_parameters = false;
+        if (!seen_parameters.insert(function->rest_parameter).second) {
+          duplicate_parameter = function->rest_parameter;
+        }
+        require_valid_binding_name(function->rest_parameter, "a parameter name");
         break;
       }
       if (is_identifier()) {
         const std::string name = take().text;
         function->parameters.push_back(name);
+        if (!seen_parameters.insert(name).second) duplicate_parameter = name;
+        require_valid_binding_name(name, "a parameter name");
         if (is("=")) {
           take();
+          simple_parameters = false;
           auto statement = make_stmt(StmtKind::Expression);
           statement->expression =
               assign_of(identifier_of(name), default_of(identifier_of(name), parse_assignment()));
           prologue.push_back(statement);
         }
       } else if (is("[") || is("{")) {
+        simple_parameters = false;
         const ExprPtr pattern = parse_call_member();
         const std::string name = "__bonk$p" + std::to_string(function->parameters.size());
         function->parameters.push_back(name);
@@ -694,12 +845,31 @@ struct Parser {
         function->expression_body = true;
       }
       function->body.insert(function->body.begin(), prologue.begin(), prologue.end());
+      finish_function_strictness(function, duplicate_parameter, simple_parameters, outer_strict);
       return function;
     }
-    StmtPtr body = parse_block();
+    StmtPtr body = parse_block(true);
     function->body = body->statements;
     function->body.insert(function->body.begin(), prologue.begin(), prologue.end());
+    finish_function_strictness(function, duplicate_parameter, simple_parameters, outer_strict);
     return function;
+  }
+
+  /// Applies strict-only rules to a parsed signature, then restores the enclosing
+  /// code's strictness (a directive inside a body does not leak out).
+  void finish_function_strictness(const FunctionPtr& function, const std::string& duplicate_parameter,
+                                  bool simple_parameters, bool outer_strict) {
+    // A non-simple parameter list may not repeat names, in either mode (ES2015 14.1.2).
+    if (error.empty() && !duplicate_parameter.empty() && (strict || !simple_parameters)) {
+      error = "'" + duplicate_parameter + "' is already declared as a parameter";
+    }
+    if (error.empty() && strict) {
+      if (!function->name.empty() && (function->name == "eval" || function->name == "arguments")) {
+        error = "'" + function->name + "' is not a valid function name in strict mode";
+      }
+    }
+    function->is_strict = strict;
+    strict = outer_strict;
   }
 
   StmtPtr parse_function_declaration() {
@@ -860,14 +1030,51 @@ struct Parser {
     auto statement = make_stmt(StmtKind::Try);
     statement->try_block = parse_block();
     if (match("catch")) {
+      ExprPtr catch_pattern = nullptr;
       if (match("(")) {
-        if (is_identifier()) statement->catch_name = take().text;
+        match("var");  // `catch (var e)` is legacy but appears in the wild
+        if (is("[") || is("{")) {
+          catch_pattern = parse_call_member();  // `catch ({message})`
+        } else if (is_identifier()) {
+          statement->catch_name = take().text;
+          require_valid_binding_name(statement->catch_name, "a catch parameter");
+        } else if (error.empty()) {
+          error = "expected a catch parameter";
+        }
         expect(")");
       }
-      statement->catch_block = parse_block();
+      StmtPtr body = parse_block();
+      if (catch_pattern != nullptr) {
+        // The clause binds a temporary and unpacks the pattern at the top of the body.
+        const std::string temp = "__bonk$catch" + std::to_string(destructuring_temp++);
+        statement->catch_name = temp;
+        auto wrap = make_stmt(StmtKind::Block);
+        auto bindings = make_stmt(StmtKind::Var);
+        bindings->declaration_kind = "var";
+        auto make_temp = [&bindings](const ExprPtr& slot) {
+          const std::string name = "__bonk$c" + std::to_string(bindings->names.size());
+          bindings->names.push_back(name);
+          bindings->values.push_back(slot);
+          return identifier_of(name);
+        };
+        auto bind = [&bindings, this](const ExprPtr& target, const ExprPtr& slot) {
+          if (target == nullptr || target->kind != ExprKind::Identifier) {
+            if (error.empty()) error = "invalid destructuring target in catch clause";
+            return;
+          }
+          bindings->names.push_back(target->text);
+          bindings->values.push_back(slot);
+        };
+        unpack_pattern(catch_pattern, identifier_of(temp), make_temp, bind);
+        wrap->statements.push_back(bindings);
+        wrap->statements.push_back(body);
+        statement->catch_block = wrap;
+      } else {
+        statement->catch_block = body;
+      }
     }
     if (match("finally")) statement->finally_block = parse_block();
-    if (statement->catch_block == nullptr && statement->finally_block == nullptr) {
+    if (error.empty() && statement->catch_block == nullptr && statement->finally_block == nullptr) {
       error = "try without catch or finally";
     }
     return statement;
@@ -943,6 +1150,9 @@ struct Parser {
       } else {
         require_assignment_target(left, "compound assignment");
       }
+      if (error.empty() && strict && left != nullptr && left->kind == ExprKind::Identifier) {
+        require_valid_binding_name(left->text, "an assignment target");
+      }
       assign->children.push_back(left);
       assign->children.push_back(parse_assignment());
       return assign;
@@ -981,7 +1191,12 @@ struct Parser {
     if (is("!") || is("-") || is("+") || is("~") || is("typeof") || is("void") || is("delete")) {
       auto unary = make(ExprKind::Unary);
       unary->text = take().text;
+      const bool is_delete = unary->text == "delete";
       unary->children.push_back(parse_unary());
+      if (error.empty() && is_delete && strict && unary->children[0] != nullptr &&
+          unary->children[0]->kind == ExprKind::Identifier) {
+        error = "delete of an unqualified identifier is not allowed in strict mode";
+      }
       return unary;
     }
     if (is("++") || is("--")) {
@@ -989,6 +1204,10 @@ struct Parser {
       update->text = take().text;
       update->children.push_back(parse_unary());
       require_assignment_target(update->children[0], "update expression");
+      if (error.empty() && strict && update->children[0] != nullptr &&
+          update->children[0]->kind == ExprKind::Identifier) {
+        require_valid_binding_name(update->children[0]->text, "an update target");
+      }
       update->boolean = true;  // prefix
       return update;
     }
@@ -1043,6 +1262,9 @@ struct Parser {
       update->children.push_back(expression);
       update->boolean = false;  // postfix
       require_assignment_target(expression, "update expression");
+      if (error.empty() && strict && expression != nullptr && expression->kind == ExprKind::Identifier) {
+        require_valid_binding_name(expression->text, "an update target");
+      }
       return update;
     }
     return expression;
@@ -1148,7 +1370,8 @@ struct Parser {
   ExprPtr parse_new() {
     take();  // 'new'
     auto expression = make(ExprKind::New);
-    ExprPtr callee = parse_primary();
+    // `new new Foo()` nests: the callee of the outer `new` is itself a `new` expression.
+    ExprPtr callee = is("new") ? parse_new() : parse_primary();
     while (is(".") || is("[")) {
       if (match(".")) {
         auto member = make(ExprKind::Member);
@@ -1180,12 +1403,18 @@ struct Parser {
     const Token& token = current();
     switch (token.type) {
       case Token::Type::Number: {
+        if (strict && token.octal_literal && error.empty()) {
+          error = "octal literals are not allowed in strict mode";
+        }
         auto expression = make(ExprKind::Number);
         expression->number = token.number;
         take();
         return expression;
       }
       case Token::Type::String: {
+        if (strict && token.octal_escape && error.empty()) {
+          error = "octal escape sequences are not allowed in strict mode";
+        }
         auto expression = make(ExprKind::String);
         expression->text = token.text;
         take();
@@ -1275,6 +1504,13 @@ struct Parser {
           expression->text = "super";
           return expression;
         }
+        // Sloppy code may still read `let`, `static` and `yield` as plain names.
+        if (!strict && is_strict_reserved(token.text)) {
+          auto expression = make(ExprKind::Identifier);
+          expression->text = token.text;
+          take();
+          return expression;
+        }
         if (error.empty()) error = "unexpected keyword '" + token.text + "'";
         take();
         return make(ExprKind::Undefined);
@@ -1324,16 +1560,36 @@ struct Parser {
               if (!match(",")) break;
               continue;
             }
-            if (is_identifier() || current().type == Token::Type::Keyword) {
+            if (is("[")) {
+              // Computed key: `{[k]: v}`, `{[k]() {}}`, `{get [k]() {}}`.
+              take();
+              property.computed_key = parse_expression();
+              expect("]");
+              if (is("(")) {
+                auto expression = make(ExprKind::Function);
+                expression->function = parse_function(false, false);
+                property.value = expression;
+                accessor = true;
+              } else if (match(":")) {
+                property.value = parse_assignment();
+                accessor = true;  // the value is already parsed: skip the shorthand paths
+              } else {
+                if (error.empty()) error = "expected ':' after a computed property key";
+              }
+            } else if (is_identifier() || current().type == Token::Type::Keyword) {
               property.key = take().text;
               // `get x() {}` / `set x(v) {}`: a get/set keyword followed by a
               // property name (not `:` for a data property, not `,`/`}` for shorthand).
               if ((property.key == "get" || property.key == "set") && !is(":") && !is(",") && !is("}") &&
                   current().type != Token::Type::EndOfFile) {
                 const bool is_getter = property.key == "get";
-                if (is_identifier() || current().type == Token::Type::Keyword) {
-                  property.key = take().text;
-                } else if (current().type == Token::Type::String) {
+                if (is("[")) {
+                  take();
+                  property.computed_key = parse_expression();
+                  expect("]");
+                  property.key.clear();
+                } else if (is_identifier() || current().type == Token::Type::Keyword ||
+                           current().type == Token::Type::String || current().type == Token::Type::Number) {
                   property.key = take().text;
                 } else {
                   if (error.empty()) error = "expected a property name after '" + property.key + "'";
@@ -1342,6 +1598,7 @@ struct Parser {
                 property.kind = is_getter ? ast::PropertyDef::Kind::Get : ast::PropertyDef::Kind::Set;
                 auto expression = make(ExprKind::Function);
                 expression->function = parse_function(false, false);
+                require_accessor_arity(expression->function, is_getter);
                 expression->function->name = property.key;
                 property.value = expression;
                 accessor = true;
@@ -1353,6 +1610,16 @@ struct Parser {
             } else {
               if (error.empty()) error = "expected a property name";
               break;
+            }
+            if (!accessor && is("(")) {
+              // Method shorthand: `{ m() { return 1; } }` is a data property whose value
+              // is a function named after the key (shorthand methods are not
+              // constructors, but this engine has no `new`-target semantics to keep).
+              auto expression = make(ExprKind::Function);
+              expression->function = parse_function(false, false);
+              expression->function->name = property.key;
+              property.value = expression;
+              accessor = true;
             }
             if (accessor) {
               object->properties.push_back(std::move(property));
