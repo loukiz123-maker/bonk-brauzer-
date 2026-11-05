@@ -99,6 +99,39 @@ BONK_TEST(bindings, inner_html_is_parsed_and_serialized) {
   CHECK_EQ(fixture.document.children(host).size(), std::size_t(2));
 }
 
+BONK_TEST(bindings, inner_html_on_a_cell_uses_fragment_parsing) {
+  // A `td` context parses with the "in body" rules, so a stray `<tr>` is dropped
+  // instead of nesting a second row inside the cell.
+  Fixture fixture("<html><body><table><tr><td id='cell'></td></tr></table></body></html>");
+  const ExecutionResult result = fixture.run(
+      "var cell = document.getElementById('cell');\n"
+      "cell.innerHTML = '<tr><td>x</td></tr>y';\n"
+      "var rows = document.getElementsByTagName('tr').length;\n"
+      "var text = cell.textContent;\n");
+  CHECK(result.ok);
+  CHECK_EQ(fixture.number("rows"), 1.0);
+  CHECK_EQ(fixture.text("text"), std::string("xy"));
+
+  // A `tr` context does grow cells without a table around it.
+  const ExecutionResult row_result = fixture.run(
+      "var table = document.getElementsByTagName('table')[0];\n"
+      "var row = document.createElement('tr');\n"
+      "row.innerHTML = '<td>a</td><td>b</td>';\n"
+      "table.appendChild(row);\n"
+      "var cells = row.children.length;\n");
+  CHECK(row_result.ok);
+  CHECK_EQ(fixture.number("cells"), 2.0);
+
+  // `textarea` innerHTML is RCDATA: markup stays text.
+  const ExecutionResult text_result = fixture.run(
+      "var area = document.createElement('textarea');\n"
+      "area.innerHTML = '<b>x</b>';\n"
+      "document.getElementById('cell').appendChild(area);\n"
+      "var areaText = area.textContent;\n");
+  CHECK(text_result.ok);
+  CHECK_EQ(fixture.text("areaText"), std::string("<b>x</b>"));
+}
+
 BONK_TEST(bindings, class_list_add_remove_toggle) {
   Fixture fixture("<html><body><div id='box' class='one'></div></body></html>");
   const ExecutionResult result = fixture.run(

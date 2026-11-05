@@ -35,7 +35,7 @@ struct Case {
   std::string name;
   std::string data;
   std::vector<std::string> expected;  // lines of the "#document" section
-  bool fragment = false;
+  std::string fragment_context;       // non-empty: the "#document-fragment" tag name
 };
 
 [[nodiscard]] std::string trim_copy(std::string_view text) {
@@ -88,7 +88,7 @@ struct Case {
       continue;
     }
     if (line == "#document-fragment") {
-      current.fragment = true;
+      current.fragment_context = "?";  // marker: the next line holds the tag name
       in_data = false;
       in_document = false;
       in_errors = false;
@@ -107,6 +107,10 @@ struct Case {
     if (in_data) {
       if (!current.data.empty()) current.data += '\n';
       current.data += line;
+      continue;
+    }
+    if (current.fragment_context == "?" && !line.empty()) {
+      current.fragment_context = trim_copy(line);  // the context element's tag name
       continue;
     }
     if (in_document) {
@@ -155,19 +159,11 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
       // files are line based, so split it the same way they were written.
       push_split(out, indent, "<!-- " + std::string(document.text_data(node)) + " -->");
       return;
-    case dom::NodeType::Text: {
-      const std::string_view text = document.text_data(node);
-      std::size_t start = 0;
-      for (;;) {
-        const std::size_t newline = text.find('\n', start);
-        const std::string_view piece =
-            newline == std::string_view::npos ? text.substr(start) : text.substr(start, newline - start);
-        out.push_back(indent + "\"" + std::string(piece) + "\"");
-        if (newline == std::string_view::npos) break;
-        start = newline + 1;
-      }
+    case dom::NodeType::Text:
+      // The corpus prints a text node as one quoted string; a newline inside it is
+      // written verbatim, so continuation lines keep no indentation.
+      push_split(out, indent, "\"" + std::string(document.text_data(node)) + "\"");
       return;
-    }
     case dom::NodeType::Fragment: {  // <template> contents
       out.push_back(indent + "content");
       for (const dom::NodeId child : document.children(node)) serialize(document, child, depth + 1, out);
@@ -208,16 +204,12 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
     for (const Case& test : parse_dat(text)) {
       ++index;
       if (options.limit != 0 && report.total >= options.limit) {
-        report.notes.push_back("skipped fragment cases: " + std::to_string(fragment_cases));
+        report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
         report.notes.push_back("skipped doctype-identifier cases: " + std::to_string(doctype_id_cases));
         report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
         return report;
       }
       if (test.expected.empty() && test.data.empty()) continue;
-      if (test.fragment) {
-        ++fragment_cases;
-        continue;
-      }
       bool needs_doctype_ids = false;
       bool needs_foreign = false;
       for (const std::string& line : test.expected) {
@@ -241,9 +233,19 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
 
       dom::Document document;
       html::ParseOptions parse_options;
-      (void)html::parse_html(test.data, document, nullptr, parse_options);
       std::vector<std::string> actual;
-      serialize(document, document.root(), 0, actual);
+      const bool fragment = !test.fragment_context.empty() && test.fragment_context != "?";
+      if (fragment) {
+        // Fragment parsing: the expected tree is the *children* of the context
+        // element (html5lib prints the fragment's nodes, not a wrapper).
+        ++fragment_cases;
+        const dom::NodeId context =
+            html::parse_fragment(test.data, test.fragment_context, document, nullptr, parse_options);
+        for (const dom::NodeId child : document.children(context)) serialize(document, child, 0, actual);
+      } else {
+        (void)html::parse_html(test.data, document, nullptr, parse_options);
+        serialize(document, document.root(), 0, actual);
+      }
 
       if (actual == test.expected) {
         ++report.passed;
@@ -261,14 +263,16 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
         } else {
           detail_text = "missing node: expected '" + test.expected[actual.size()] + "'";
         }
-        report.failures.push_back({file + " #" + std::to_string(index), detail_text + " [input " + test.data + "]"});
+        const std::string label = file + " #" + std::to_string(index) +
+                                  (fragment ? " (fragment " + test.fragment_context + ")" : "");
+        report.failures.push_back({label, detail_text + " [input " + test.data + "]"});
       }
     }
   }
-  report.notes.push_back("skipped fragment cases: " + std::to_string(fragment_cases));
+  report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
   report.notes.push_back("skipped doctype-identifier cases: " + std::to_string(doctype_id_cases));
   report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
-  report.excluded = fragment_cases + doctype_id_cases + foreign_cases;
+  report.excluded = doctype_id_cases + foreign_cases;
   return report;
 }
 

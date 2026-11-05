@@ -232,6 +232,28 @@ reftests — 7/7, юнит-тестов 353. Открыто: `template`/`framese
 рендеринг frameset'ов, внешний контент SVG/MathML, fragment parsing.
 
 
+## Этап 13 — fragment parsing (`Element.innerHTML`)
+
+Реализован алгоритм фрагментного разбора: контекстный элемент **не лежит в стеке**
+открытых элементов (в стеке только поддельный `<html>`, `current()` отдаёт
+контекст), режим вставки берётся из тега контекста по «reset the insertion mode»
+с оговоркой `last = true`, а текстовые контексты (`title`/`textarea`/`script`/…)
+входят в RCDATA/RAWTEXT без «appropriate end tag». Корпус начал считать 155
+фрагментных случаев. `pop_through()` больше не снимает корневой `<html>` и
+сообщает, снял ли он элемент, — из-за этого ушли циклы переразбора в табличных
+режимах. `innerHTML` в bindings переведён на `parse_fragment` с тегом самого узла.
+Подробности: [`docs/STAGE-13.md`](STAGE-13.md), решение —
+[`docs/adr/0015-fragment-parsing.md`](adr/0015-fragment-parsing.md).
+
+**Критерий выхода**: фрагменты разбираются контекстно, `innerHTML` работает как в
+браузере, регрессий нет. Сейчас: tree construction — 1 340/1 535 (87.3 %, было
+83.6 %; фрагментных 149/155), токенайзер — 6 281/6 820 (92.1 %), test262 —
+2 673/13 254 (20.2 %), reftests — 7/7, юнит-тестов 369. Открыто: adoption agency
+для `<aside>`-случаев, `template`/`frameset`, `noscript` со scripting,
+`<select>`-крайности, `plaintext`/CR, DOCTYPE-идентификаторы, внешний контент
+SVG/MathML, рендеринг frameset'ов.
+
+
 ---
 
 ## Риски и как их снимаем

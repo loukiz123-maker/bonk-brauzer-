@@ -135,6 +135,13 @@ void Tokenizer::enter_text_element(std::string_view tag_name, bool rcdata) {
   state_ = rcdata ? State::RcData : State::RawText;
 }
 
+void Tokenizer::enter_context_text_state(bool rcdata) {
+  text_element_active_ = false;
+  text_element_name_.clear();
+  text_element_rcdata_ = rcdata;
+  state_ = rcdata ? State::RcData : State::RawText;
+}
+
 void Tokenizer::enter_plain_text() {
   text_element_active_ = false;
   state_ = State::PlainText;

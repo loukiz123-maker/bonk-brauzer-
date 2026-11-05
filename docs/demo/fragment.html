@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bonk Brauzer — fragment parsing (innerHTML)</title>
+<style>
+  body { font-family: "DejaVu Sans", sans-serif; margin: 0; padding: 28px; background: #101318; color: #e8eaf0; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { color: #9aa4b2; margin: 0 0 22px; font-size: 13px; }
+  .grid { display: flex; gap: 18px; flex-wrap: wrap; }
+  .card { background: #1a1f27; border: 1px solid #2b3240; border-radius: 8px; padding: 14px 16px; width: 340px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #7f8b9c; margin: 0 0 10px; }
+  code { color: #8fd6ff; font-family: "DejaVu Sans Mono", monospace; font-size: 12px; display: block; margin-bottom: 10px; }
+  .out { border-left: 3px solid #3d7ea6; padding-left: 10px; line-height: 1.5; font-size: 13px; }
+  table { border-collapse: collapse; font-size: 13px; }
+  td, th { border: 1px solid #2b3240; padding: 3px 8px; }
+  b { color: #ffd479; }
+  em { color: #8be28b; }
+</style>
+</head>
+<body>
+  <h1>Fragment parsing: innerHTML with a real context</h1>
+  <p class="lead">Every box below was filled by <code>element.innerHTML = …</code> in the engine's own JS. The context element decides the tokenizer state and the insertion mode — the same fragment algorithm the html5lib corpus measures.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>td context drops a stray row</h2>
+      <code>cell.innerHTML = '&lt;tr&gt;&lt;td&gt;x&lt;/td&gt;&lt;/tr&gt;y'</code>
+      <div class="out"><table><tbody><tr><td id="cell"></td></tr></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>tr context grows cells</h2>
+      <code>row.innerHTML = '&lt;td&gt;a&lt;/td&gt;&lt;td&gt;b&lt;/td&gt;'</code>
+      <div class="out"><table><tbody id="rows"></tbody></table></div>
+    </div>
+    <div class="card">
+      <h2>table context inserts tbody</h2>
+      <code>table.innerHTML = '&lt;tr&gt;&lt;td&gt;t&lt;/td&gt;&lt;/tr&gt;'</code>
+      <div class="out" id="tables"></div>
+    </div>
+    <div class="card">
+      <h2>textarea context is RCDATA</h2>
+      <code>area.innerHTML = '&lt;b&gt;not bold&lt;/b&gt;'</code>
+      <div class="out" id="areas"></div>
+    </div>
+    <div class="card">
+      <h2>div context: misnested &lt;b&gt;, &lt;em&gt;</h2>
+      <code>box.innerHTML = '&lt;p&gt;&lt;b&gt;1&lt;em&gt;2&lt;/b&gt;3&lt;/em&gt;'</code>
+      <div class="out" id="boxes"></div>
+    </div>
+    <div class="card">
+      <h2>context is never popped</h2>
+      <code>box.innerHTML = '&lt;/div&gt;&lt;b&gt;kept&lt;/b&gt;'</code>
+      <div class="out" id="popped"></div>
+    </div>
+  </div>
+
+  <script>
+    document.getElementById('cell').innerHTML = '<tr><td>x</td></tr>y';
+
+    var row = document.createElement('tr');
+    row.innerHTML = '<td>a</td><td>b</td>';
+    document.getElementById('rows').appendChild(row);
+
+    var table = document.createElement('table');
+    table.innerHTML = '<tr><td>t</td></tr>';
+    document.getElementById('tables').appendChild(table);
+
+    var area = document.createElement('textarea');
+    area.rows = 2;
+    area.innerHTML = '<b>not bold</b>';
+    document.getElementById('areas').appendChild(area);
+
+    document.getElementById('boxes').innerHTML = '<p><b>1<em>2</b>3</em>';
+
+    var popped = document.getElementById('popped');
+    popped.innerHTML = '</div><b>kept</b>';
+    console.log('fragment demo ready');
+  </script>
+</body>
+</html>

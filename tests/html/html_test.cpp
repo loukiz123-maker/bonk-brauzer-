@@ -374,3 +374,99 @@ BONK_TEST(html, search_closes_a_paragraph) {
   CHECK_EQ(parse_and_serialize("<p>foo<search>bar<p>baz"),
            std::string("<html><head></head><body><p>foo</p><search>bar<p>baz</p></search></body></html>"));
 }
+
+// --- fragment parsing (Element.innerHTML) -----------------------------------
+// `parse_fragment` builds the children of a context element that is *not* on the
+// stack of open elements, so nothing in the input can pop it; the tokenizer starts
+// in the state the context tag demands.
+
+namespace {
+
+std::string fragment_children(std::string_view input, std::string_view context) {
+  dom::Document document;
+  const dom::NodeId element = parse_fragment(input, context, document, nullptr, {});
+  std::string out;
+  for (const dom::NodeId child : document.children(element)) out += document.to_html(child);
+  return out;
+}
+
+}  // namespace
+
+BONK_TEST(html, fragment_div_parses_ordinary_markup) {
+  CHECK_EQ(fragment_children("<p>a<b>b</p>c", "div"), std::string("<p>a<b>b</b></p><b>c</b>"));
+}
+
+BONK_TEST(html, fragment_context_element_is_never_popped) {
+  // `</div>` has nothing to match: it must not close the context element.
+  CHECK_EQ(fragment_children("</div><b>x</b>", "div"), std::string("<b>x</b>"));
+}
+
+BONK_TEST(html, fragment_ignores_document_skeleton_tags) {
+  CHECK_EQ(fragment_children("<body><head><html><span>x", "body"), std::string("<span>x</span>"));
+}
+
+BONK_TEST(html, fragment_table_context_grows_table_parts) {
+  // "In table": a row gets its implicit <tbody>.
+  CHECK_EQ(fragment_children("<tr><td>x", "table"), std::string("<tbody><tr><td>x</td></tr></tbody>"));
+}
+
+BONK_TEST(html, fragment_tr_context_creates_cells) {
+  CHECK_EQ(fragment_children("<td>a</td><td>b", "tr"), std::string("<td>a</td><td>b</td>"));
+}
+
+BONK_TEST(html, fragment_td_context_uses_the_body_rules) {
+  // The spec's "reset the insertion mode" keeps "in cell" for cells that are really
+  // on the stack, so a `td` context parses with the "in body" rules: `<tr>`/`<td>`
+  // are parse errors and only the text survives.
+  CHECK_EQ(fragment_children("<tr><td>a", "td"), std::string("a"));
+}
+
+BONK_TEST(html, fragment_colgroup_drops_text) {
+  CHECK_EQ(fragment_children("foo<col>", "colgroup"), std::string("<col>"));
+}
+
+BONK_TEST(html, fragment_title_context_is_rcdata) {
+  CHECK_EQ(fragment_children("a&amp;b<b>c", "title"), std::string("a&amp;b&lt;b&gt;c"));
+}
+
+BONK_TEST(html, fragment_text_context_has_no_appropriate_end_tag) {
+  // The context tag was never a start tag we emitted, so `</script>` stays text.
+  CHECK_EQ(fragment_children("a()</script>b", "script"), std::string("a()&lt;/script&gt;b"));
+}
+
+BONK_TEST(html, fragment_plaintext_context_swallows_everything) {
+  CHECK_EQ(fragment_children("<b>no</b>", "plaintext"), std::string("&lt;b&gt;no&lt;/b&gt;"));
+}
+
+BONK_TEST(html, fragment_select_context_drops_input) {
+  CHECK_EQ(fragment_children("<input><option>a", "select"), std::string("<option>a</option>"));
+}
+
+BONK_TEST(html, fragment_template_context_keeps_contents_inline) {
+  CHECK_EQ(fragment_children("<div>t</div>", "template"), std::string("<div>t</div>"));
+}
+
+BONK_TEST(html, fragment_html_context_returns_the_document_element) {
+  dom::Document document;
+  const dom::NodeId element = parse_fragment("<body>X", "html", document, nullptr, {});
+  CHECK(document.type(element) == dom::NodeType::Element);
+  CHECK_EQ(document.tag_name(element), std::string_view("html"));
+  CHECK_EQ(document.to_html(element), std::string("<html><head></head><body>X</body></html>"));
+}
+
+BONK_TEST(html, fragment_context_element_hangs_off_the_document) {
+  dom::Document document;
+  const dom::NodeId element = parse_fragment("x", "textarea", document, nullptr, {});
+  CHECK_EQ(document.tag_name(element), std::string_view("textarea"));
+  CHECK_EQ(document.to_html(element), std::string("<textarea>x</textarea>"));
+  CHECK_EQ(document.children(document.root()).size(), static_cast<std::size_t>(2));  // <html> + context
+}
+
+BONK_TEST(html, comment_after_html_end_tag_stays_on_the_html_element) {
+  // "After body": the tree is closed, so a trailing comment lands next to <head> and
+  // <body> instead of inside the body.
+  CHECK_EQ(parse_and_serialize("<p>a</p></html><!--x-->"),
+           std::string("<html><head></head><body><p>a</p></body><!--x--></html>"));
+  CHECK_EQ(parse_and_serialize("</html><!--x-->"),
+           std::string("<html><head></head><body></body><!--x--></html>"));
+}

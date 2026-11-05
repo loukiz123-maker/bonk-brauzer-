@@ -91,8 +91,14 @@ class TreeBuilder {
   TreeBuilder(dom::Document& document, Diagnostics* diagnostics, ParseOptions options)
       : document_(document), diagnostics_(diagnostics), options_(options) {}
 
+  /// Fragment parsing: the context element whose children were built.
+  [[nodiscard]] dom::NodeId fragment_context_element() const { return context_; }
+  [[nodiscard]] dom::NodeId html_element() const { return html_; }
+  void set_fragment_context(std::string_view context_tag) { fragment_tag_ = context_tag; }
+
   void run(std::string_view input) {
     tokenizer_ = std::make_unique<Tokenizer>(input, diagnostics_);
+    if (!fragment_tag_.empty()) begin_fragment(fragment_tag_);
     for (;;) {
       Token token = tokenizer_->next();
       if (token.type == TokenType::EndOfFile) break;
@@ -106,9 +112,17 @@ class TreeBuilder {
   }
 
  private:
+  /// Insertion modes. Not a closed set of parser states: the mode is derived from
+  /// the stack of open elements (see `mode()`), which keeps nested tables honest.
+  enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup };
+
   // --- helpers -----------------------------------------------------------
   [[nodiscard]] dom::NodeId current() const {
-    return stack_.empty() ? document_.root() : stack_.back();
+    // Fragment parsing: with the stack down to the fake <html> root, new children
+    // belong to the context element (which is deliberately not on the stack).
+    if (fragment_mode_ && stack_.size() <= 1) return context_;
+    if (stack_.empty()) return document_.root();
+    return stack_.back();
   }
 
   /// `<template>` keeps its children in a separate DocumentFragment ("template
@@ -152,8 +166,47 @@ class TreeBuilder {
     return false;
   }
 
-  [[nodiscard]] bool body_created() const { return body_.valid(); }
-  [[nodiscard]] bool head_created() const { return head_.valid(); }
+  [[nodiscard]] bool body_created() const { return fragment_mode_ || body_.valid(); }
+  [[nodiscard]] bool head_created() const { return fragment_mode_ || head_.valid(); }
+
+  /// The fragment algorithm (HTML §13.4), specialised for this builder: the fake
+  /// root is an <html> element that holds nothing, the context element lives
+  /// outside the stack, and `current()` hands it back while the stack is down to
+  /// that root. That is why no rule can ever pop the context element — matching
+  /// the spec, where the context element is not on the stack of open elements at
+  /// all and the result is "the children of the root".
+  void begin_fragment(std::string_view context_tag) {
+    fragment_mode_ = true;
+    ensure_html();
+    context_ = document_.create_element(context_tag);
+    document_.append_child(document_.root(), context_);
+    fragment_initial_mode_ = initial_mode_for(context_tag);
+    // RCDATA/RAWTEXT/PLAINTEXT, but with no appropriate end tag: the context tag
+    // was never a start tag we emitted, so `</script>` in the fragment is text.
+    if (context_tag == "title" || context_tag == "textarea") {
+      tokenizer_->enter_context_text_state(true);
+    } else if (context_tag == "style" || context_tag == "xmp" || context_tag == "iframe" ||
+               context_tag == "noembed" || context_tag == "noframes" || context_tag == "script" ||
+               (context_tag == "noscript" && options_.scripting_enabled)) {
+      tokenizer_->enter_context_text_state(false);
+    } else if (context_tag == "plaintext") {
+      tokenizer_->enter_plain_text();
+    }
+  }
+
+  /// "Reset the insertion mode appropriately", fragment case: the context element
+  /// is the last node in the (one element) stack, so every rule that requires
+  /// `last` to be false is skipped. That is what makes a `td` context behave like
+  /// "in body" (no `<tr>`/`<td>` repairing) while `tr`/`tbody`/`colgroup`/`table`
+  /// keep their own modes.
+  [[nodiscard]] static Mode initial_mode_for(std::string_view tag) {
+    if (tag == "tr") return Mode::Row;
+    if (tag == "tbody" || tag == "thead" || tag == "tfoot") return Mode::TableBody;
+    if (tag == "colgroup") return Mode::ColumnGroup;
+    if (tag == "table") return Mode::Table;
+    return Mode::Body;  // td/th/caption/select/head/body/… and everything else
+  }
+
 
   void ensure_html() {
     if (html_.valid()) return;
@@ -285,7 +338,9 @@ class TreeBuilder {
     return dom::NodeId{};
   }
 
-  [[nodiscard]] bool in_frameset() const { return has_open("frameset"); }
+  [[nodiscard]] bool in_frameset() const {
+    return has_open("frameset") || (fragment_mode_ && tag_of(context_) == "frameset");
+  }
 
   /// True when the document's content root is a <frameset> instead of a <body>.
   [[nodiscard]] bool frameset_document() const { return body_.valid() && tag_of(body_) == "frameset"; }
@@ -718,8 +773,6 @@ class TreeBuilder {
   // `<table>` → Table, `<tbody>` → TableBody, `<tr>` → Row, `<td>` → Cell,
   // `<colgroup>` → ColumnGroup. Everything else is Body (which also covers the
   // content of a `<template>`, because the template element is the current node).
-  enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup };
-
   /// The nearest element that defines a mode wins; formatting and block elements
   /// sitting above it (foster-parented or inside a cell) do not change the mode,
   /// which is what keeps `<table><a>1<td>` in the "in table" rules.
@@ -735,9 +788,10 @@ class TreeBuilder {
         return template_modes_.empty() ? Mode::Body : template_modes_.back();
       }
       // <caption> holds ordinary content; <html> is the outermost element.
-      if (tag == "caption" || tag == "html") return Mode::Body;
+      if (tag == "caption") return Mode::Body;
+      if (tag == "html") return fragment_mode_ ? fragment_initial_mode_ : Mode::Body;
     }
-    return Mode::Body;
+    return fragment_mode_ ? fragment_initial_mode_ : Mode::Body;
   }
 
   /// Pop the stack back to the table (or template/html) that started the context.
@@ -766,13 +820,23 @@ class TreeBuilder {
   }
 
   /// Pop up to and including the innermost cell (or row / table body).
-  void pop_through(std::string_view tag_a, std::string_view tag_b = {}, std::string_view tag_c = {}) {
+  /// Returns true when something was actually popped: the fragment case has no
+  /// element to pop (the context element is not on the stack), and callers must
+  /// not reprocess the token when nothing was closed — that would loop.
+  bool pop_through(std::string_view tag_a, std::string_view tag_b = {}, std::string_view tag_c = {}) {
+    bool popped = false;
     while (!stack_.empty()) {
       const std::string_view top = tag_of(stack_.back());
       const bool hit = top == tag_a || (tag_b.size() != 0 && top == tag_b) || (tag_c.size() != 0 && top == tag_c);
+      if (stack_.size() == 1) {  // never pop the document's <html> element
+        report("html.misnested_end_tag", "pop through <" + std::string(top) + "> stopped at <html>");
+        return popped;
+      }
       stack_.pop_back();
-      if (hit) return;
+      popped = true;
+      if (hit) return true;
     }
+    return popped;
   }
 
   void close_cell() {
@@ -827,6 +891,10 @@ class TreeBuilder {
       return true;
     }
     if (name == "table") {  // a table inside a table closes the outer one
+      if (!in_table_scope("table")) {  // fragment case: no table to close
+        report("html.ignored_in_table", "<table> ignored: no table in scope");
+        return true;
+      }
       report("html.nested_table", "<table> inside <table> closes the outer table");
       pop_through("table");
       handle_start_tag(token);
@@ -950,6 +1018,10 @@ class TreeBuilder {
       return true;
     }
     if (name == "table") {
+      if (!in_table_scope("tr")) {  // fragment case: no row on the stack to close
+        report("html.ignored_end_tag", "</table> ignored: no row in table scope");
+        return true;
+      }
       pop_through("tr");
       handle_end_tag_name(name);
       return true;
@@ -968,17 +1040,10 @@ class TreeBuilder {
     return false;
   }
 
+  /// "In cell": any table part closes the cell and is reprocessed one mode up.
+  /// Without a cell in table scope the token is ignored (the fragment case).
   bool cell_start(const Token& token) {
-    if (!is_table_part(token.name) || token.name == "td" || token.name == "th") {
-      if (token.name == "caption" || token.name == "col" || token.name == "colgroup" || token.name == "tbody" ||
-          token.name == "tfoot" || token.name == "thead" || token.name == "tr") {
-        if (!in_table_scope("td") && !in_table_scope("th")) return true;
-        close_cell();
-        handle_start_tag(token);
-        return true;
-      }
-      return false;  // ordinary content inside a cell: "in body" rules
-    }
+    if (!is_table_part(token.name)) return false;  // ordinary content: "in body" rules
     if (!in_table_scope("td") && !in_table_scope("th")) return true;
     close_cell();
     handle_start_tag(token);
@@ -1010,7 +1075,10 @@ class TreeBuilder {
       return true;
     }
     if (token.name == "template") return false;
-    pop_through("colgroup");
+    if (!pop_through("colgroup")) {  // fragment case: the context is not on the stack
+      report("html.ignored_in_colgroup", "<" + std::string(token.name) + "> ignored inside <colgroup>");
+      return true;
+    }
     handle_start_tag(token);
     return true;
   }
@@ -1022,7 +1090,7 @@ class TreeBuilder {
     }
     if (name == "col") return true;
     if (name == "template") return false;
-    pop_through("colgroup");
+    if (!pop_through("colgroup")) return true;
     handle_end_tag_name(name);
     return true;
   }
@@ -1092,6 +1160,16 @@ class TreeBuilder {
 
   // --- token handling ----------------------------------------------------
   void process(const Token& token) {
+    // "After body": comments keep landing on the <html> element until real content
+    // arrives (which switches back to "in body") — what makes `</html><!--x-->`
+    // put the comment next to <head>/<body> rather than inside <body>.
+    if (after_body_) {
+      if (token.type == TokenType::Comment && html_.valid()) {
+        document_.append_child(html_, document_.create_comment(token.data));
+        return;
+      }
+      if (token.type != TokenType::EndOfFile) after_body_ = false;
+    }
     switch (token.type) {
       case TokenType::Doctype:
         // Only the first doctype, before any element, counts; later ones are ignored.
@@ -1169,6 +1247,12 @@ class TreeBuilder {
       ensure_body();
     }
     const Mode current_mode = mode();
+    if (current_mode == Mode::ColumnGroup) {
+      // "In column group": anything but whitespace is a parse error and dropped.
+      if (!trim(text).empty()) report("html.ignored_in_colgroup", "text ignored inside <colgroup>");
+      if (trim(text).empty()) document_.append_text(current(), text);
+      return;
+    }
     const bool in_table_text = current_mode == Mode::Table || current_mode == Mode::TableBody ||
                                current_mode == Mode::Row;
     std::string sanitized;  // keeps the cleaned text alive while we use the view
@@ -1194,6 +1278,23 @@ class TreeBuilder {
   void handle_start_tag(const Token& token) {
     const std::string_view name = token.name;
     document_element_seen_ = true;
+
+    // Fragment parsing: the stack holds only the fake <html> root, so the skeleton
+    // tags of a document (`<html>`, `<head>`, `<body>`, `<frameset>`) are parse
+    // errors and ignored — they cannot restructure the fragment.
+    if (fragment_mode_ && stack_.size() <= 1 &&
+        (name == "html" || name == "head" || name == "body" || name == "frameset")) {
+      report("html.ignored_in_fragment", "<" + std::string(name) + "> ignored inside a fragment");
+      return;
+    }
+
+    // A <select> fragment has no select on the stack, so the "in select" scope is
+    // empty. html5lib's corpus drops a bare <input> here (that rule owns input
+    // only) while keygen/textarea and unknown tags use the ordinary body rules.
+    if (fragment_mode_ && tag_of(context_) == "select" && name == "input") {
+      report("html.ignored_in_select", "<input> ignored inside a <select> fragment");
+      return;
+    }
 
     if (name == "html") {
       if (!html_.valid()) {
@@ -1342,8 +1443,11 @@ class TreeBuilder {
         return;
       }
       if (name == "input" || name == "keygen" || name == "textarea") {
+        if (!close_open("select")) {  // fragment case: nothing on the stack to close
+          report("html.ignored_in_select", "<" + std::string(name) + "> ignored inside <select>");
+          return;
+        }
         report("html.select_closed_by_input", "<" + std::string(name) + "> inside <select> closes it");
-        close_open("select");
       } else if (name != "script" && name != "template") {
         report("html.ignored_in_select", "<" + std::string(name) + "> ignored inside <select>");
         return;
@@ -1400,6 +1504,15 @@ class TreeBuilder {
         break;
     }
 
+    // "Anything else" in body, first the table parts: with no table cell above
+    // them these are parse errors and must be dropped (`<tr>` outside a table
+    // does not get to grow a table-less row).
+    if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "td" ||
+        name == "tfoot" || name == "th" || name == "thead" || name == "tr") {
+      report("html.ignored_table_part", "<" + std::string(name) + "> ignored outside a table");
+      return;
+    }
+
     if (is_formatting(name)) {  // reconstruct what an implicit end tag closed
       start_formatting(token);
       return;
@@ -1418,6 +1531,12 @@ class TreeBuilder {
   void handle_end_tag(const Token& token) { handle_end_tag_name(token.name); }
 
   void handle_end_tag_name(std::string_view name) {
+    // "Before html" treats an end tag for html/head/body/br like "anything else":
+    // the <html> element is created first, so a following comment lands inside it.
+    if (!html_.valid() && (name == "html" || name == "head" || name == "body" || name == "br")) {
+      ensure_html();
+    }
+
     // "Before head" and "after head" ignore every end tag except these: `</p>`
     // before <body> must not conjure a paragraph.
     const dom::NodeId tag_top = current();
@@ -1457,7 +1576,13 @@ class TreeBuilder {
         break;
     }
 
-    if (name == "html" || name == "body") return;  // ignore: the tree is closed at EOF
+    if (name == "html" || name == "body") {  // the tree is closed at EOF: just switch mode
+      // `</html>` before any content creates <head>/<body> (the "before head" and
+      // "after head" rules), so a following comment lands after them.
+      if (!fragment_mode_ && !body_.valid()) ensure_body();
+      if (body_.valid() && tag_in_scope("body")) after_body_ = true;
+      return;
+    }
     if (name == "head") {
       close_head();
       return;
@@ -1549,14 +1674,21 @@ class TreeBuilder {
   }
 
   void finish() {
-    if (!body_created()) ensure_body();
-    if (!head_created()) ensure_head();
+    if (!fragment_mode_) {
+      if (!body_created()) ensure_body();
+      if (!head_created()) ensure_head();
+    }
     stack_.clear();
   }
 
   dom::Document& document_;
   Diagnostics* diagnostics_ = nullptr;
   ParseOptions options_;
+  bool fragment_mode_ = false;
+  bool after_body_ = false;  // "after body": true once </body> or </html> was seen
+  dom::NodeId context_;  // fragment parsing: the element whose children we build
+  Mode fragment_initial_mode_ = Mode::Body;  // "reset the insertion mode", fragment case
+  std::string_view fragment_tag_;            // non-empty: run() starts the fragment algorithm
   std::unique_ptr<Tokenizer> tokenizer_;
 
   bool document_element_seen_ = false;
@@ -1577,6 +1709,25 @@ class TreeBuilder {
 };
 
 }  // namespace
+
+dom::NodeId parse_fragment(std::string_view bytes, std::string_view context_tag, dom::Document& document,
+                           Diagnostics* diagnostics, ParseOptions options) {
+  if (bytes.size() >= 3 && static_cast<unsigned char>(bytes[0]) == 0xEF &&
+      static_cast<unsigned char>(bytes[1]) == 0xBB && static_cast<unsigned char>(bytes[2]) == 0xBF) {
+    bytes.remove_prefix(3);
+  }
+  TreeBuilder builder(document, diagnostics, options);
+  if (context_tag == "html") {
+    // `document.documentElement.innerHTML`: the document algorithm already puts
+    // <head> and <body> under <html>, and those are exactly the children the
+    // fragment consists of, so no synthetic context element is needed.
+    builder.run(bytes);
+    return builder.html_element();
+  }
+  builder.set_fragment_context(context_tag);
+  builder.run(bytes);
+  return builder.fragment_context_element();
+}
 
 Status parse_html(std::string_view bytes, dom::Document& document, Diagnostics* diagnostics, ParseOptions options) {
   // A leading UTF-8 BOM belongs to the encoding layer: drop it here so the

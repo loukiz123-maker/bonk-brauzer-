@@ -491,17 +491,18 @@ void Bindings::Impl::set_inner_html(NodeId node, const std::string& html) {
     document.remove_child(node, document.first_child(node));
   }
   if (html.empty()) return;
-  // Fragment parsing reuses the real HTML parser: parse into a scratch document
-  // and deep-copy the body children into the target.
-  Result<Document> parsed = html::parse_document("<body>" + html + "</body>", document.source_url());
-  if (parsed.is_error()) return;
-  auto scratch = std::make_shared<Document>(std::move(parsed.value()));
-  const NodeId body = scratch->body();
-  if (!body.valid()) return;
-  NodeId child = scratch->first_child(body);
+  // Real fragment parsing: the element's own tag is the context, so the tokenizer
+  // state and the insertion mode follow what the element demands (`<template>`
+  // contents, a `<tr>` that may hold cells without a table, RCDATA in `title` …).
+  if (document.type(node) != NodeType::Element) return;
+  const std::string tag(document.tag_name(node));
+  Document scratch(document.source_url());
+  const NodeId context = html::parse_fragment(html, tag, scratch, nullptr, {});
+  if (!context.valid()) return;
+  NodeId child = scratch.first_child(context);
   while (child.valid()) {
-    copy_into(*scratch, child, node);
-    child = scratch->next_sibling(child);
+    copy_into(scratch, child, node);
+    child = scratch.next_sibling(child);
   }
 }
 

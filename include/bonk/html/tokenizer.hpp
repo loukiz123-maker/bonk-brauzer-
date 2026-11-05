@@ -43,6 +43,11 @@ class Tokenizer {
   /// the following bytes are text up to the matching end tag, not markup.
   void enter_text_element(std::string_view tag_name, bool rcdata);
 
+  /// Fragment parsing: enter the text state the context element demands, but with
+  /// no "appropriate end tag" — the context tag is never emitted as a start tag, so
+  /// `</title>` inside the fragment stays text (HTML §13.4, step 4).
+  void enter_context_text_state(bool rcdata);
+
   /// <plaintext> swallows the rest of the document as character data.
   void enter_plain_text();
 

@@ -27,6 +27,14 @@ struct ParseOptions {
 Status parse_html(std::string_view bytes, dom::Document& document, Diagnostics* diagnostics = nullptr,
                   ParseOptions options = {});
 
+/// Fragment parsing (`Element.innerHTML`, `Range.createContextualFragment`): parses
+/// `bytes` as the children of `context_tag`. Returns the context element that was
+/// created inside `document`; its children are the parsed result. The tokenizer
+/// starts in RCDATA/RAWTEXT/PLAINTEXT where the context element demands it.
+[[nodiscard]] dom::NodeId parse_fragment(std::string_view bytes, std::string_view context_tag,
+                                         dom::Document& document, Diagnostics* diagnostics = nullptr,
+                                         ParseOptions options = {});
+
 /// Convenience: build a fresh document from a string (used by tests and the CLI).
 [[nodiscard]] Result<dom::Document> parse_document(std::string_view bytes, std::string_view source_url = {},
                                                    Diagnostics* diagnostics = nullptr);
