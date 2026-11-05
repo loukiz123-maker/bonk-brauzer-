@@ -68,6 +68,8 @@ struct Expr {
   ExprKind kind = ExprKind::Undefined;
   double number = 0.0;
   bool boolean = false;
+  /// `a?.b` / `a?.[k]` / `f?.(x)`: this step short-circuits on a nullish receiver.
+  bool optional = false;
   std::string text;                 // identifier / string literal / operator
   std::vector<ExprPtr> children;    // operands, elements, arguments, template parts
   std::vector<PropertyDef> properties;

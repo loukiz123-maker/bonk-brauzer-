@@ -866,6 +866,10 @@ class Interpreter {
  private:
   Value make_function(const ast::FunctionPtr& node, const ScopePtr& scope);
   Value eval_call(const ast::Expr& expression, const ScopePtr& scope);
+  /// `a?.b.c[k](x)` — evaluates the whole postfix chain once, returning `undefined`
+  /// as soon as an optional step sees a nullish receiver (ES2020 13.3.9).
+  Value eval_postfix_chain(const ast::Expr& expression, const ScopePtr& scope);
+  static bool chain_has_optional(const ast::Expr& expression);
   Completion exec_block(const std::vector<ast::StmtPtr>& statements, const ScopePtr& parent);
 
   RuntimeState& runtime_;
@@ -1506,6 +1510,54 @@ Value lookup_this(const Scope* scope) {
 
 }  // namespace
 
+bool Interpreter::chain_has_optional(const ast::Expr& expression) {
+  const ast::Expr* cursor = &expression;
+  while (cursor != nullptr &&
+         (cursor->kind == ast::ExprKind::Member || cursor->kind == ast::ExprKind::Call)) {
+    if (cursor->optional) return true;
+    cursor = cursor->children.empty() ? nullptr : cursor->children[0].get();
+  }
+  return false;
+}
+
+Value Interpreter::eval_postfix_chain(const ast::Expr& expression, const ScopePtr& scope) {
+  std::vector<const ast::Expr*> steps;  // outermost first
+  ast::ExprPtr base;
+  const ast::Expr* cursor = &expression;
+  while (cursor != nullptr && !cursor->children.empty() &&
+         (cursor->kind == ast::ExprKind::Member || cursor->kind == ast::ExprKind::Call)) {
+    steps.push_back(cursor);
+    base = cursor->children[0];
+    cursor = base.get();
+  }
+  if (!base) throw thrown(type_error("invalid optional chain"));
+  Value current = eval(base, scope);
+  Value receiver;
+  for (auto it = steps.rbegin(); it != steps.rend(); ++it) {
+    const ast::Expr& step = **it;
+    const bool followed_by_call = it + 1 != steps.rend() && (*(it + 1))->kind == ast::ExprKind::Call;
+    if (step.kind == ast::ExprKind::Member) {
+      if (current.is_nullish()) {
+        if (step.optional) return Value::undefined();
+        throw thrown(type_error("cannot read property '" + step.text + "' of " + to_string(current)));
+      }
+      if (followed_by_call) receiver = current;
+      const std::string key = step.boolean ? to_string(eval(step.children[1], scope)) : step.text;
+      current = get_member(current, key);
+      continue;
+    }
+    // Call step.
+    if (step.optional && current.is_nullish()) return Value::undefined();
+    std::vector<Value> arguments;
+    for (std::size_t i = 1; i < step.children.size(); ++i) {
+      arguments.push_back(eval(step.children[i], scope));
+    }
+    current = call(current, receiver, std::move(arguments));
+    receiver = Value::undefined();
+  }
+  return current;
+}
+
 Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope) {
   const ast::ExprPtr& callee_expression = expression.children[0];
   Value this_value = Value::undefined();
@@ -1816,46 +1868,73 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
 
     case ast::ExprKind::Assign: {
       const ast::ExprPtr& target = expression->children[0];
-      Value value = eval(expression->children[1], scope);
-      if (expression->text != "=") {
-        Value current_value;
-        if (target->kind == ast::ExprKind::Identifier) {
-          const Lookup found = lookup_scope(scope, target->text);
-          if (!found.found) {
-            throw thrown(reference_error("'" + target->text + "' is not defined"));
-          }
-          current_value = found.scope->variables[target->text];
-        } else if (target->kind == ast::ExprKind::Member) {
-          const Value object = eval(target->children[0], scope);
-          const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
-          current_value = get_member(object, key);
+      const std::string& assign_op = expression->text;
+      const bool target_is_identifier = target->kind == ast::ExprKind::Identifier;
+      if (!target_is_identifier && target->kind != ast::ExprKind::Member) {
+        throw thrown(reference_error("invalid assignment target"));
+      }
+      // The reference is evaluated once, before the right-hand side (ES2015 12.14.4):
+      // `a[i()] += f()` calls `i` and `f` once each, `o.p ||= v` never sets on a truthy `p`.
+      Value object;
+      std::string key;
+      if (!target_is_identifier) {
+        object = eval(target->children[0], scope);
+        key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
+        if (object.is_nullish()) {
+          throw thrown(type_error("cannot set property '" + key + "' of " + to_string(object)));
         }
-        const std::string op = expression->text.substr(0, expression->text.size() - 1);
-        value = apply_arithmetic(op, current_value, value);
+      }
+      auto read_reference = [&]() -> Value {
+        if (target_is_identifier) {
+          const Lookup found = lookup_scope(scope, target->text);
+          if (!found.found) throw thrown(reference_error("'" + target->text + "' is not defined"));
+          return found.scope->variables[target->text];
+        }
+        return get_member(object, key);
+      };
+      auto write_reference = [&](const Value& written) {
+        if (target_is_identifier) {
+          const Lookup found = lookup_scope(scope, target->text);
+          if (found.found) found.scope->variables[target->text] = written;
+          else scope->variables[target->text] = written;  // sloppy: creates a global
+        } else {
+          set_member(object, key, written);
+        }
+      };
+
+      if (assign_op == "||=" || assign_op == "&&=" || assign_op == "?" "?=") {
+        const Value current = read_reference();
+        const bool keep_current = assign_op == "||=" ? to_boolean(current)
+                                  : assign_op == "&&=" ? !to_boolean(current)
+                                                       : !current.is_nullish();
+        if (keep_current) return current;
+        const Value value = eval(expression->children[1], scope);
+        write_reference(value);
+        return value;
       }
 
-      if (target->kind == ast::ExprKind::Identifier) {
-        const Lookup found = lookup_scope(scope, target->text);
-        if (found.found) found.scope->variables[target->text] = value;
-        else scope->variables[target->text] = value;
+      if (assign_op == "=") {
+        const Value value = eval(expression->children[1], scope);
+        write_reference(value);
         return value;
       }
-      if (target->kind == ast::ExprKind::Member) {
-        const Value object = eval(target->children[0], scope);
-        const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
-        set_member(object, key, value);
-        return value;
-      }
-      throw thrown(reference_error("invalid assignment target"));
+
+      const Value current_value = read_reference();
+      const Value right = eval(expression->children[1], scope);
+      const Value value = apply_arithmetic(assign_op.substr(0, assign_op.size() - 1), current_value, right);
+      write_reference(value);
+      return value;
     }
 
     case ast::ExprKind::Member: {
+      if (expression->optional || chain_has_optional(*expression)) return eval_postfix_chain(*expression, scope);
       const Value object = eval(expression->children[0], scope);
       const std::string key = expression->boolean ? to_string(eval(expression->children[1], scope)) : expression->text;
       return get_member(object, key);
     }
 
     case ast::ExprKind::Call:
+      if (chain_has_optional(*expression)) return eval_postfix_chain(*expression, scope);
       return eval_call(*expression, scope);
 
     case ast::ExprKind::New: {

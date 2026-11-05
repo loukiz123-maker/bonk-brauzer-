@@ -121,16 +121,35 @@ struct Lexer {
     if ((c >= '0' && c <= '9') || (c == '.' && peek(1) >= '0' && peek(1) <= '9')) {
       token.type = Token::Type::Number;
       std::string digits;
-      if (c == '0' && (peek(1) == 'x' || peek(1) == 'X')) {
+      if (c == '0' && (peek(1) == 'x' || peek(1) == 'X' || peek(1) == 'b' || peek(1) == 'B' || peek(1) == 'o' ||
+                       peek(1) == 'O')) {
+        const char radix_indicator = peek(1);
         advance();
         advance();
-        while (std::isxdigit(static_cast<unsigned char>(peek())) != 0) digits.push_back(advance());
-        token.number = static_cast<double>(std::strtoul(digits.c_str(), nullptr, 16));
+        const int radix = (radix_indicator == 'x' || radix_indicator == 'X')
+                              ? 16
+                              : ((radix_indicator == 'b' || radix_indicator == 'B') ? 2 : 8);
+        for (;;) {
+          const char digit = peek();
+          if (digit == '_') {  // numeric separator
+            advance();
+            continue;
+          }
+          const bool valid = radix == 16   ? std::isxdigit(static_cast<unsigned char>(digit)) != 0
+                             : radix == 2  ? (digit == '0' || digit == '1')
+                                           : (digit >= '0' && digit <= '7');
+          if (!valid) break;
+          digits.push_back(advance());
+        }
+        token.number = static_cast<double>(std::strtoull(digits.c_str(), nullptr, radix));
       } else {
         while (!at_end() && ((peek() >= '0' && peek() <= '9') || peek() == '.' || peek() == 'e' || peek() == 'E' ||
+                             peek() == '_' ||
                              ((peek() == '-' || peek() == '+') && !digits.empty() &&
                               (digits.back() == 'e' || digits.back() == 'E')))) {
-          digits.push_back(advance());
+          const char digit = advance();
+          if (digit == '_') continue;  // `1_000_000` is `1000000`
+          digits.push_back(digit);
         }
         token.number = std::strtod(digits.c_str(), nullptr);
       }
@@ -218,7 +237,8 @@ struct Lexer {
       return token;
     }
 
-    static const char* kPunctuators[] = {"===", "!==", ">>>=", ">>>", "**=", "<<=", ">>=", "&=", "|=", "^=", "=>",
+    static const char* kPunctuators[] = {"===", "!==", ">>>=", ">>>", "**=", "<<=", ">>=", "&&=", "||=", "?" "?=",
+                                         "&=", "|=", "^=", "=>",
                                          "==",  "!=",  "<=",   ">=",  "&&",  "||",  "??",
                                          "?.",  "++",  "--",  "+=",  "-=", "*=", "/=", "%=", "<<", ">>", "**",
         "{",   "}",   "(",   ")",   "[",   "]",   ";",   ",",   "<",   ">",   "+",  "-",  "*",  "/",  "%",
@@ -638,8 +658,9 @@ struct Parser {
 
   /// `=`, the arithmetic compounds, the bitwise compounds and `**=`.
   bool is_assignment_operator() const {
-    static const char* kOperators[] = {"=",  "+=", "-=", "*=",  "/=", "%=",
-                                       "<<=", ">>=", ">>>=", "&=", "|=", "^=", "**="};
+    static const char* kOperators[] = {"=",    "+=",  "-=",   "*=",  "/=",  "%=",   "<<=",
+                                       ">>=", ">>>=", "&=",  "|=",  "^=",  "**=", "&&=",
+                                       "||=", "?" "?="};
     for (const char* candidate : kOperators) {
       if (is(candidate)) return true;
     }
@@ -650,8 +671,10 @@ struct Parser {
   /// (ES2015 12.14.1 AssignmentTargetType). `1 = 2`, `f() = 2`, `this = 1` and
   /// `(a, b) = 1` are SyntaxErrors, not runtime errors.
   static bool is_simple_assignment_target(const ExprPtr& expression) {
-    return expression != nullptr &&
-           (expression->kind == ExprKind::Identifier || expression->kind == ExprKind::Member);
+    if (expression == nullptr) return false;
+    if (expression->kind == ExprKind::Identifier) return true;
+    // `a?.b = 1` is an early error (ES2020 13.15.1).
+    return expression->kind == ExprKind::Member && !expression->optional;
   }
 
   /// `=` additionally accepts destructuring patterns, which are (syntactically)
@@ -787,6 +810,39 @@ struct Parser {
   ExprPtr parse_call_member() {
     ExprPtr expression = is("new") ? parse_new() : parse_primary();
     for (;;) {
+      if (is("?.")) {
+        take();
+        if (is("(")) {
+          auto call = make(ExprKind::Call);
+          call->optional = true;
+          call->children.push_back(expression);
+          take();
+          while (!is(")") && current().type != Token::Type::EndOfFile) {
+            call->children.push_back(parse_assignment());
+            if (!match(",")) break;
+          }
+          expect(")");
+          expression = call;
+          continue;
+        }
+        auto member = make(ExprKind::Member);
+        member->optional = true;
+        if (is("[")) {
+          take();
+          member->boolean = true;
+          member->children.push_back(expression);
+          member->children.push_back(parse_expression());
+          expect("]");
+        } else if (is_identifier() || current().type == Token::Type::Keyword) {
+          member->text = take().text;
+          member->children.push_back(expression);
+        } else {
+          if (error.empty()) error = "expected a property name after '?.'";
+          return expression;
+        }
+        expression = member;
+        continue;
+      }
       if (is(".")) {
         take();
         if (!is_identifier() && current().type != Token::Type::Keyword) {
