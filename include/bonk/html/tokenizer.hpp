@@ -25,6 +25,16 @@ struct Token {
   std::string data;  // character run, comment text, doctype name
   bool self_closing = false;
 
+  // DOCTYPE only: the identifiers between quotes after PUBLIC/SYSTEM. The strings
+  // stay empty when the keyword never appeared, so each identifier carries its own
+  // "was it there at all" flag — `<!DOCTYPE html PUBLIC "">` has an empty public
+  // identifier, `<!DOCTYPE html>` has none.
+  std::string public_identifier;
+  std::string system_identifier;
+  bool has_public_identifier = false;
+  bool has_system_identifier = false;
+  bool force_quirks = false;  // the tokenizer's "force-quirks" flag (EOF, `>` in a keyword, …)
+
   [[nodiscard]] std::string_view attribute(std::string_view key) const {
     for (const auto& [name_, value] : attributes) {
       if (name_ == key) return value;
@@ -76,7 +86,22 @@ class Tokenizer {
     CommentEndDash,
     CommentEnd,
     CommentEndBang,
-    Doctype,
+    Doctype,  // "DOCTYPE state": the whitespace before the DOCTYPE name
+    BeforeDoctypeName,
+    DoctypeName,
+    AfterDoctypeName,
+    AfterDoctypePublicKeyword,
+    BeforeDoctypePublicIdentifier,
+    DoctypePublicIdentifierDoubleQuoted,
+    DoctypePublicIdentifierSingleQuoted,
+    AfterDoctypePublicIdentifier,
+    BetweenDoctypePublicAndSystemIdentifiers,
+    AfterDoctypeSystemKeyword,
+    BeforeDoctypeSystemIdentifier,
+    DoctypeSystemIdentifierDoubleQuoted,
+    DoctypeSystemIdentifierSingleQuoted,
+    AfterDoctypeSystemIdentifier,
+    BogusDoctype,
     BogusComment,
     EndOfFile,
   };
@@ -92,6 +117,9 @@ class Tokenizer {
   void emit_character(char32_t code_point);
   void decode_character_reference(std::string& out, bool in_attribute);
   [[nodiscard]] Token flush_characters();
+  /// Ends the DOCTYPE token under construction: `force_quirks` mirrors the spec's
+  /// "set the force-quirks flag to on", and the state moves on to data/EOF.
+  [[nodiscard]] Token emit_doctype(bool force_quirks);
   [[nodiscard]] bool is_text_end_tag_at(std::size_t position) const;
   [[nodiscard]] bool starts_tag_end(std::size_t position) const;
 
@@ -105,7 +133,6 @@ class Tokenizer {
   std::string attribute_name_;
   std::string attribute_value_;
   std::string character_buffer_;
-  bool doctype_name_done_ = false;
   bool text_element_active_ = false;
   bool text_element_rcdata_ = false;
   std::string text_element_name_;

@@ -61,6 +61,9 @@ char32_t windows_1252(char32_t value) noexcept {
 
 bool is_alpha(char c) noexcept { return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z'); }
 bool is_space(char c) noexcept { return c == ' ' || c == '\t' || c == '\n' || c == '\f'; }
+char ascii_lower(char c) noexcept {
+  return c >= 'A' && c <= 'Z' ? static_cast<char>(c - 'A' + 'a') : c;
+}
 
 bool equals_ci_at(std::string_view input, std::size_t position, std::string_view literal) {
   if (position + literal.size() > input.size()) return false;
@@ -230,6 +233,12 @@ void Tokenizer::decode_character_reference(std::string& out, bool in_attribute) 
   if (!entry->semicolon && peek() == ';') advance();
   append_utf8(out, entry->code_point);
   if (entry->second != 0) append_utf8(out, entry->second);
+}
+
+Token Tokenizer::emit_doctype(bool force_quirks) {
+  if (force_quirks) token_.force_quirks = true;
+  state_ = at_end() ? State::EndOfFile : State::Data;
+  return token_;
 }
 
 Token Tokenizer::next() {
@@ -687,7 +696,6 @@ Token Tokenizer::next() {
           state_ = State::Doctype;
           token_ = Token{};
           token_.type = TokenType::Doctype;
-          doctype_name_done_ = false;
           continue;
         }
         if (consume_if("[CDATA[")) {
@@ -821,34 +829,313 @@ Token Tokenizer::next() {
         continue;
       }
 
-      case State::Doctype: {
-        // We keep the name (lowercased) and ignore the public/system identifiers;
-        // that is enough for quirks detection, and identifiers are a documented gap.
-        if (at_end() || peek() == '>') {
-          if (!at_end()) advance();
-          state_ = at_end() ? State::EndOfFile : State::Data;
-          token_.data = to_ascii_lower(trim(token_.data));
-          return token_;
+      // --- DOCTYPE ------------------------------------------------------
+      // The full state machine, because the identifiers are part of the token:
+      // quirks detection needs them, and `<!DOCTYPE html PUBLIC "…" "…">` has to
+      // survive into the DOM (the tree corpus prints both of them).
+      case State::Doctype: {  // after "<!DOCTYPE": whitespace before the name
+        if (at_end()) return emit_doctype(true);
+        if (is_space(peek())) {
+          advance();
+          state_ = State::BeforeDoctypeName;
+          continue;
         }
-        if (!doctype_name_done_ && is_space(peek())) {
-          if (token_.data.empty()) {  // leading whitespace before the name
-            advance();
-            continue;
-          }
-          doctype_name_done_ = true;
+        state_ = State::BeforeDoctypeName;  // reconsume (also for '>')
+        continue;
+      }
+
+      case State::BeforeDoctypeName: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
           advance();
           continue;
         }
-        if (doctype_name_done_) {  // skip the identifier soup
+        if (c == '>') {  // parse error: missing-doctype-name
           advance();
-          continue;
+          return emit_doctype(true);
         }
-        if (peek() == '\0') {
+        if (c == '\0') {
           advance();
           append_utf8(token_.data, kReplacementCharacter);
+        } else {
+          advance();
+          token_.data.push_back(ascii_lower(c));
+        }
+        state_ = State::DoctypeName;
+        continue;
+      }
+
+      case State::DoctypeName: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          state_ = State::AfterDoctypeName;
           continue;
         }
-        token_.data.push_back(peek());
+        if (c == '>') {
+          advance();
+          return emit_doctype(false);
+        }
+        advance();
+        if (c == '\0') {
+          append_utf8(token_.data, kReplacementCharacter);
+        } else {
+          token_.data.push_back(ascii_lower(c));
+        }
+        continue;
+      }
+
+      case State::AfterDoctypeName: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          continue;
+        }
+        if (c == '>') {
+          advance();
+          return emit_doctype(false);
+        }
+        if (equals_ci_at(input_, position_, "public")) {
+          position_ += 6;
+          state_ = State::AfterDoctypePublicKeyword;
+          continue;
+        }
+        if (equals_ci_at(input_, position_, "system")) {
+          position_ += 6;
+          state_ = State::AfterDoctypeSystemKeyword;
+          continue;
+        }
+        // parse error: invalid-character-sequence-after-doctype-name — the rest of
+        // the doctype is swallowed by the bogus state, which still ends at '>'.
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::AfterDoctypePublicKeyword: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          state_ = State::BeforeDoctypePublicIdentifier;
+          continue;
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_public_identifier = true;
+          token_.public_identifier.clear();
+          state_ = c == '"' ? State::DoctypePublicIdentifierDoubleQuoted
+                            : State::DoctypePublicIdentifierSingleQuoted;
+          continue;
+        }
+        if (c == '>') {  // missing public identifier
+          advance();
+          return emit_doctype(true);
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::BeforeDoctypePublicIdentifier: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          continue;
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_public_identifier = true;
+          token_.public_identifier.clear();
+          state_ = c == '"' ? State::DoctypePublicIdentifierDoubleQuoted
+                            : State::DoctypePublicIdentifierSingleQuoted;
+          continue;
+        }
+        if (c == '>') {  // missing public identifier
+          advance();
+          return emit_doctype(true);
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::DoctypePublicIdentifierDoubleQuoted:
+      case State::DoctypePublicIdentifierSingleQuoted: {
+        const char quote = state_ == State::DoctypePublicIdentifierDoubleQuoted ? '"' : '\'';
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (c == quote) {
+          advance();
+          state_ = State::AfterDoctypePublicIdentifier;
+          continue;
+        }
+        if (c == '>') {  // parse error: abrupt-doctype-public-identifier
+          advance();
+          return emit_doctype(true);
+        }
+        advance();
+        if (c == '\0') {
+          append_utf8(token_.public_identifier, kReplacementCharacter);
+        } else {
+          token_.public_identifier.push_back(c);
+        }
+        continue;
+      }
+
+      case State::AfterDoctypePublicIdentifier: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          state_ = State::BetweenDoctypePublicAndSystemIdentifiers;
+          continue;
+        }
+        if (c == '>') {
+          advance();
+          return emit_doctype(false);
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_system_identifier = true;
+          token_.system_identifier.clear();
+          state_ = c == '"' ? State::DoctypeSystemIdentifierDoubleQuoted
+                            : State::DoctypeSystemIdentifierSingleQuoted;
+          continue;
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::BetweenDoctypePublicAndSystemIdentifiers: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          continue;
+        }
+        if (c == '>') {
+          advance();
+          return emit_doctype(false);
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_system_identifier = true;
+          token_.system_identifier.clear();
+          state_ = c == '"' ? State::DoctypeSystemIdentifierDoubleQuoted
+                            : State::DoctypeSystemIdentifierSingleQuoted;
+          continue;
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::AfterDoctypeSystemKeyword: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          state_ = State::BeforeDoctypeSystemIdentifier;
+          continue;
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_system_identifier = true;
+          token_.system_identifier.clear();
+          state_ = c == '"' ? State::DoctypeSystemIdentifierDoubleQuoted
+                            : State::DoctypeSystemIdentifierSingleQuoted;
+          continue;
+        }
+        if (c == '>') {  // missing system identifier
+          advance();
+          return emit_doctype(true);
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::BeforeDoctypeSystemIdentifier: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          continue;
+        }
+        if (c == '"' || c == '\'') {
+          advance();
+          token_.has_system_identifier = true;
+          token_.system_identifier.clear();
+          state_ = c == '"' ? State::DoctypeSystemIdentifierDoubleQuoted
+                            : State::DoctypeSystemIdentifierSingleQuoted;
+          continue;
+        }
+        if (c == '>') {  // missing system identifier
+          advance();
+          return emit_doctype(true);
+        }
+        token_.force_quirks = true;
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::DoctypeSystemIdentifierDoubleQuoted:
+      case State::DoctypeSystemIdentifierSingleQuoted: {
+        const char quote = state_ == State::DoctypeSystemIdentifierDoubleQuoted ? '"' : '\'';
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (c == quote) {
+          advance();
+          state_ = State::AfterDoctypeSystemIdentifier;
+          continue;
+        }
+        if (c == '>') {  // parse error: abrupt-doctype-system-identifier
+          advance();
+          return emit_doctype(true);
+        }
+        advance();
+        if (c == '\0') {
+          append_utf8(token_.system_identifier, kReplacementCharacter);
+        } else {
+          token_.system_identifier.push_back(c);
+        }
+        continue;
+      }
+
+      case State::AfterDoctypeSystemIdentifier: {
+        if (at_end()) return emit_doctype(true);
+        const char c = peek();
+        if (is_space(c)) {
+          advance();
+          continue;
+        }
+        if (c == '>') {
+          advance();
+          return emit_doctype(false);
+        }
+        // parse error: unexpected-character-after-doctype-system-identifier.
+        // (No force-quirks here: the doctype is still well formed.)
+        state_ = State::BogusDoctype;
+        continue;
+      }
+
+      case State::BogusDoctype: {
+        // EOF here emits the token as it stands: the bogus state never sets the
+        // force-quirks flag by itself (unlike the states that expect a quote).
+        if (at_end()) {
+          state_ = State::EndOfFile;
+          return token_;
+        }
+        if (peek() == '>') {
+          advance();
+          return emit_doctype(false);
+        }
         advance();
         continue;
       }

@@ -77,6 +77,49 @@ BONK_TEST(tokenizer, comments_and_doctype) {
   CHECK_EQ(tokens[2].type, TokenType::StartTag);
 }
 
+BONK_TEST(tokenizer, doctype_identifiers) {
+  // The identifiers after PUBLIC/SYSTEM are part of the token (quirks detection and
+  // the DOM both need them), and "absent" is not the same as "empty".
+  Tokenizer legacy("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\">");
+  const Token with_ids = legacy.next();
+  CHECK_EQ(with_ids.type, TokenType::Doctype);
+  CHECK_EQ(with_ids.data, std::string("html"));
+  CHECK(with_ids.has_public_identifier);
+  CHECK(with_ids.has_system_identifier);
+  CHECK_EQ(with_ids.public_identifier, std::string("-//W3C//DTD HTML 4.01//EN"));
+  CHECK_EQ(with_ids.system_identifier, std::string("http://www.w3.org/TR/html4/strict.dtd"));
+  CHECK(!with_ids.force_quirks);
+
+  Tokenizer plain("<!DOCTYPE html>");
+  const Token bare = plain.next();
+  CHECK(!bare.has_public_identifier);
+  CHECK(!bare.has_system_identifier);
+  CHECK(!bare.force_quirks);
+
+  // `SYSTEM 'x>y'` ends at the `>` — the system identifier is abrupt, not quoted.
+  Tokenizer quoted("<!DOCTYPE potato SYSTEM 'x>y'>");
+  const Token abrupt = quoted.next();
+  CHECK_EQ(abrupt.system_identifier, std::string("x"));
+  CHECK(abrupt.has_system_identifier);
+
+  // Anything that runs out of input in the middle of a doctype sets force-quirks.
+  Tokenizer eof("<!DOCTYPE html PUBLIC \"a\"");
+  const Token truncated = eof.next();
+  CHECK_EQ(truncated.public_identifier, std::string("a"));
+  CHECK(truncated.force_quirks);
+
+  // Garbage after the name drops the token into the bogus state, which still ends
+  // at '>': the doctype is emitted with force-quirks and the text after it is data.
+  Tokenizer bogus("<!DOCTYPE html garbage>x");
+  const Token junk = bogus.next();
+  CHECK_EQ(junk.data, std::string("html"));
+  CHECK(junk.force_quirks);
+  CHECK(!junk.has_public_identifier);
+  const Token text = bogus.next();
+  CHECK_EQ(text.type, TokenType::Characters);
+  CHECK_EQ(text.data, std::string("x"));
+}
+
 BONK_TEST(tokenizer, rawtext_respects_case_insensitive_end_tag) {
   Tokenizer tokenizer("<style>a > b { color: red }</STYLE><p>x</p>");
   const Token style_start = tokenizer.next();
@@ -561,6 +604,40 @@ BONK_TEST(html, quirks_mode_keeps_a_table_inside_a_paragraph) {
            std::string("<html><head></head><body><p><table></table></p></body></html>"));
   CHECK_EQ(parse_and_serialize("<!DOCTYPE html><p><table></table>"),
            std::string("<!DOCTYPE html><html><head></head><body><p></p><table></table></body></html>"));
+}
+
+BONK_TEST(html, doctype_identifiers_reach_the_dom) {
+  dom::Document document;
+  CHECK(parse_html("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01//EN\" \"http://www.w3.org/TR/html4/strict.dtd\"><p>a",
+                   document, nullptr)
+            .is_ok());
+  CHECK_EQ(document.to_html(document.root()), std::string("<!DOCTYPE html \"-//W3C//DTD HTML 4.01//EN\" "
+                                                         "\"http://www.w3.org/TR/html4/strict.dtd\">"
+                                                         "<html><head></head><body><p>a</p></body></html>"));
+
+  dom::Document bare;
+  CHECK(parse_html("<!DOCTYPE html><p>a", bare, nullptr).is_ok());
+  CHECK_EQ(bare.to_html(bare.root()),
+           std::string("<!DOCTYPE html><html><head></head><body><p>a</p></body></html>"));
+}
+
+BONK_TEST(html, doctype_identifiers_decide_the_quirks_mode) {
+  // HTML 4.01 Transitional *without* a system identifier is fully quirky, so the
+  // table stays inside the paragraph ...
+  CHECK_EQ(parse_and_serialize("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 4.01 Transitional//EN\"><p><table></table>"),
+           std::string("<!DOCTYPE html \"-//W3C//DTD HTML 4.01 Transitional//EN\" \"\">"
+                       "<html><head></head><body><p><table></table></p></body></html>"));
+  // ... with one it is only "limited quirks", which behaves like standards mode
+  // here; the XHTML 1.0 identifiers are limited-quirks by definition.
+  CHECK_EQ(parse_and_serialize("<!DOCTYPE html PUBLIC \"-//W3C//DTD XHTML 1.0 Transitional//EN\" "
+                               "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\"><p><table></table>"),
+           std::string("<!DOCTYPE html \"-//W3C//DTD XHTML 1.0 Transitional//EN\" "
+                       "\"http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd\">"
+                       "<html><head></head><body><p></p><table></table></body></html>"));
+  // A quirky doctype (the old HTML 3.2 one) behaves like no doctype at all.
+  CHECK_EQ(parse_and_serialize("<!DOCTYPE html PUBLIC \"-//W3C//DTD HTML 3.2//EN\"><p><table></table>"),
+           std::string("<!DOCTYPE html \"-//W3C//DTD HTML 3.2//EN\" \"\">"
+                       "<html><head></head><body><p><table></table></p></body></html>"));
 }
 
 BONK_TEST(html, marquee_drops_the_formatting_children_it_enclosed) {

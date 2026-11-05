@@ -103,6 +103,95 @@ const char* const kRcData[] = {"title", "textarea"};
   return true;
 }
 
+/// Doctype-based quirks detection (HTML §13.2.6.4.1). The lists are the spec's; the
+/// two "limited quirks" prefixes only matter for layout, so they are kept apart
+/// rather than folded into `Quirks`.
+enum class DoctypeMode { Standards, LimitedQuirks, Quirks };
+
+const char* const kQuirkyPublicPrefixes[] = {
+    "+//Silmaril//dtd html Pro v0r11 19970101//", "-//AS//DTD HTML 3.0 asWedit + extensions//",
+    "-//AdvaSoft Ltd//DTD HTML 3.0 asWedit + extensions//", "-//IETF//DTD HTML 2.0 Level 1//",
+    "-//IETF//DTD HTML 2.0 Level 2//", "-//IETF//DTD HTML 2.0 Strict Level 1//",
+    "-//IETF//DTD HTML 2.0 Strict Level 2//", "-//IETF//DTD HTML 2.0 Strict//", "-//IETF//DTD HTML 2.0//",
+    "-//IETF//DTD HTML 2.1E//", "-//IETF//DTD HTML 3.0//", "-//IETF//DTD HTML 3.2 Final//",
+    "-//IETF//DTD HTML 3.2//", "-//IETF//DTD HTML 3//", "-//IETF//DTD HTML Level 0//",
+    "-//IETF//DTD HTML Level 1//", "-//IETF//DTD HTML Level 2//", "-//IETF//DTD HTML Level 3//",
+    "-//IETF//DTD HTML Strict Level 0//", "-//IETF//DTD HTML Strict Level 1//",
+    "-//IETF//DTD HTML Strict Level 2//", "-//IETF//DTD HTML Strict Level 3//",
+    "-//IETF//DTD HTML Strict//", "-//IETF//DTD HTML//", "-//Metrius//DTD Metrius Presentational//",
+    "-//Microsoft//DTD Internet Explorer 2.0 HTML Strict//",
+    "-//Microsoft//DTD Internet Explorer 2.0 HTML//", "-//Microsoft//DTD Internet Explorer 2.0 Tables//",
+    "-//Microsoft//DTD Internet Explorer 3.0 HTML Strict//",
+    "-//Microsoft//DTD Internet Explorer 3.0 HTML//", "-//Microsoft//DTD Internet Explorer 3.0 Tables//",
+    "-//Netscape Comm. Corp.//DTD HTML//", "-//Netscape Comm. Corp.//DTD Strict HTML//",
+    "-//O'Reilly and Associates//DTD HTML 2.0//", "-//O'Reilly and Associates//DTD HTML Extended 1.0//",
+    "-//O'Reilly and Associates//DTD HTML Extended Relaxed 1.0//",
+    "-//SQ//DTD HTML 2.0 HoTMetaL + extensions//",
+    "-//SoftQuad Software//DTD HoTMetaL PRO 6.0::19990601::extensions to HTML 4.0//",
+    "-//SoftQuad//DTD HoTMetaL PRO 4.0::19971010::extensions to HTML 4.0//",
+    "-//Spyglass//DTD HTML 2.0 Extended//", "-//Sun Microsystems Corp.//DTD HotJava HTML//",
+    "-//Sun Microsystems Corp.//DTD HotJava Strict HTML//", "-//W3C//DTD HTML 3 1995-03-24//",
+    "-//W3C//DTD HTML 3.2 Draft//", "-//W3C//DTD HTML 3.2 Final//", "-//W3C//DTD HTML 3.2//",
+    "-//W3C//DTD HTML 3.2S Draft//", "-//W3C//DTD HTML 4.0 Frameset//",
+    "-//W3C//DTD HTML 4.0 Transitional//", "-//W3C//DTD HTML Experimental 19960712//",
+    "-//W3C//DTD HTML Experimental 970421//", "-//W3C//DTD W3 HTML//", "-//W3O//DTD W3 HTML 3.0//",
+    "-//WebTechs//DTD Mozilla HTML 2.0//", "-//WebTechs//DTD Mozilla HTML//",
+};
+
+const char* const kLimitedQuirksPublicPrefixes[] = {
+    "-//W3C//DTD XHTML 1.0 Frameset//", "-//W3C//DTD XHTML 1.0 Transitional//",
+};
+
+[[nodiscard]] bool starts_with_ascii_ci(std::string_view text, std::string_view prefix) {
+  if (text.size() < prefix.size()) return false;
+  return equals_ascii_ci(text.substr(0, prefix.size()), prefix);
+}
+
+[[nodiscard]] bool matches_any_prefix(std::string_view text, const char* const* list, std::size_t count) {
+  for (std::size_t i = 0; i < count; ++i) {
+    if (starts_with_ascii_ci(text, list[i])) return true;
+  }
+  return false;
+}
+
+template <std::size_t N>
+[[nodiscard]] bool matches_any_prefix(std::string_view text, const char* const (&list)[N]) {
+  return matches_any_prefix(text, list, N);
+}
+
+[[nodiscard]] DoctypeMode doctype_mode(const Token& token) {
+  if (token.force_quirks) return DoctypeMode::Quirks;
+  if (!equals_ascii_ci(token.data, "html")) return DoctypeMode::Quirks;
+
+  const std::string_view public_id = token.public_identifier;
+  const std::string_view system_id = token.system_identifier;
+  const bool has_public = token.has_public_identifier;
+  const bool system_missing_or_empty = !token.has_system_identifier || system_id.empty();
+
+  if (has_public && (equals_ascii_ci(public_id, "-//W3O//DTD W3 HTML Strict 3.0//EN//") ||
+                     equals_ascii_ci(public_id, "-/W3C/DTD HTML 4.0 Transitional/EN") ||
+                     equals_ascii_ci(public_id, "HTML"))) {
+    return DoctypeMode::Quirks;
+  }
+  if (!system_missing_or_empty && equals_ascii_ci(system_id, "http://www.ibm.com/data/dtd/v11/ibmxhtml1-transitional.dtd")) {
+    return DoctypeMode::Quirks;
+  }
+  if (has_public && matches_any_prefix(public_id, kQuirkyPublicPrefixes)) return DoctypeMode::Quirks;
+  // HTML 4.01 Frameset/Transitional without a system identifier is *fully* quirky.
+  if (has_public && system_missing_or_empty &&
+      (starts_with_ascii_ci(public_id, "-//W3C//DTD HTML 4.01 Frameset//") ||
+       starts_with_ascii_ci(public_id, "-//W3C//DTD HTML 4.01 Transitional//"))) {
+    return DoctypeMode::Quirks;
+  }
+  if (has_public && matches_any_prefix(public_id, kLimitedQuirksPublicPrefixes)) return DoctypeMode::LimitedQuirks;
+  if (has_public && !system_missing_or_empty &&
+      (starts_with_ascii_ci(public_id, "-//W3C//DTD HTML 4.01 Frameset//") ||
+       starts_with_ascii_ci(public_id, "-//W3C//DTD HTML 4.01 Transitional//"))) {
+    return DoctypeMode::LimitedQuirks;
+  }
+  return DoctypeMode::Standards;
+}
+
 /// `<input type=hidden>` never clears the frameset-ok flag and is allowed inside a
 /// table; the value is matched case-insensitively ("hidDEN" counts).
 [[nodiscard]] bool is_hidden_input(const Token& token) {
@@ -954,12 +1043,19 @@ class TreeBuilder {
     clear_to_last_marker();
   }
 
+  /// A token with no attributes — for synthetic elements (`<tbody>`, `<tr>`,
+  /// `<colgroup>`) and the `</br>`/`</p>` start tags the spec conjures up.
+  [[nodiscard]] static Token plain_token(TokenType type, std::string_view name, bool self_closing = false) {
+    Token token;
+    token.type = type;
+    token.name = std::string(name);
+    token.self_closing = self_closing;
+    return token;
+  }
+
   /// Inserts a synthetic element (`<tbody>`, `<tr>`, `<colgroup>`) — the implicit
   /// parts of a table that authors leave out.
-  void insert_synthetic(std::string_view name) {
-    Token token{TokenType::StartTag, std::string(name), {}, {}, false};
-    insert_element(token, true);
-  }
+  void insert_synthetic(std::string_view name) { insert_element(plain_token(TokenType::StartTag, name), true); }
 
   [[nodiscard]] bool is_table_part(std::string_view name) const {
     return name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
@@ -1347,15 +1443,21 @@ class TreeBuilder {
     }
     if (ignore_next_lf_ && token.type != TokenType::Characters) ignore_next_lf_ = false;
     switch (token.type) {
-      case TokenType::Doctype:
+      case TokenType::Doctype: {
         // Only the very first doctype counts; later ones are ignored.
         if (document_element_seen_ || doctype_seen_) return;
         doctype_seen_ = true;
-        // A missing or non-"html" doctype leaves the document in quirks mode; the
-        // only rule that cares here is the `<p>`/`<table>` interaction above.
-        quirks_ = !equals_ascii_ci(token.data, "html");
-        document_.append_child(document_.root(), document_.create_doctype(token.data));
+        // A missing, non-"html" or "quirky" doctype leaves the document in quirks
+        // mode (HTML §13.2.6.4.1); the only rule that cares here is the
+        // `<p>`/`<table>` interaction above.
+        quirks_ = doctype_mode(token) == DoctypeMode::Quirks;
+        const dom::NodeId doctype =
+            token.has_public_identifier || token.has_system_identifier
+                ? document_.create_doctype(token.data, token.public_identifier, token.system_identifier)
+                : document_.create_doctype(token.data);
+        document_.append_child(document_.root(), doctype);
         return;
+      }
       case TokenType::Comment: {
         // Before <html> a comment belongs to the document; between <html> and <head>/<body>
         // it is a child of <html>; afterwards it goes to the current node.
@@ -1919,7 +2021,7 @@ class TreeBuilder {
     if (name == "br") {
       if (!body_created()) ensure_body();  // "in head" treats a stray </br> as content
       // It behaves exactly like a <br> start tag, fostering out of a table.
-      const dom::NodeId element = make_element(Token{TokenType::StartTag, "br", {}, {}, true});
+      const dom::NodeId element = make_element(plain_token(TokenType::StartTag, "br", true));
       insert_node(element);
       return;
     }
@@ -1929,7 +2031,7 @@ class TreeBuilder {
       if (!p_in_scope()) {
         // "Insert an HTML element for a 'p' start tag token with no attributes,
         // then close a p element" — an empty paragraph, fostered out of a table.
-        const dom::NodeId element = make_element(Token{TokenType::StartTag, "p", {}, {}, false});
+        const dom::NodeId element = make_element(plain_token(TokenType::StartTag, "p"));
         insert_node(element);
         stack_.push_back(element);
         close_open("p");

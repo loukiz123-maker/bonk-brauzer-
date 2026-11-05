@@ -181,6 +181,28 @@ NodeId Document::create_doctype(std::string_view text) {
   return id;
 }
 
+NodeId Document::create_doctype(std::string_view text, std::string_view public_id, std::string_view system_id) {
+  NodeId id = create_doctype(text);
+  node_ref(id).public_id = intern(public_id);  // even when empty: the identifier was there
+  node_ref(id).system_id = intern(system_id);
+  return id;
+}
+
+bool Document::has_doctype_identifiers(NodeId id) const {
+  const Node& node = node_ref(id);
+  return node.public_id != kNoNode || node.system_id != kNoNode;
+}
+
+std::string_view Document::doctype_public_id(NodeId id) const {
+  const Node& node = node_ref(id);
+  return node.public_id == kNoNode ? std::string_view{} : string_of(node.public_id);
+}
+
+std::string_view Document::doctype_system_id(NodeId id) const {
+  const Node& node = node_ref(id);
+  return node.system_id == kNoNode ? std::string_view{} : string_of(node.system_id);
+}
+
 void Document::detach(NodeId child) {
   Node& node = node_ref(child);
   if (node.parent == kNoNode) return;
@@ -454,6 +476,13 @@ void Document::serialize_into(NodeId id, std::string& out) const {
     case NodeType::Doctype:
       out += "<!DOCTYPE ";
       out += text_data(id);
+      if (has_doctype_identifiers(id)) {
+        out += " \"";
+        out += doctype_public_id(id);
+        out += "\" \"";
+        out += doctype_system_id(id);
+        out += '\"';
+      }
       out += ">";
       return;
     case NodeType::Comment:

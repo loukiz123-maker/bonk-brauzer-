@@ -173,8 +173,16 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
       for (const dom::NodeId child : document.children(node)) serialize(document, child, 0, out);
       return;
     case dom::NodeType::Doctype: {
+      // html5lib prints the identifiers verbatim once the doctype has any:
+      // `<!DOCTYPE html "-//W3C//DTD HTML 4.01//EN" "http://…/strict.dtd">`.
       const std::string_view name = document.text_data(node);
-      out.push_back(indent + "<!DOCTYPE " + std::string(name) + ">");
+      std::string line = indent + "<!DOCTYPE " + std::string(name);
+      if (document.has_doctype_identifiers(node)) {
+        line += " \"" + std::string(document.doctype_public_id(node)) + "\" \"" +
+                std::string(document.doctype_system_id(node)) + "\"";
+      }
+      line += ">";
+      out.push_back(line);
       return;
     }
     case dom::NodeType::Comment:
@@ -216,7 +224,6 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
   if (!detail::directory_exists(directory)) return report;
 
   std::size_t fragment_cases = 0;
-  std::size_t doctype_id_cases = 0;
   std::size_t foreign_cases = 0;
 
   for (const std::string& path : detail::list_files(directory, ".dat")) {
@@ -228,25 +235,16 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
       ++index;
       if (options.limit != 0 && report.total >= options.limit) {
         report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
-        report.notes.push_back("skipped doctype-identifier cases: " + std::to_string(doctype_id_cases));
         report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
         return report;
       }
       if (test.expected.empty() && test.data.empty()) continue;
-      bool needs_doctype_ids = false;
       bool needs_foreign = false;
       for (const std::string& line : test.expected) {
-        if (line.find("<!DOCTYPE") != std::string::npos && line.find('"') != std::string::npos) {
-          needs_doctype_ids = true;
-        }
         // html5lib prints foreign elements namespace-qualified: "<svg svg>", "<math math>".
         if (line.find("<svg ") != std::string::npos || line.find("<math ") != std::string::npos) {
           needs_foreign = true;
         }
-      }
-      if (needs_doctype_ids) {
-        ++doctype_id_cases;
-        continue;
       }
       if (needs_foreign) {
         ++foreign_cases;
@@ -294,9 +292,8 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
     }
   }
   report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
-  report.notes.push_back("skipped doctype-identifier cases: " + std::to_string(doctype_id_cases));
   report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
-  report.excluded = doctype_id_cases + foreign_cases;
+  report.excluded = foreign_cases;
   return report;
 }
 

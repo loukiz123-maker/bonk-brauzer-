@@ -53,7 +53,12 @@ struct ExpectedToken {
   std::string data;
   std::vector<std::pair<std::string, std::string>> attributes;
   bool self_closing = false;
-  bool has_doctype_ids = false;
+  // DOCTYPE only: `has_ids` is true when the token carried a public/system
+  // identifier at all (html5lib writes null for "absent", "" for "empty").
+  bool has_ids = false;
+  std::string public_id;
+  std::string system_id;
+  bool force_quirks = false;
 };
 
 [[nodiscard]] std::string printable(std::string_view text) {
@@ -81,7 +86,12 @@ struct ExpectedToken {
 
 [[nodiscard]] std::string describe(const ExpectedToken& token) {
   switch (token.kind) {
-    case ExpectedToken::Kind::Doctype: return "DOCTYPE(" + printable(token.name) + ")";
+    case ExpectedToken::Kind::Doctype: {
+      std::string out = "DOCTYPE(" + printable(token.name);
+      if (token.has_ids) out += " \"" + printable(token.public_id) + "\" \"" + printable(token.system_id) + "\"";
+      if (token.force_quirks) out += " !quirks";
+      return out + ")";
+    }
     case ExpectedToken::Kind::Comment: return "Comment(" + printable(token.data) + ")";
     case ExpectedToken::Kind::Characters: return "Character(" + printable(token.data) + ")";
     case ExpectedToken::Kind::StartTag:
@@ -128,7 +138,12 @@ enum class EntryStatus { Ok, Ignore, Unsupported };
     out.name = entry.items.size() > 1 ? decode(entry.items[1].string_or_empty()) : std::string{};
     const bool has_public = entry.items.size() > 2 && !entry.items[2].is_null();
     const bool has_system = entry.items.size() > 3 && !entry.items[3].is_null();
-    out.has_doctype_ids = has_public || has_system;
+    out.has_ids = has_public || has_system;
+    if (has_public) out.public_id = decode(entry.items[2].string_or_empty());
+    if (has_system) out.system_id = decode(entry.items[3].string_or_empty());
+    // The fifth field is html5lib's "correctness": false means the tokenizer set
+    // its force-quirks flag.
+    out.force_quirks = entry.items.size() > 4 && entry.items[4].kind == Value::Kind::Bool && !entry.items[4].boolean;
     return EntryStatus::Ok;
   }
   if (kind == "Comment") {
@@ -163,6 +178,10 @@ enum class EntryStatus { Ok, Ignore, Unsupported };
     case html::TokenType::Doctype:
       out.kind = ExpectedToken::Kind::Doctype;
       out.name = token.data;
+      out.has_ids = token.has_public_identifier || token.has_system_identifier;
+      out.public_id = token.public_identifier;
+      out.system_id = token.system_identifier;
+      out.force_quirks = token.force_quirks;
       break;
     case html::TokenType::Comment:
       out.kind = ExpectedToken::Kind::Comment;
@@ -187,7 +206,8 @@ enum class EntryStatus { Ok, Ignore, Unsupported };
 
 [[nodiscard]] bool same(const ExpectedToken& a, const ExpectedToken& b) {
   return a.kind == b.kind && a.name == b.name && a.data == b.data && a.attributes == b.attributes &&
-         a.self_closing == b.self_closing;
+         a.self_closing == b.self_closing && a.has_ids == b.has_ids && a.public_id == b.public_id &&
+         a.system_id == b.system_id && a.force_quirks == b.force_quirks;
 }
 
 /// Runs one case; fills `detail` on mismatch.
@@ -243,7 +263,6 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
   if (!detail::directory_exists(directory)) return report;
 
   std::size_t state_skips = 0;
-  std::size_t doctype_id_skips = 0;
   std::size_t namespace_skips = 0;
   std::size_t divergence_skips = 0;
 
@@ -259,7 +278,6 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
     for (const Value& test : tests->items) {
       if (options.limit != 0 && report.total >= options.limit) {
         report.notes = {"skipped (unknown initial state): " + std::to_string(state_skips),
-                        "skipped (doctype identifiers): " + std::to_string(doctype_id_skips),
                         "skipped (foreign-content names): " + std::to_string(namespace_skips),
                         "skipped (documented divergence): " + std::to_string(divergence_skips)};
         return report;
@@ -299,12 +317,6 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
           break;
         }
         if (status == EntryStatus::Ignore) continue;
-        if (token.has_doctype_ids) {
-          // We keep only the doctype name; public/system identifiers are a known gap.
-          unsupported = true;
-          ++doctype_id_skips;
-          break;
-        }
         expected.push_back(std::move(token));
       }
       if (unsupported) {
@@ -344,7 +356,6 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
     }
   }
   report.notes = {"skipped (unknown initial state): " + std::to_string(state_skips),
-                  "skipped (doctype identifiers): " + std::to_string(doctype_id_skips),
                   "skipped (foreign-content names): " + std::to_string(namespace_skips),
                   "skipped (documented divergence): " + std::to_string(divergence_skips)};
   return report;

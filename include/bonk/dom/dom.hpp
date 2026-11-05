@@ -71,6 +71,10 @@ class Document {
   [[nodiscard]] NodeId create_text(std::string_view text);
   [[nodiscard]] NodeId create_comment(std::string_view text);
   [[nodiscard]] NodeId create_doctype(std::string_view text);
+  /// The identifiers are optional as a pair: a doctype without PUBLIC/SYSTEM keeps
+  /// both absent, which `has_doctype_identifiers()` reports (the tree serialiser
+  /// then prints `<!DOCTYPE html>` instead of `<!DOCTYPE html "" "">`).
+  [[nodiscard]] NodeId create_doctype(std::string_view text, std::string_view public_id, std::string_view system_id);
   [[nodiscard]] NodeId create_fragment();
 
   void append_child(NodeId parent, NodeId child);
@@ -92,6 +96,9 @@ class Document {
   [[nodiscard]] NodeType type(NodeId id) const;
   [[nodiscard]] std::string_view tag_name(NodeId id) const;  // lowercase, interned
   [[nodiscard]] std::string_view text_data(NodeId id) const;
+  [[nodiscard]] bool has_doctype_identifiers(NodeId id) const;
+  [[nodiscard]] std::string_view doctype_public_id(NodeId id) const;
+  [[nodiscard]] std::string_view doctype_system_id(NodeId id) const;
   [[nodiscard]] std::span<const Attribute> attributes(NodeId id) const;
   [[nodiscard]] std::string_view attribute(NodeId id, std::string_view name) const;
   /// True when the attribute is present even with an empty value (`<input checked>`).
@@ -133,6 +140,8 @@ class Document {
     std::uint32_t next_sibling = kNoNode;
     std::uint32_t prev_sibling = kNoNode;
     std::uint32_t name = 0;       // interned string id (element tag / doctype text)
+    std::uint32_t public_id = kNoNode;  // DOCTYPE only: interned, kNoNode when absent
+    std::uint32_t system_id = kNoNode;  // DOCTYPE only: interned, kNoNode when absent
     std::uint32_t attr_head = kNoNode;
     std::uint32_t text_offset = 0;
     std::uint32_t text_length = 0;
