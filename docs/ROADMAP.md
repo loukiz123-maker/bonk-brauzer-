@@ -538,6 +538,26 @@ spread/`for-of`/`with`, strict-режим, `Symbol`/`RegExp`/`Date`/`Promise`/
 `Map`/`Set`/типизированные массивы.
 
 
+## Этап 27 — арность встроенных функций и `length` массива
+
+`length` встроенных методов стал частью контракта: появилась явная таблица
+арностей для `Array`/`String`/`Number`/`Boolean`/`Object` (и их статики), потому
+что из `std::function` арность не выводится. `length` массива стал настоящим
+собственным свойством (`hasOwnProperty`, дескриптор
+`{writable:true, enumerable:false, configurable:false}`, `getOwnPropertyNames`), а
+`Object.getPrototypeOf` теперь отвечает `Array.prototype` для массивов и
+`String.prototype`/`Number.prototype`/`Boolean.prototype` для обёрток.
+Подробности: [`docs/STAGE-27.md`](STAGE-27.md), решение —
+[`docs/adr/0029-builtin-arities-and-own-length.md`](adr/0029-builtin-arities-and-own-length.md).
+
+**Критерий выхода**: `verifyProperty` для встроенных методов проходит по `length`
+и `name`, а `length` массива наблюдается как обычное свойство. Сейчас: test262 —
+**6 929/14 759 (46.9 %)**, reftests 13/13, токенайзер 6 792/6 820 (99.6 %), tree
+construction 1 792/1 792 (100 %), юнит-тестов **478**. Открыто: strict-режим,
+`Symbol`/итераторы/`for-of`, `Function.prototype`, `class`/деструктуризация/
+spread/`with`, `RegExp`/`Date`/`Promise`/`Map`/`Set`/типизированные массивы.
+
+
 ---
 
 ## Риски и как их снимаем

@@ -203,3 +203,30 @@ BONK_TEST(js_properties, array_length_is_validated) {
   CHECK_EQ(str("var a = [1, 2, 3]; a.length = 2; var v = a.join(',');"), std::string("1,2"));
   CHECK_EQ(num("var a = [1, 2]; a.length = 4; var v = a.length;"), 4.0);
 }
+
+BONK_TEST(js_properties, builtin_arities_are_part_of_the_contract) {
+  CHECK_EQ(num("var v = Array.prototype.push.length;"), 1.0);
+  CHECK_EQ(num("var v = Array.prototype.pop.length;"), 0.0);
+  CHECK_EQ(num("var v = Array.prototype.slice.length;"), 2.0);
+  CHECK_EQ(num("var v = Array.prototype.splice.length;"), 2.0);
+  CHECK_EQ(num("var v = String.prototype.slice.length;"), 2.0);
+  CHECK_EQ(num("var v = String.prototype.indexOf.length;"), 1.0);
+  CHECK_EQ(num("var v = Number.prototype.toFixed.length;"), 1.0);
+  CHECK_EQ(num("var v = Object.defineProperty.length;"), 3.0);
+  CHECK_EQ(num("var v = Object.keys.length;"), 1.0);
+  CHECK_EQ(num("var v = Array.from.length;"), 1.0);
+  CHECK_EQ(num("var v = Array.isArray.length;"), 1.0);
+  CHECK_EQ(num("var v = Object.prototype.hasOwnProperty.length;"), 1.0);
+}
+
+BONK_TEST(js_properties, array_length_is_an_own_property) {
+  CHECK_EQ(num("var v = [1, 2].hasOwnProperty('length') ? 1 : 0;"), 1.0);
+  CHECK_EQ(str("var d = Object.getOwnPropertyDescriptor([1, 2, 3], 'length');\n"
+               "var v = [d.value, d.writable, d.enumerable, d.configurable].join(',');"),
+           std::string("3,true,false,false"));
+  CHECK_EQ(str("var v = Object.getOwnPropertyNames([1, 2]).join(',');"), std::string("0,1,length"));
+  CHECK(num("var v = Object.getPrototypeOf([]) === Array.prototype"));
+  CHECK(num("var v = Object.getPrototypeOf(new String('x')) === String.prototype"));
+  CHECK(num("var v = Object.getPrototypeOf(new Number(1)) === Number.prototype"));
+  CHECK(num("var v = Object.getPrototypeOf(new Boolean(true)) === Boolean.prototype"));
+}

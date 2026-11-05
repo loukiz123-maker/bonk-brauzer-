@@ -580,6 +580,7 @@ void define_own_property(const std::shared_ptr<Object>& object, const std::strin
 /// Does `object` own a property (data, accessor or array element)?
 bool has_own_property(const Object& object, const std::string& key) {
   if (key == "constructor" && !object.owner_function.expired()) return true;
+  if (key == "length" && object.is_array()) return true;
   if (const std::shared_ptr<Function> owner = object.owner_function.lock()) {
     if (key == "length" || key == "name") return true;
     if (key == "prototype" && owner->prototype_object != nullptr) return true;
@@ -621,6 +622,21 @@ Value property_descriptor(const Object& object, const std::string& key) {
       add_attribute("configurable", Value::boolean_of(key != "prototype"));
       return Value::object_of(std::move(own_descriptor));
     }
+  }
+  if (key == "length" && object.is_array()) {
+    auto length_descriptor = std::make_shared<Object>();
+    auto add_field = [&length_descriptor](const char* name, Value value, bool writable) {
+      Property property{std::move(value)};
+      property.enumerable = false;
+      property.configurable = false;
+      property.writable = writable;
+      length_descriptor->properties[name] = property;
+    };
+    add_field("value", Value::number_of(static_cast<double>(object.elements.size())), true);
+    add_field("writable", Value::boolean_of(true), true);
+    add_field("enumerable", Value::boolean_of(false), true);
+    add_field("configurable", Value::boolean_of(false), true);
+    return Value::object_of(std::move(length_descriptor));
   }
   const auto stored = object.properties.find(key);
   const bool enumerable = stored == object.properties.end() || stored->second.enumerable;
@@ -2698,14 +2714,23 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::object_of(std::move(created));
   });
-  add_object_static("getPrototypeOf", [object_argument, object_prototype](const std::vector<Value>& arguments, Value) {
+  add_object_static("getPrototypeOf", [object_argument, object_prototype, &runtime](
+                                             const std::vector<Value>& arguments, Value) {
     const Value target = object_argument(arguments, "getPrototypeOf");
     if (target.type != ValueType::Object || target.object == nullptr) {
       return Value::object_of(object_prototype);
     }
     if (target.object->prototype == nullptr) {
-      // Plain objects have no explicit link; they inherit from Object.prototype.
+      // Plain values have no explicit link; they inherit from the prototype of
+      // their kind (ADR 0026/0027).
       if (target.object == object_prototype) return Value::null();
+      if (target.object->is_array()) return Value::object_of(runtime.array_prototype);
+      if (target.object->is_wrapper) {
+        const Value& boxed = target.object->wrapper_value;
+        if (boxed.is_string()) return Value::object_of(runtime.string_prototype);
+        if (boxed.is_number()) return Value::object_of(runtime.number_prototype);
+        if (boxed.is_boolean()) return Value::object_of(runtime.boolean_prototype);
+      }
       return Value::object_of(object_prototype);
     }
     return Value::object_of(target.object->prototype);
@@ -2850,6 +2875,66 @@ void install_builtins(RuntimeState& runtime) {
     Interpreter interpreter(runtime, runtime.global);
     return interpreter.eval_source(arguments[0].text, runtime.global);
   });
+
+  // `length` of a builtin is part of its contract (test262 checks it), and it is
+  // not derivable from a C++ lambda, so the arities are declared here.
+  auto set_arity = [](const std::shared_ptr<Object>& owner, const char* name, std::size_t arity) {
+    const auto found = owner->properties.find(name);
+    if (found != owner->properties.end() && found->second.value.type == ValueType::Function &&
+        found->second.value.function != nullptr) {
+      found->second.value.function->parameter_count = arity;
+    }
+  };
+  const struct {
+    const char* name;
+    std::size_t arity;
+  } array_arities[] = {{"push", 1},     {"pop", 0},      {"shift", 0},    {"unshift", 1},  {"slice", 2},
+                       {"splice", 2},   {"join", 1},     {"toString", 0}, {"indexOf", 1},  {"lastIndexOf", 1},
+                       {"includes", 1}, {"concat", 1},   {"reverse", 0},  {"sort", 1},     {"forEach", 1},
+                       {"map", 1},      {"filter", 1},   {"find", 1},     {"findIndex", 1}, {"every", 1},
+                       {"some", 1},     {"reduce", 1},   {"reduceRight", 1}, {"fill", 1}};
+  for (const auto& entry : array_arities) set_arity(array_prototype, entry.name, entry.arity);
+
+  const struct {
+    const char* name;
+    std::size_t arity;
+  } string_arities[] = {{"toString", 0}, {"valueOf", 0},  {"toUpperCase", 0}, {"toLowerCase", 0},
+                        {"trim", 0},     {"trimStart", 0}, {"trimEnd", 0},     {"charAt", 1},
+                        {"charCodeAt", 1}, {"codePointAt", 1}, {"at", 1},      {"indexOf", 1},
+                        {"lastIndexOf", 1}, {"includes", 1}, {"startsWith", 1}, {"endsWith", 1},
+                        {"concat", 1},   {"slice", 2},    {"substring", 2},   {"substr", 2},
+                        {"padStart", 2}, {"padEnd", 2},   {"repeat", 1},      {"split", 2},
+                        {"replace", 2},  {"localeCompare", 1}};
+  for (const auto& entry : string_arities) set_arity(string_prototype, entry.name, entry.arity);
+
+  const struct {
+    const char* name;
+    std::size_t arity;
+  } number_arities[] = {{"toString", 1}, {"valueOf", 0},       {"toFixed", 1},
+                        {"toPrecision", 1}, {"toExponential", 1}};
+  for (const auto& entry : number_arities) set_arity(number_prototype, entry.name, entry.arity);
+  set_arity(boolean_prototype, "toString", 0);
+  set_arity(boolean_prototype, "valueOf", 0);
+  set_arity(array_constructor.function->statics, "isArray", 1);
+  set_arity(array_constructor.function->statics, "of", 0);
+  set_arity(array_constructor.function->statics, "from", 1);
+  set_arity(string_constructor.function->statics, "fromCharCode", 1);
+  set_arity(string_constructor.function->statics, "fromCodePoint", 1);
+
+  // Object statics and Object.prototype methods carry their arities too.
+  for (const auto& entry : std::initializer_list<std::pair<const char*, std::size_t>>{
+           {"keys", 1}, {"values", 1}, {"entries", 1}, {"getOwnPropertyNames", 1},
+           {"getOwnPropertyDescriptor", 2}, {"defineProperty", 3}, {"defineProperties", 2},
+           {"create", 2}, {"getPrototypeOf", 1}, {"setPrototypeOf", 2}, {"freeze", 1},
+           {"seal", 1}, {"preventExtensions", 1}, {"isFrozen", 1}, {"isSealed", 1},
+           {"isExtensible", 1}, {"is", 2}, {"assign", 2}}) {
+    set_arity(object_constructor.function->statics, entry.first, entry.second);
+  }
+  for (const auto& entry : std::initializer_list<std::pair<const char*, std::size_t>>{
+           {"hasOwnProperty", 1}, {"propertyIsEnumerable", 1}, {"isPrototypeOf", 1},
+           {"toString", 0}, {"valueOf", 0}, {"toLocaleString", 0}}) {
+    set_arity(object_prototype, entry.first, entry.second);
+  }
 
   global->variables["globalThis"] = Value::object_of(std::make_shared<Object>());
 }
