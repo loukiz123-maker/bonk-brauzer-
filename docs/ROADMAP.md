@@ -175,6 +175,26 @@ scripting, `<menuitem>`, комментарии `--!`, DOCTYPE-идентифи�
 frameset'ов, внешний контент SVG/MathML, fragment parsing.
 
 
+## Этап 10 — insertion modes
+
+Парсер переведён с заплаток «вокруг таблиц» на режимы вставки: текущий узел
+стека (`table`/`tbody`/`tr`/`td`/`colgroup`) выбирает набор правил, обработчики
+возвращают «токен забран» и проваливаются по цепочке (TableBody → Table, Row →
+TableBody → Table). Удалены `kTableAllowed` и блок table-fixes. Плюс: закрывающие
+теги до `<body>` игнорируются, «after frameset» работает по правилам.
+Подробности: [`docs/STAGE-10.md`](STAGE-10.md),
+решение — [`docs/adr/0012-insertion-modes.md`](adr/0012-insertion-modes.md),
+демо — [`docs/demo/table.png`](demo/table.png).
+
+**Критерий выхода**: табличные конструкции строятся по правилам режимов, старые
+заплатки удалены, регрессий нет. Сейчас: tree construction — 1 110/1 380
+(80.4 %, было 79.1 %), токенайзер — 6 281/6 820 (92.1 %), test262 — 2 673/13 254
+(20.2 %), reftests — 7/7, юнит-тестов 343. Открыто: порядок foster parenting и
+слияние текста перед таблицей, «in template» с переключением режимов, `noscript`
+со scripting, `<menuitem>`, `--!`, DOCTYPE-идентификаторы, рендеринг frameset'ов,
+внешний контент SVG/MathML, fragment parsing.
+
+
 ---
 
 ## Риски и как их снимаем

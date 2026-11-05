@@ -274,3 +274,39 @@ BONK_TEST(html, nested_lists_nest) {
   CHECK_EQ(parse_and_serialize("<ul><li>a<ul><li>b"),
            std::string("<html><head></head><body><ul><li>a<ul><li>b</li></ul></li></ul></body></html>"));
 }
+
+// --- insertion modes: tables -------------------------------------------------
+// The parser dispatches on the current node: <table> → Table, <tbody> → TableBody,
+// <tr> → Row, <td> → Cell. Everything else inside a table is foster-parented.
+
+BONK_TEST(html, table_insertion_modes_build_the_implicit_parts) {
+  CHECK_EQ(parse_and_serialize("<table><td>x"),
+           std::string("<html><head></head><body><table><tbody><tr><td>x</td></tr></tbody></table></body></html>"));
+  CHECK_EQ(parse_and_serialize("<table><tr><td>a<td>b</tr></table>"),
+           std::string("<html><head></head><body><table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>"
+                       "</body></html>"));
+  CHECK_EQ(parse_and_serialize("<table><caption>c</caption><tr><td>x"),
+           std::string("<html><head></head><body><table><caption>c</caption><tbody><tr><td>x</td></tr>"
+                       "</tbody></table></body></html>"));
+}
+
+BONK_TEST(html, table_foster_parents_foreign_content) {
+  // Text and elements that cannot live in a table are moved in front of it.
+  CHECK_EQ(parse_and_serialize("<table>x<td>y"),
+           std::string("<html><head></head><body>x<table><tbody><tr><td>y</td></tr></tbody></table></body></html>"));
+  CHECK_EQ(parse_and_serialize("<table><div>x</div></table>"),
+           std::string("<html><head></head><body><div>x</div><table></table></body></html>"));
+}
+
+BONK_TEST(html, table_cells_close_each_other) {
+  CHECK_EQ(parse_and_serialize("<table><tr><td><b>a</b></table>"),
+           std::string("<html><head></head><body><table><tbody><tr><td><b>a</b></td></tr></tbody></table>"
+                       "</body></html>"));
+}
+
+BONK_TEST(html, end_tags_before_body_are_ignored) {
+  CHECK_EQ(parse_and_serialize("<html></p><!--foo-->"),
+           std::string("<html><!--foo--><head></head><body></body></html>"));
+  CHECK_EQ(parse_and_serialize("<head></head></p><!--foo-->"),
+           std::string("<html><head></head><!--foo--><body></body></html>"));
+}

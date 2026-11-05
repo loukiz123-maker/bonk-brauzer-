@@ -1,0 +1,57 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bonk Brauzer — table insertion modes</title>
+<style>
+  body { font-family: "DejaVu Sans", sans-serif; margin: 0; padding: 26px; background: #101318; color: #e8eaf0; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: #9aa4b2; margin: 0 0 18px; font-size: 13px; }
+  .grid { display: flex; gap: 18px; align-items: flex-start; }
+  .card { background: #1a1f27; border: 1px solid #2b3240; border-radius: 8px; padding: 14px 16px; width: 360px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #7f8b9c; margin: 0 0 10px; }
+  code { color: #8fd6ff; font-family: "DejaVu Sans Mono", monospace; font-size: 11.5px; display: block; margin-bottom: 10px; }
+  table { border-collapse: collapse; font-size: 13px; }
+  th, td { border: 1px solid #2b3240; padding: 4px 10px; }
+  th { color: #7f8b9c; font-weight: normal; }
+  caption { color: #8be28b; font-size: 12px; padding-bottom: 6px; }
+  .fostered { color: #ffd479; font-size: 13px; margin: 0 0 10px; }
+</style>
+</head>
+<body>
+  <h1>Tables: who is allowed to be inside what</h1>
+  <p class="lead">Bonk Brauzer, stage 10: insertion modes decide, not special cases in the body loop.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>implicit tbody / tr</h2>
+      <code>&lt;table&gt;&lt;td&gt;cell</code>
+      <table><tbody><tr><td>cell</td><td>cell</td></tr></tbody></table>
+    </div>
+    <div class="card">
+      <h2>foster parenting</h2>
+      <code>&lt;table&gt;stray text&lt;tr&gt;&lt;td&gt;x</code>
+      <p class="fostered">stray text</p>
+      <table><tbody><tr><td>x</td></tr></tbody></table>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:18px;">
+    <div class="card">
+      <h2>caption and header cells</h2>
+      <code>&lt;table&gt;&lt;caption&gt;…&lt;thead&gt;&lt;tr&gt;&lt;th&gt;</code>
+      <table>
+        <caption>quarterly bonk</caption>
+        <thead><tr><th>quarter</th><th>bonks</th></tr></thead>
+        <tbody><tr><td>Q1</td><td>12</td></tr><tr><td>Q2</td><td>31</td></tr></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>cells close each other</h2>
+      <code>&lt;tr&gt;&lt;td&gt;a&lt;td&gt;b&lt;/tr&gt;</code>
+      <p class="fostered">no &lt;/td&gt; needed: the next cell closes the previous one</p>
+      <table><tbody><tr><td>a</td><td>b</td></tr></tbody></table>
+    </div>
+  </div>
+</body>
+</html>

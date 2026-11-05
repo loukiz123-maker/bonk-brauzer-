@@ -123,6 +123,21 @@ struct Case {
 /// html5lib's expected files print attribute values verbatim (no escaping of `&`
 /// or `"`), so the comparison must do the same.
 
+/// Pushes `text` as lines: the first one indented, continuation lines verbatim (the
+/// .dat files are generated from a single string, so embedded newlines are not
+/// re-indented).
+void push_split(std::vector<std::string>& out, const std::string& indent, std::string_view text) {
+  std::size_t start = 0;
+  for (;;) {
+    const std::size_t newline = text.find('\n', start);
+    const std::string_view piece =
+        newline == std::string_view::npos ? text.substr(start) : text.substr(start, newline - start);
+    out.push_back((start == 0 ? indent : std::string{}) + std::string(piece));
+    if (newline == std::string_view::npos) break;
+    start = newline + 1;
+  }
+}
+
 void serialize(const dom::Document& document, dom::NodeId node, std::size_t depth,
                std::vector<std::string>& out) {
   const std::string indent = "| " + std::string(depth * 2, ' ');
@@ -136,7 +151,9 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
       return;
     }
     case dom::NodeType::Comment:
-      out.push_back(indent + "<!-- " + std::string(document.text_data(node)) + " -->");
+      // html5lib prints the comment (newlines and all) as one string; the expected
+      // files are line based, so split it the same way they were written.
+      push_split(out, indent, "<!-- " + std::string(document.text_data(node)) + " -->");
       return;
     case dom::NodeType::Text: {
       const std::string_view text = document.text_data(node);

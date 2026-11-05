@@ -47,10 +47,6 @@ const char* const kBlockEndTags[] = {"address",  "article", "aside",  "blockquot
                                      "main",     "menu",    "nav",    "ol",         "pre",      "section",
                                      "summary",  "ul"};
 
-// Start tags that may stay inside the table structure instead of being fostered out.
-const char* const kTableAllowed[] = {"caption", "colgroup", "col", "tbody", "tfoot",  "thead", "tr",
-                                     "td",      "th",       "style", "script", "template", "table", "form"};
-
 // "Formatting" elements: the ones the adoption agency algorithm works on.
 const char* const kFormatting[] = {"a",  "b",   "big", "code", "em",    "font", "i",
                                    "nobr", "s", "small", "strike", "strong", "tt", "u"};
@@ -74,6 +70,13 @@ const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link", "met
 
 const char* const kRawText[] = {"script", "style", "xmp", "iframe", "noembed", "noframes"};
 const char* const kRcData[] = {"title", "textarea"};
+
+[[nodiscard]] bool token_has_attribute(const Token& token, std::string_view name, std::string_view value) {
+  for (const auto& [key, val] : token.attributes) {
+    if (key == name && val == value) return true;
+  }
+  return false;
+}
 
 template <std::size_t N>
 bool contains(const char* const (&list)[N], std::string_view value) noexcept {
@@ -640,6 +643,297 @@ class TreeBuilder {
     report("html.stray_end_tag", "unmatched </" + std::string(name) + ">");
   }
 
+  // --- insertion modes ---------------------------------------------------
+  //
+  // The parser is not one "in body" loop with table special-cases sprinkled in:
+  // the current node selects the insertion mode, and the mode owns the rules.
+  // `<table>` → Table, `<tbody>` → TableBody, `<tr>` → Row, `<td>` → Cell,
+  // `<colgroup>` → ColumnGroup. Everything else is Body (which also covers the
+  // content of a `<template>`, because the template element is the current node).
+  enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup };
+
+  [[nodiscard]] Mode mode() const {
+    if (stack_.empty()) return Mode::Body;
+    const std::string_view top = tag_of(stack_.back());
+    if (top == "table") return Mode::Table;
+    if (top == "tbody" || top == "thead" || top == "tfoot") return Mode::TableBody;
+    if (top == "tr") return Mode::Row;
+    if (top == "td" || top == "th") return Mode::Cell;
+    if (top == "colgroup") return Mode::ColumnGroup;
+    return Mode::Body;
+  }
+
+  /// Pop the stack back to the table (or template/html) that started the context.
+  void clear_to_table_context() {
+    while (!stack_.empty()) {
+      const std::string_view top = tag_of(stack_.back());
+      if (top == "table" || top == "template" || top == "html") break;
+      stack_.pop_back();
+    }
+  }
+
+  void clear_to_table_body_context() {
+    while (!stack_.empty()) {
+      const std::string_view top = tag_of(stack_.back());
+      if (top == "tbody" || top == "thead" || top == "tfoot" || top == "template" || top == "html") break;
+      stack_.pop_back();
+    }
+  }
+
+  void clear_to_row_context() {
+    while (!stack_.empty()) {
+      const std::string_view top = tag_of(stack_.back());
+      if (top == "tr" || top == "template" || top == "html") break;
+      stack_.pop_back();
+    }
+  }
+
+  /// Pop up to and including the innermost cell (or row / table body).
+  void pop_through(std::string_view tag_a, std::string_view tag_b = {}, std::string_view tag_c = {}) {
+    while (!stack_.empty()) {
+      const std::string_view top = tag_of(stack_.back());
+      const bool hit = top == tag_a || (tag_b.size() != 0 && top == tag_b) || (tag_c.size() != 0 && top == tag_c);
+      stack_.pop_back();
+      if (hit) return;
+    }
+  }
+
+  void close_cell() {
+    generate_implied_end_tags();
+    pop_through("td", "th");
+    clear_to_last_marker();
+  }
+
+  /// Inserts a synthetic element (`<tbody>`, `<tr>`, `<colgroup>`) — the implicit
+  /// parts of a table that authors leave out.
+  void insert_synthetic(std::string_view name) {
+    Token token{TokenType::StartTag, std::string(name), {}, {}, false};
+    insert_element(token, true);
+  }
+
+  [[nodiscard]] bool is_table_part(std::string_view name) const {
+    return name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
+           name == "thead" || name == "td" || name == "th" || name == "tr";
+  }
+
+  /// "In table" start tags. Returns true when the token was consumed.
+  bool table_start(const Token& token) {
+    const std::string_view name = token.name;
+    if (name == "caption") {
+      clear_to_table_context();
+      insert_element(token, true);
+      push_marker();
+      return true;
+    }
+    if (name == "colgroup") {
+      clear_to_table_context();
+      insert_element(token, true);
+      return true;
+    }
+    if (name == "col") {
+      clear_to_table_context();
+      insert_synthetic("colgroup");
+      insert_element(token, false);
+      return true;
+    }
+    if (name == "tbody" || name == "tfoot" || name == "thead") {
+      clear_to_table_context();
+      insert_element(token, true);
+      return true;
+    }
+    if (name == "td" || name == "th" || name == "tr") {
+      clear_to_table_context();
+      insert_synthetic("tbody");
+      if (name != "tr") insert_synthetic("tr");
+      insert_element(token, true);
+      if (name != "tr") push_marker();
+      return true;
+    }
+    if (name == "table") {  // a table inside a table closes the outer one
+      report("html.nested_table", "<table> inside <table> closes the outer table");
+      pop_through("table");
+      handle_start_tag(token);
+      return true;
+    }
+    if (name == "style" || name == "script" || name == "template") return false;  // "in head" rules
+    if (name == "form") {  // the form element itself never stays open inside a table
+      insert_element(token, true);
+      stack_.pop_back();
+      return true;
+    }
+    if (name == "input" && token_has_attribute(token, "type", "hidden")) {
+      insert_element(token, false);
+      return true;
+    }
+    // Anything else is foster-parented: put it in front of the table, keep it open.
+    const dom::NodeId element = make_element(token);
+    foster_insert(element, false);
+    if (!contains(kVoid, name)) stack_.push_back(element);
+    return true;
+  }
+
+  /// "In table" end tags.
+  bool table_end(std::string_view name) {
+    if (name == "table") {
+      if (!tag_in_scope("table")) {
+        report("html.ignored_end_tag", "</table> without a table in scope");
+        return true;
+      }
+      pop_through("table");
+      return true;
+    }
+    if (name == "body" || name == "caption" || name == "col" || name == "colgroup" || name == "html" ||
+        name == "tbody" || name == "td" || name == "tfoot" || name == "th" || name == "thead" || name == "tr") {
+      report("html.ignored_end_tag", "</" + std::string(name) + "> ignored inside <table>");
+      return true;
+    }
+    return false;  // "in body" rules (e.g. </template>, </div>, formatting end tags)
+  }
+
+  /// "In table body": `<tr>`, cells, and closing the section.
+  bool table_body_start(const Token& token) {
+    const std::string_view name = token.name;
+    if (name == "tr") {
+      clear_to_table_body_context();
+      insert_element(token, true);
+      return true;
+    }
+    if (name == "td" || name == "th") {
+      clear_to_table_body_context();
+      insert_synthetic("tr");
+      insert_element(token, true);
+      push_marker();
+      return true;
+    }
+    if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
+        name == "thead") {
+      pop_through("tbody", "thead", "tfoot");
+      handle_start_tag(token);  // reprocess in the "in table" mode
+      return true;
+    }
+    return table_start(token);
+  }
+
+  bool table_body_end(std::string_view name) {
+    if (name == "tbody" || name == "tfoot" || name == "thead") {
+      if (!tag_in_scope(name)) return true;
+      pop_through(name);
+      return true;
+    }
+    if (name == "table") {
+      pop_through("tbody", "thead", "tfoot");
+      handle_end_tag_name(name);
+      return true;
+    }
+    if (name == "body" || name == "caption" || name == "col" || name == "colgroup" || name == "html" ||
+        name == "td" || name == "th" || name == "tr") {
+      report("html.ignored_end_tag", "</" + std::string(name) + "> ignored in a table body");
+      return true;
+    }
+    return false;
+  }
+
+  bool row_start(const Token& token) {
+    const std::string_view name = token.name;
+    if (name == "td" || name == "th") {
+      clear_to_row_context();
+      insert_element(token, true);
+      push_marker();
+      return true;
+    }
+    if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "tfoot" ||
+        name == "thead" || name == "tr") {
+      pop_through("tr");
+      handle_start_tag(token);  // reprocess in the "in table body" mode
+      return true;
+    }
+    return table_start(token);
+  }
+
+  bool row_end(std::string_view name) {
+    if (name == "tr") {
+      if (!tag_in_scope("tr")) return true;
+      pop_through("tr");
+      return true;
+    }
+    if (name == "table") {
+      pop_through("tr");
+      handle_end_tag_name(name);
+      return true;
+    }
+    if (name == "tbody" || name == "tfoot" || name == "thead") {
+      if (!tag_in_scope(name)) return true;
+      pop_through("tr");
+      handle_end_tag_name(name);
+      return true;
+    }
+    if (name == "body" || name == "caption" || name == "col" || name == "colgroup" || name == "html" ||
+        name == "td" || name == "th") {
+      report("html.ignored_end_tag", "</" + std::string(name) + "> ignored in a row");
+      return true;
+    }
+    return false;
+  }
+
+  bool cell_start(const Token& token) {
+    if (!is_table_part(token.name) || token.name == "td" || token.name == "th") {
+      if (token.name == "caption" || token.name == "col" || token.name == "colgroup" || token.name == "tbody" ||
+          token.name == "tfoot" || token.name == "thead" || token.name == "tr") {
+        if (!tag_in_scope("td") && !tag_in_scope("th")) return true;
+        close_cell();
+        handle_start_tag(token);
+        return true;
+      }
+      return false;  // ordinary content inside a cell: "in body" rules
+    }
+    if (!tag_in_scope("td") && !tag_in_scope("th")) return true;
+    close_cell();
+    handle_start_tag(token);
+    return true;
+  }
+
+  bool cell_end(std::string_view name) {
+    if (name == "td" || name == "th") {
+      if (!tag_in_scope(name)) return true;
+      close_cell();
+      return true;
+    }
+    if (name == "table" || name == "tbody" || name == "tfoot" || name == "thead" || name == "tr") {
+      if (!tag_in_scope(name)) return true;
+      close_cell();
+      handle_end_tag_name(name);
+      return true;
+    }
+    if (name == "body" || name == "caption" || name == "col" || name == "colgroup" || name == "html") {
+      report("html.ignored_end_tag", "</" + std::string(name) + "> ignored in a cell");
+      return true;
+    }
+    return false;
+  }
+
+  bool column_group_start(const Token& token) {
+    if (token.name == "col") {
+      insert_element(token, false);
+      return true;
+    }
+    if (token.name == "template") return false;
+    pop_through("colgroup");
+    handle_start_tag(token);
+    return true;
+  }
+
+  bool column_group_end(std::string_view name) {
+    if (name == "colgroup") {
+      pop_through("colgroup");
+      return true;
+    }
+    if (name == "col") return true;
+    if (name == "template") return false;
+    pop_through("colgroup");
+    handle_end_tag_name(name);
+    return true;
+  }
+
   /// Creates an element with its attributes; `<template>` also gets its contents
   /// fragment, which is where its children will actually land.
   [[nodiscard]] dom::NodeId make_element(const Token& token) {
@@ -684,6 +978,7 @@ class TreeBuilder {
         if (html_.valid()) {
           target = current();
           if (!head_created() && !body_created()) target = html_;
+          if (frameset_document() && !in_frameset()) target = document_.root();  // "after frameset"
         }
         document_.append_child(target, document_.create_comment(token.data));
         return;
@@ -712,9 +1007,12 @@ class TreeBuilder {
       }
       return;
     }
-    // A frameset document has no body: anything after </frameset> is dropped, but
-    // <noframes> and <template> keep real content.
-    if (frameset_document() && !has_open("noframes") && !has_open("template")) return;
+    // A frameset document has no body: whitespace still lands in <html>, anything
+    // else after </frameset> is dropped (<noframes>/<template> keep real content).
+    if (frameset_document() && !has_open("noframes") && !has_open("template")) {
+      if (!in_frameset() && trim(text).empty()) document_.append_text(html_, text);
+      return;
+    }
     if (!body_created()) {
       const dom::NodeId top_node = current();
       const bool inside_element = html_.valid() && top_node != html_ && top_node != head_;
@@ -725,6 +1023,15 @@ class TreeBuilder {
       // Whitespace between tags before <body> is not rendered by anyone.
       if (trim(text).empty() && !options_.keep_whitespace_in_head) return;
       ensure_body();
+    }
+    const Mode current_mode = mode();
+    if (current_mode == Mode::Table || current_mode == Mode::TableBody || current_mode == Mode::Row) {
+      if (trim(text).empty()) {
+        document_.append_text(current(), text);  // whitespace may stay inside the table
+      } else {
+        foster_insert(document_.create_text(text), true);
+      }
+      return;
     }
     if (!trim(text).empty()) frameset_ok_ = false;
     if (!table_context()) reconstruct_formatting();
@@ -784,6 +1091,11 @@ class TreeBuilder {
 
     if (name == "frame" && !in_frameset()) {  // <frame> outside a frameset is dropped
       report("html.stray_frame", "<frame> outside <frameset> ignored");
+      return;
+    }
+
+    if (frameset_document() && !in_frameset() && name != "html" && name != "noframes" && name != "template") {
+      report("html.ignored_after_frameset", "<" + std::string(name) + "> ignored after </frameset>");
       return;
     }
 
@@ -850,35 +1162,27 @@ class TreeBuilder {
       }
     }
 
-    // --- table fixes: implicit <tbody>/<tr>/<colgroup> -------------------
-    if ((name == "td" || name == "th" || name == "tr" || name == "col" || name == "colgroup") &&
-        nearest_table().valid() && !template_above_table()) {
-      // "Clear the stack back to a table context": drop fostered elements that sit
-      // above the table, but keep the table/tbody/tr chain that is already there.
-      while (!stack_.empty()) {
-        const std::string_view top = document_.tag_name(stack_.back());
-        if (top == "table" || top == "tbody" || top == "thead" || top == "tfoot" || top == "tr") break;
-        stack_.pop_back();
-      }
-      if (name == "col" && current_is("table")) {
-        insert_element(Token{TokenType::StartTag, "colgroup", {}, {}, false}, true);
-      } else if (name == "td" || name == "th" || name == "tr") {
-        if (current_is("table")) insert_element(Token{TokenType::StartTag, "tbody", {}, {}, false}, true);
-        if ((name == "td" || name == "th") && !current_is("tr")) {
-          insert_element(Token{TokenType::StartTag, "tr", {}, {}, false}, true);
-        }
-      } else if (name == "colgroup" && current_is("table")) {
-        // allowed directly inside <table>
-      }
-    }
-
-    // Elements that cannot live inside a table are foster-parented before it.
-    if (table_context() && !contains(kTableAllowed, name)) {
-      const dom::NodeId element = document_.create_element(token.name);
-      for (const auto& [key, value] : token.attributes) document_.set_attribute(element, key, value);
-      foster_insert(element, false);
-      if (!contains(kVoid, name)) stack_.push_back(element);
-      return;
+    // --- insertion modes --------------------------------------------------
+    // The table modes own <caption>/<col>/<tbody>/<tr>/<td> and foster-parent
+    // everything else; the body mode (below) handles ordinary content.
+    switch (mode()) {
+      case Mode::Table:
+        if (table_start(token)) return;
+        break;
+      case Mode::TableBody:
+        if (table_body_start(token)) return;
+        break;
+      case Mode::Row:
+        if (row_start(token)) return;
+        break;
+      case Mode::Cell:
+        if (cell_start(token)) return;
+        break;
+      case Mode::ColumnGroup:
+        if (column_group_start(token)) return;
+        break;
+      case Mode::Body:
+        break;
     }
 
     // Formatting elements: reconstruct what an implicit end tag closed, then track
@@ -920,8 +1224,17 @@ class TreeBuilder {
     }
   }
 
-  void handle_end_tag(const Token& token) {
-    const std::string_view name = token.name;
+  void handle_end_tag(const Token& token) { handle_end_tag_name(token.name); }
+
+  void handle_end_tag_name(std::string_view name) {
+    // "Before head" and "after head" ignore every end tag except these: `</p>`
+    // before <body> must not conjure a paragraph.
+    const dom::NodeId tag_top = current();
+    if (!body_created() && (tag_top == html_ || tag_top == head_) && name != "head" && name != "body" &&
+        name != "html" && name != "br") {
+      report("html.ignored_before_body", "</" + std::string(name) + "> ignored before <body>");
+      return;
+    }
 
     if (in_frameset()) {
       if (name == "frameset") {
@@ -933,6 +1246,26 @@ class TreeBuilder {
         return;
       }
     }
+    switch (mode()) {
+      case Mode::Table:
+        if (table_end(name)) return;
+        break;
+      case Mode::TableBody:
+        if (table_body_end(name)) return;
+        break;
+      case Mode::Row:
+        if (row_end(name)) return;
+        break;
+      case Mode::Cell:
+        if (cell_end(name)) return;
+        break;
+      case Mode::ColumnGroup:
+        if (column_group_end(name)) return;
+        break;
+      case Mode::Body:
+        break;
+    }
+
     if (name == "html" || name == "body") return;  // ignore: the tree is closed at EOF
     if (name == "head") {
       close_head();
