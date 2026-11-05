@@ -739,3 +739,167 @@ BONK_TEST(html, select_in_table_closes_on_table_tokens) {
            std::string("<html><head></head><body><select><option>A</option></select><table><tbody><tr><td>B</td>"
                        "</tr></tbody></table></body></html>"));
 }
+
+BONK_TEST(html, foreign_elements_carry_their_namespace) {
+  dom::Document document;
+  CHECK(parse_html("<svg><g/></svg><math><mi>x</mi></math>", document, nullptr).is_ok());
+  const dom::NodeId body = document.body();
+  const dom::NodeId svg = document.children(body).at(0);
+  CHECK_EQ(document.tag_name(svg), std::string_view("svg"));
+  CHECK_EQ(document.element_namespace(svg), dom::Namespace::Svg);
+  const dom::NodeId g = document.children(svg).at(0);
+  CHECK_EQ(document.element_namespace(g), dom::Namespace::Svg);
+  const dom::NodeId math = document.children(body).at(1);
+  CHECK_EQ(document.element_namespace(math), dom::Namespace::Mathml);
+  CHECK_EQ(document.element_namespace(document.children(math).at(0)), dom::Namespace::Mathml);
+  // The serializer writes foreign subtrees back with the namespaces they came from.
+  CHECK_EQ(document.to_html(document.root()),
+           std::string("<html><head></head><body><svg><g></g></svg><math><mi>x</mi></math></body></html>"));
+}
+
+BONK_TEST(html, svg_tag_names_are_case_adjusted) {
+  // The tokenizer lowercases every tag name; inside an SVG subtree the tree builder
+  // restores the camel-case spellings the SVG DOM uses. (`<foreignObject>` itself is
+  // an integration point, so its *children* are HTML — the adjusted names below all
+  // hang off the SVG element directly.)
+  CHECK_EQ(parse_and_serialize("<svg><lineargradient><textpath><feblend><clippath></clippath>"
+                               "</feblend></textpath></lineargradient></svg>"),
+           std::string("<html><head></head><body><svg><linearGradient><textPath><feBlend>"
+                       "<clipPath></clipPath></feBlend></textPath></linearGradient></svg>"
+                       "</body></html>"));
+  // Inside `<foreignObject>` the content is HTML again, so nothing is adjusted.
+  CHECK_EQ(parse_and_serialize("<svg><foreignobject><g></g></foreignobject></svg>"),
+           std::string("<html><head></head><body><svg><foreignObject><g></g></foreignObject>"
+                       "</svg></body></html>"));
+  // A `solidcolor` element is *not* adjusted: it was dropped from the spec table.
+  CHECK_EQ(parse_and_serialize("<svg><solidcolor/></svg>"),
+           std::string("<html><head></head><body><svg><solidcolor></solidcolor></svg></body></html>"));
+  // Attributes that are not all lowercase are fixed the same way.
+  CHECK_EQ(parse_and_serialize("<svg viewbox=\"0 0 1 1\" attributename=\"x\"></svg>"),
+           std::string("<html><head></head><body><svg viewBox=\"0 0 1 1\" attributeName=\"x\"></svg>"
+                       "</body></html>"));
+  // MathML has exactly one: definitionurl.
+  CHECK_EQ(parse_and_serialize("<math definitionurl=u></math>"),
+           std::string("<html><head></head><body><math definitionURL=\"u\"></math></body></html>"));
+}
+
+BONK_TEST(html, foreign_attributes_get_their_prefix) {
+  dom::Document document;
+  CHECK(parse_html("<svg><a xlink:href=\"h\" xml:lang=\"en\" xmlns:xlink=\"u\" xmlns=\"u2\" "
+                   "xml:base=\"b\"></a></svg>",
+                   document, nullptr)
+            .is_ok());
+  const dom::NodeId body = document.body();
+  const dom::NodeId anchor = document.children(document.children(body).at(0)).at(0);
+  // `xlink`/`xml`/`xmlns` turn into real prefixes ...
+  CHECK_EQ(document.attribute_ns(anchor, "xlink", "href"), std::string_view("h"));
+  CHECK_EQ(document.attribute_ns(anchor, "xml", "lang"), std::string_view("en"));
+  CHECK_EQ(document.attribute_ns(anchor, "xmlns", "xlink"), std::string_view("u"));
+  // ... while a bare `xmlns` keeps its qualified name and `xml:base` is not in the
+  // table at all, so it stays a literal attribute name.
+  CHECK_EQ(document.attribute(anchor, "xmlns"), std::string_view("u2"));
+  CHECK_EQ(document.attribute(anchor, "xml:base"), std::string_view("b"));
+  CHECK(document.attribute(anchor, "href").empty());
+  CHECK_EQ(document.to_html(anchor),
+           std::string("<a xlink:href=\"h\" xml:lang=\"en\" xmlns:xlink=\"u\" xmlns=\"u2\" "
+                       "xml:base=\"b\"></a>"));
+}
+
+BONK_TEST(html, foreign_integration_points_hand_content_back_to_html) {
+  // `<foreignObject>`, SVG `<title>`/`<desc>` and MathML `mi`/`mo`/`mn`/`ms`/`mtext`
+  // are integration points: their children are HTML again.
+  dom::Document document;
+  CHECK(parse_html("<svg><foreignobject><div></div></foreignobject></svg>"
+                   "<math><mtext><span>x</span></mtext></math>",
+                   document, nullptr)
+            .is_ok());
+  const dom::NodeId body = document.body();
+  const dom::NodeId foreign_object = document.children(document.children(body).at(0)).at(0);
+  CHECK_EQ(document.element_namespace(foreign_object), dom::Namespace::Svg);
+  CHECK_EQ(document.element_namespace(document.children(foreign_object).at(0)), dom::Namespace::Html);
+  const dom::NodeId math = document.children(body).at(1);
+  const dom::NodeId mtext = document.children(math).at(0);
+  CHECK_EQ(document.element_namespace(mtext), dom::Namespace::Mathml);
+  CHECK_EQ(document.element_namespace(document.children(mtext).at(0)), dom::Namespace::Html);
+  // `annotation-xml` is an integration point only with an HTML encoding, and `<svg>`
+  // inside it starts an SVG subtree again.
+  CHECK_EQ(parse_and_serialize("<math><annotation-xml encoding=text/html><svg><g/></svg>"
+                               "</annotation-xml></math>"),
+           std::string("<html><head></head><body><math><annotation-xml encoding=\"text/html\">"
+                       "<svg><g></g></svg></annotation-xml></math></body></html>"));
+  // Without an HTML encoding `annotation-xml` is *not* an integration point, so
+  // `<div>` there is a foreign element ... 
+  dom::Document foreign_annotation;
+  CHECK(parse_html("<math><annotation-xml encoding=text/plain><foo></foo>"
+                   "</annotation-xml></math>",
+                   foreign_annotation, nullptr)
+            .is_ok());
+  const dom::NodeId annotation =
+      foreign_annotation.children(foreign_annotation.children(foreign_annotation.body()).at(0)).at(0);
+  CHECK_EQ(foreign_annotation.element_namespace(annotation), dom::Namespace::Mathml);
+  CHECK_EQ(foreign_annotation.element_namespace(foreign_annotation.children(annotation).at(0)),
+           dom::Namespace::Mathml);
+  // ... and a breakout tag like `<div>` pops straight back out of the subtree.
+  CHECK_EQ(parse_and_serialize("<math><annotation-xml encoding=text/plain><div>"
+                               "</annotation-xml></math>"),
+           std::string("<html><head></head><body><math><annotation-xml encoding=\"text/plain\">"
+                       "</annotation-xml></math><div></div></body></html>"));
+}
+
+BONK_TEST(html, foreign_breakout_tags_end_the_foreign_subtree) {
+  // `<b>` is an HTML element: seeing it inside `<svg>` pops back to HTML, so the
+  // element ends up in the body as a sibling of the (now closed) svg subtree.
+  CHECK_EQ(parse_and_serialize("<svg><g><b>x</b></g></svg>"),
+           std::string("<html><head></head><body><svg><g></g></svg><b>x</b></body></html>"));
+  // `<font>` only breaks out with color/face/size: SVG has its own `<font>`.
+  CHECK_EQ(parse_and_serialize("<svg><font color=red>x</svg>"),
+           std::string("<html><head></head><body><svg></svg><font color=\"red\">x</font></body></html>"));
+  CHECK_EQ(parse_and_serialize("<svg><font id=f></font></svg>"),
+           std::string("<html><head></head><body><svg><font id=\"f\"></font></svg></body></html>"));
+}
+
+BONK_TEST(html, cdata_is_text_inside_foreign_content) {
+  // In SVG/MathML a CDATA section is character data; in HTML it is a bogus comment.
+  CHECK_EQ(parse_and_serialize("<svg><![CDATA[a<b&c]]></svg>"),
+           std::string("<html><head></head><body><svg>a&lt;b&amp;c</svg></body></html>"));
+  CHECK_EQ(parse_and_serialize("<div><![CDATA[x]]></div>"),
+           std::string("<html><head></head><body><div><!--[CDATA[x]]--></div></body></html>"));
+}
+
+BONK_TEST(html, foreign_fragment_context_keeps_the_namespace) {
+  // `svg path` is how the html5lib corpus spells a foreign fragment context: the
+  // context element is in the SVG namespace, so its children are SVG elements.
+  dom::Document document;
+  const dom::NodeId context = parse_fragment("<g></g>X", "svg path", document, nullptr);
+  const dom::NodeId g = document.children(context).at(0);
+  CHECK_EQ(document.tag_name(g), std::string_view("g"));
+  CHECK_EQ(document.element_namespace(g), dom::Namespace::Svg);
+  // ... and a breakout tag inside it lands in HTML again.
+  dom::Document other;
+  const dom::NodeId html_context = parse_fragment("<div></div>", "svg path", other, nullptr);
+  CHECK_EQ(other.element_namespace(other.children(html_context).at(0)), dom::Namespace::Html);
+}
+
+BONK_TEST(html, namespace_aware_scope_checks) {
+  // `<svg td>` is not a table cell: `</td>` walks past it to the real one, so the
+  // text that follows is fostered out of the table instead of landing in the cell.
+  dom::Document document;
+  CHECK(parse_html("<body><table><tr><td><svg><td></td></svg></td>Foo</table>", document, nullptr)
+            .is_ok());
+  const dom::NodeId body = document.body();
+  CHECK_EQ(document.type(document.children(body).at(0)), dom::NodeType::Text);  // "Foo" was fostered
+  std::vector<dom::NodeId> cells;
+  for (const dom::NodeId node : document.descendants(document.root())) {
+    if (document.type(node) == dom::NodeType::Element && document.tag_name(node) == "td") {
+      cells.push_back(node);
+    }
+  }
+  REQUIRE(cells.size() == 2);  // the real cell and the `<svg td>`
+  CHECK_EQ(document.element_namespace(cells[0]), dom::Namespace::Html);
+  CHECK_EQ(document.element_namespace(cells[1]), dom::Namespace::Svg);
+  // `<svg template>` is not a template either: `</template>` closes the real one and
+  // the following `<div>` lands in the body.
+  CHECK_EQ(parse_and_serialize("<template><svg><template></svg></template><div>"),
+           std::string("<html><head><template><svg><template></template></svg></template></head>"
+                       "<body><div></div></body></html>"));
+}

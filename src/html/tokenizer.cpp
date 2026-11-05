@@ -684,6 +684,23 @@ Token Tokenizer::next() {
         continue;
       }
 
+      // CDATA section (foreign content only): everything up to `]]>` is text; an
+      // unterminated section runs to end of file.
+      case State::CdataSection: {
+        const std::size_t end = input_.find("]]>", position_);
+        if (end == std::string_view::npos) {
+          character_buffer_.append(input_.substr(position_));
+          position_ = input_.size();
+          state_ = State::EndOfFile;
+        } else {
+          character_buffer_.append(input_.substr(position_, end - position_));
+          position_ = end + 3;
+          state_ = State::Data;
+        }
+        if (!character_buffer_.empty()) return flush_characters();
+        continue;  // empty section: nothing to emit, the loop happily moves on
+      }
+
       case State::MarkupDeclarationOpen: {
         if (consume_if("--")) {
           state_ = State::CommentStart;
@@ -699,7 +716,12 @@ Token Tokenizer::next() {
           continue;
         }
         if (consume_if("[CDATA[")) {
-          // In HTML content, CDATA is a bogus comment (foreign content is out of scope).
+          if (foreign_content_) {
+            // Inside SVG/MathML a CDATA section is plain character data.
+            state_ = State::CdataSection;
+            continue;
+          }
+          // In HTML content it is a bogus comment that swallows the `[CDATA[`.
           state_ = State::BogusComment;
           token_ = Token{};
           token_.type = TokenType::Comment;

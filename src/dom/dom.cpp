@@ -138,11 +138,23 @@ std::string_view Document::string_of(std::uint32_t id) const {
   return id < strings_.size() ? std::string_view(strings_[id]) : std::string_view{};
 }
 
-NodeId Document::create_element(std::string_view name) {
+std::string_view namespace_name(Namespace ns) noexcept {
+  switch (ns) {
+    case Namespace::Html: return "html";
+    case Namespace::Svg: return "svg";
+    case Namespace::Mathml: return "math";
+  }
+  return "html";
+}
+
+NodeId Document::create_element(std::string_view name) { return create_element(name, Namespace::Html); }
+
+NodeId Document::create_element(std::string_view name, Namespace ns) {
   Node node;
   node.type = NodeType::Element;
   node.generation = 1;
   node.name = intern(name);
+  node.ns = ns;
   const auto index = static_cast<std::uint32_t>(nodes_.size());
   nodes_.push_back(node);
   return id_for(index);
@@ -272,14 +284,42 @@ void Document::remove_child(NodeId parent_id, NodeId child_id) {
 void Document::set_attribute(NodeId element, std::string_view name, std::string_view value) {
   Node& node = node_ref(element);
   for (std::uint32_t i = node.attr_head; i != kNoNode; i = attrs_[i].next) {
-    if (string_of(attrs_[i].name) == name) {
+    if (attrs_[i].prefix == kNoNode && string_of(attrs_[i].name) == name) {
       attrs_[i].value = intern(value);
       return;
     }
   }
   const auto record = static_cast<std::uint32_t>(attrs_.size());
-  attrs_.push_back(AttrRecord{intern(name), intern(value), node.attr_head});
+  attrs_.push_back(AttrRecord{intern(name), intern(value), kNoNode, node.attr_head});
   node.attr_head = record;
+}
+
+void Document::set_attribute(NodeId element, std::string_view prefix, std::string_view name,
+                             std::string_view value) {
+  if (prefix.empty()) {
+    set_attribute(element, name, value);
+    return;
+  }
+  Node& node = node_ref(element);
+  const std::uint32_t prefix_id = intern(prefix);
+  for (std::uint32_t i = node.attr_head; i != kNoNode; i = attrs_[i].next) {
+    if (attrs_[i].prefix == prefix_id && string_of(attrs_[i].name) == name) {
+      attrs_[i].value = intern(value);
+      return;
+    }
+  }
+  const auto record = static_cast<std::uint32_t>(attrs_.size());
+  attrs_.push_back(AttrRecord{intern(name), intern(value), prefix_id, node.attr_head});
+  node.attr_head = record;
+}
+
+std::string_view Document::attribute_ns(NodeId id, std::string_view prefix, std::string_view name) const {
+  for (std::uint32_t i = node_ref(id).attr_head; i != kNoNode; i = attrs_[i].next) {
+    const std::string_view record_prefix =
+        attrs_[i].prefix == kNoNode ? std::string_view{} : string_of(attrs_[i].prefix);
+    if (record_prefix == prefix && string_of(attrs_[i].name) == name) return string_of(attrs_[i].value);
+  }
+  return std::string_view{};
 }
 
 void Document::remove_attribute(NodeId id, std::string_view name) {
@@ -331,6 +371,8 @@ std::string_view Document::tag_name(NodeId id) const {
   return node.type == NodeType::Element ? string_of(node.name) : std::string_view{};
 }
 
+Namespace Document::element_namespace(NodeId id) const { return node_ref(id).ns; }
+
 std::string_view Document::text_data(NodeId id) const {
   const Node& node = node_ref(id);
   if (node.type != NodeType::Text && node.type != NodeType::Comment && node.type != NodeType::Doctype) {
@@ -342,7 +384,9 @@ std::string_view Document::text_data(NodeId id) const {
 std::span<const Attribute> Document::attributes(NodeId id) const {
   attribute_view_.clear();
   for (std::uint32_t i = node_ref(id).attr_head; i != kNoNode; i = attrs_[i].next) {
-    attribute_view_.push_back(Attribute{string_of(attrs_[i].name), string_of(attrs_[i].value)});
+    attribute_view_.push_back(Attribute{string_of(attrs_[i].name), string_of(attrs_[i].value),
+                                        attrs_[i].prefix == kNoNode ? std::string_view{}
+                                                                    : string_of(attrs_[i].prefix)});
   }
   std::reverse(attribute_view_.begin(), attribute_view_.end());  // preserve source order
   return attribute_view_;
@@ -350,7 +394,7 @@ std::span<const Attribute> Document::attributes(NodeId id) const {
 
 std::string_view Document::attribute(NodeId id, std::string_view name) const {
   for (std::uint32_t i = node_ref(id).attr_head; i != kNoNode; i = attrs_[i].next) {
-    if (string_of(attrs_[i].name) == name) return string_of(attrs_[i].value);
+    if (attrs_[i].prefix == kNoNode && string_of(attrs_[i].name) == name) return string_of(attrs_[i].value);
   }
   return std::string_view{};
 }
@@ -358,7 +402,7 @@ std::string_view Document::attribute(NodeId id, std::string_view name) const {
 bool Document::has_attribute(NodeId id, std::string_view name) const {
   if (!id.valid()) return false;
   for (std::uint32_t i = node_ref(id).attr_head; i != kNoNode; i = attrs_[i].next) {
-    if (string_of(attrs_[i].name) == name) return true;
+    if (attrs_[i].prefix == kNoNode && string_of(attrs_[i].name) == name) return true;
   }
   return false;
 }
@@ -502,6 +546,10 @@ void Document::serialize_into(NodeId id, std::string& out) const {
   out += tag;
   for (const Attribute& attribute : attributes(id)) {
     out += ' ';
+    if (!attribute.prefix.empty()) {  // `xlink:href`, `xml:lang`
+      out += attribute.prefix;
+      out += ':';
+    }
     out += attribute.name;
     out += "=\"";
     escape_attribute_into(attribute.value, out);
@@ -548,6 +596,10 @@ void Document::debug_into(NodeId id, int depth, std::string& out) const {
       break;
     case NodeType::Element: {
       out += '<';
+      if (node.ns != Namespace::Html) {  // namespace first, as the html5lib outlines do
+        out += namespace_name(node.ns);
+        out += ' ';
+      }
       out += tag_name(id);
       for (const Attribute& attribute : attributes(id)) {
         out += ' ';

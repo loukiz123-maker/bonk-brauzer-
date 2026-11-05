@@ -203,10 +203,24 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
     case dom::NodeType::Element: {
       std::vector<std::string> attributes;
       for (const dom::Attribute& attribute : document.attributes(node)) {
-        attributes.push_back(std::string(attribute.name) + "=\"" + std::string(attribute.value) + "\"");
+        // Namespaced attributes print as `prefix localName`, everything else as
+        // `name` — exactly the html5lib outline form.
+        const std::string name = attribute.prefix.empty()
+                                     ? std::string(attribute.name)
+                                     : std::string(attribute.prefix) + " " + std::string(attribute.name);
+        attributes.push_back(name + "=\"" + std::string(attribute.value) + "\"");
       }
       std::sort(attributes.begin(), attributes.end());
-      out.push_back(indent + "<" + std::string(document.tag_name(node)) + ">");
+      // Foreign elements are namespace-qualified in the outline: `<svg svg>`,
+      // `<math mi>`.
+      // html5lib writes the namespace first: `<svg font>`, `<math mi>`.
+      std::string tag;
+      if (document.element_namespace(node) != dom::Namespace::Html) {
+        tag += dom::namespace_name(document.element_namespace(node));
+        tag += " ";
+      }
+      tag += document.tag_name(node);
+      out.push_back(indent + "<" + tag + ">");
       const std::string attribute_indent = "| " + std::string((depth + 1) * 2, ' ');
       for (const std::string& attribute : attributes) out.push_back(attribute_indent + attribute);
       for (const dom::NodeId child : document.children(node)) serialize(document, child, depth + 1, out);
@@ -224,7 +238,6 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
   if (!detail::directory_exists(directory)) return report;
 
   std::size_t fragment_cases = 0;
-  std::size_t foreign_cases = 0;
 
   for (const std::string& path : detail::list_files(directory, ".dat")) {
     const std::string text = detail::read_file(path);
@@ -235,21 +248,9 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
       ++index;
       if (options.limit != 0 && report.total >= options.limit) {
         report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
-        report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
         return report;
       }
       if (test.expected.empty() && test.data.empty()) continue;
-      bool needs_foreign = false;
-      for (const std::string& line : test.expected) {
-        // html5lib prints foreign elements namespace-qualified: "<svg svg>", "<math math>".
-        if (line.find("<svg ") != std::string::npos || line.find("<math ") != std::string::npos) {
-          needs_foreign = true;
-        }
-      }
-      if (needs_foreign) {
-        ++foreign_cases;
-        continue;
-      }
       ++report.total;
 
       dom::Document document;
@@ -292,8 +293,6 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
     }
   }
   report.notes.push_back("fragment cases: " + std::to_string(fragment_cases));
-  report.notes.push_back("skipped foreign-content cases: " + std::to_string(foreign_cases));
-  report.excluded = foreign_cases;
   return report;
 }
 

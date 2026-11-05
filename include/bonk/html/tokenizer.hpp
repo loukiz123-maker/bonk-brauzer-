@@ -41,6 +41,13 @@ struct Token {
     }
     return {};
   }
+
+  [[nodiscard]] bool has_attribute(std::string_view key) const {
+    for (const auto& [name_, value] : attributes) {
+      if (name_ == key) return true;
+    }
+    return false;
+  }
 };
 
 class Tokenizer {
@@ -61,9 +68,15 @@ class Tokenizer {
   /// <plaintext> swallows the rest of the document as character data.
   void enter_plain_text();
 
+  /// The tree builder owns the "adjusted current node", so it tells the tokenizer
+  /// whether that node sits in foreign content: `<![CDATA[…]]>` is character data
+  /// there and a bogus comment in HTML content (HTML §13.2.5.42).
+  void set_foreign_content(bool foreign) { foreign_content_ = foreign; }
+
  private:
   enum class State {
     Data,
+    CdataSection,
     RcData,
     RawText,
     PlainText,
@@ -133,6 +146,7 @@ class Tokenizer {
   std::string attribute_name_;
   std::string attribute_value_;
   std::string character_buffer_;
+  bool foreign_content_ = false;
   bool text_element_active_ = false;
   bool text_element_rcdata_ = false;
   std::string text_element_name_;

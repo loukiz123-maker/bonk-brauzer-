@@ -50,9 +50,16 @@ struct NodeId {
   friend bool operator!=(const NodeId& a, const NodeId& b) noexcept { return !(a == b); }
 };
 
+/// The namespaces the HTML parser can produce. `<svg>` and `<math>` switch their
+/// subtree into one of the foreign namespaces; everything else is HTML.
+enum class Namespace : std::uint8_t { Html, Svg, Mathml };
+
+[[nodiscard]] std::string_view namespace_name(Namespace ns) noexcept;
+
 struct Attribute {
-  std::string_view name;
+  std::string_view name;    // local name (case-adjusted inside SVG/MathML)
   std::string_view value;
+  std::string_view prefix;  // `xlink` / `xml` / `xmlns` for foreign attributes, else empty
 };
 
 class Document {
@@ -68,6 +75,7 @@ class Document {
   // --- construction (driven by the html tree builder) --------------------
   [[nodiscard]] NodeId root() const noexcept { return NodeId{0, nodes_[0].generation}; }
   [[nodiscard]] NodeId create_element(std::string_view name);
+  [[nodiscard]] NodeId create_element(std::string_view name, Namespace ns);
   [[nodiscard]] NodeId create_text(std::string_view text);
   [[nodiscard]] NodeId create_comment(std::string_view text);
   [[nodiscard]] NodeId create_doctype(std::string_view text);
@@ -85,6 +93,8 @@ class Document {
   /// on the other hand invalidates every NodeId that pointed at the removed node.
   void unlink(NodeId child);
   void set_attribute(NodeId element, std::string_view name, std::string_view value);
+  /// Foreign attributes keep their namespace prefix (`xlink:href`, `xml:lang`).
+  void set_attribute(NodeId element, std::string_view prefix, std::string_view name, std::string_view value);
   void append_text(NodeId parent, std::string_view text);  // merges with a trailing Text node
   /// Appends to the data of an existing Text node (foster parenting needs this:
   /// text moved in front of a table must join the text node already there).
@@ -95,6 +105,10 @@ class Document {
   [[nodiscard]] std::size_t node_count() const noexcept { return nodes_.size(); }
   [[nodiscard]] NodeType type(NodeId id) const;
   [[nodiscard]] std::string_view tag_name(NodeId id) const;  // lowercase, interned
+  [[nodiscard]] Namespace element_namespace(NodeId id) const;
+  /// Attributes are addressed by prefix *and* local name; `attribute()` only sees
+  /// the unprefixed ones.
+  [[nodiscard]] std::string_view attribute_ns(NodeId id, std::string_view prefix, std::string_view name) const;
   [[nodiscard]] std::string_view text_data(NodeId id) const;
   [[nodiscard]] bool has_doctype_identifiers(NodeId id) const;
   [[nodiscard]] std::string_view doctype_public_id(NodeId id) const;
@@ -140,6 +154,7 @@ class Document {
     std::uint32_t next_sibling = kNoNode;
     std::uint32_t prev_sibling = kNoNode;
     std::uint32_t name = 0;       // interned string id (element tag / doctype text)
+    Namespace ns = Namespace::Html;  // elements only
     std::uint32_t public_id = kNoNode;  // DOCTYPE only: interned, kNoNode when absent
     std::uint32_t system_id = kNoNode;  // DOCTYPE only: interned, kNoNode when absent
     std::uint32_t attr_head = kNoNode;
@@ -151,6 +166,7 @@ class Document {
   struct AttrRecord {
     std::uint32_t name = 0;
     std::uint32_t value = 0;
+    std::uint32_t prefix = kNoNode;  // interned, kNoNode for ordinary attributes
     std::uint32_t next = kNoNode;
   };
 

@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "bonk/core/strings.hpp"
+#include "bonk/core/utf8.hpp"
 #include "bonk/html/tokenizer.hpp"
 
 namespace bonk::html {
@@ -88,6 +89,79 @@ const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link",     
 
 const char* const kRawText[] = {"script", "style", "xmp", "iframe", "noembed", "noframes"};
 const char* const kRcData[] = {"title", "textarea"};
+
+// SVG element names that are not all lowercase: the tree builder adjusts the tag
+// name of a start tag before inserting it into an SVG subtree (HTML §13.2.6.5).
+struct NamePair { const char* from; const char* to; };
+const NamePair kSvgTagNames[] = {
+    {"altglyph", "altGlyph"}, {"altglyphdef", "altGlyphDef"}, {"altglyphitem", "altGlyphItem"},
+    {"animatecolor", "animateColor"}, {"animatemotion", "animateMotion"},
+    {"animatetransform", "animateTransform"}, {"clippath", "clipPath"}, {"feblend", "feBlend"},
+    {"fecolormatrix", "feColorMatrix"}, {"fecomponenttransfer", "feComponentTransfer"},
+    {"fecomposite", "feComposite"}, {"feconvolvematrix", "feConvolveMatrix"},
+    {"fediffuselighting", "feDiffuseLighting"}, {"fedisplacementmap", "feDisplacementMap"},
+    {"fedistantlight", "feDistantLight"}, {"fedropshadow", "feDropShadow"}, {"feflood", "feFlood"},
+    {"fefunca", "feFuncA"}, {"fefuncb", "feFuncB"}, {"fefuncg", "feFuncG"}, {"fefuncr", "feFuncR"},
+    {"fegaussianblur", "feGaussianBlur"}, {"feimage", "feImage"}, {"femerge", "feMerge"},
+    {"femergenode", "feMergeNode"}, {"femorphology", "feMorphology"}, {"feoffset", "feOffset"},
+    {"fepointlight", "fePointLight"}, {"fespecularlighting", "feSpecularLighting"},
+    {"fespotlight", "feSpotLight"}, {"fetile", "feTile"}, {"feturbulence", "feTurbulence"},
+    {"foreignobject", "foreignObject"}, {"glyphref", "glyphRef"}, {"lineargradient", "linearGradient"},
+    {"radialgradient", "radialGradient"}, {"textpath", "textPath"},  // no "solidcolor": removed from the spec
+};
+
+// SVG attribute names that are not all lowercase (same section, "adjust SVG
+// attributes"). MathML has exactly one: definitionurl -> definitionURL.
+const NamePair kSvgAttributeNames[] = {
+    {"attributename", "attributeName"}, {"attributetype", "attributeType"},
+    {"basefrequency", "baseFrequency"}, {"baseprofile", "baseProfile"}, {"calcmode", "calcMode"},
+    {"clippathunits", "clipPathUnits"}, {"diffuseconstant", "diffuseConstant"},
+    {"edgemode", "edgeMode"}, {"filterunits", "filterUnits"}, {"glyphref", "glyphRef"},
+    {"gradienttransform", "gradientTransform"}, {"gradientunits", "gradientUnits"},
+    {"kernelmatrix", "kernelMatrix"}, {"kernelunitlength", "kernelUnitLength"},
+    {"keypoints", "keyPoints"}, {"keysplines", "keySplines"}, {"keytimes", "keyTimes"},
+    {"lengthadjust", "lengthAdjust"}, {"limitingconeangle", "limitingConeAngle"},
+    {"markerheight", "markerHeight"}, {"markerunits", "markerUnits"}, {"markerwidth", "markerWidth"},
+    {"maskcontentunits", "maskContentUnits"}, {"maskunits", "maskUnits"}, {"numoctaves", "numOctaves"},
+    {"pathlength", "pathLength"}, {"patterncontentunits", "patternContentUnits"},
+    {"patterntransform", "patternTransform"}, {"patternunits", "patternUnits"},
+    {"pointsatx", "pointsAtX"}, {"pointsaty", "pointsAtY"}, {"pointsatz", "pointsAtZ"},
+    {"preservealpha", "preserveAlpha"}, {"preserveaspectratio", "preserveAspectRatio"},
+    {"primitiveunits", "primitiveUnits"}, {"refx", "refX"}, {"refy", "refY"},
+    {"repeatcount", "repeatCount"}, {"repeatdur", "repeatDur"},
+    {"requiredextensions", "requiredExtensions"}, {"requiredfeatures", "requiredFeatures"},
+    {"specularconstant", "specularConstant"}, {"specularexponent", "specularExponent"},
+    {"spreadmethod", "spreadMethod"}, {"startoffset", "startOffset"}, {"stddeviation", "stdDeviation"},
+    {"stitchtiles", "stitchTiles"}, {"surfacescale", "surfaceScale"},
+    {"systemlanguage", "systemLanguage"}, {"tablevalues", "tableValues"}, {"targetx", "targetX"},
+    {"targety", "targetY"}, {"textlength", "textLength"}, {"viewbox", "viewBox"},
+    {"viewtarget", "viewTarget"}, {"xchannelselector", "xChannelSelector"},
+    {"ychannelselector", "yChannelSelector"}, {"zoomandpan", "zoomAndPan"},
+};
+
+// Namespaced attributes: `xlink:href`, `xml:lang`, `xmlns` and friends. The prefix
+// goes into its own slot, the rest becomes the local name — the html5lib outlines
+// print them as `xlink href=…`.
+struct ForeignAttribute { const char* name; const char* prefix; const char* local; };
+const ForeignAttribute kForeignAttributes[] = {
+    {"xlink:actuate", "xlink", "actuate"}, {"xlink:arcrole", "xlink", "arcrole"},
+    {"xlink:href", "xlink", "href"},       {"xlink:role", "xlink", "role"},
+    {"xlink:show", "xlink", "show"},       {"xlink:title", "xlink", "title"},
+    {"xlink:type", "xlink", "type"},       {"xml:lang", "xml", "lang"},
+    {"xml:space", "xml", "space"},         {"xmlns", "xmlns", "xmlns"},
+    {"xmlns:xlink", "xmlns", "xlink"},
+};
+
+// Start tags that end foreign content: they are HTML elements by definition, so the
+// parser pops back to HTML and reprocesses them there (`<svg><b>` must not nest a
+// `b` inside the `svg`). `<font>` is special: only with color/face/size (SVG's own
+// `<font>` element is legitimate).
+const char* const kForeignBreakoutTags[] = {
+    "b",    "big", "blockquote", "body", "br",   "center", "code",   "dd",   "div",   "dl",
+    "dt",   "em",  "embed",      "h1",   "h2",   "h3",     "h4",     "h5",   "h6",    "head",
+    "hr",   "i",   "img",        "li",   "listing", "menu", "meta",   "nobr", "ol",   "p",
+    "pre",  "ruby", "s",         "small", "span", "strong", "strike", "sub",  "sup",  "table",
+    "tt",   "u",   "ul",         "var"};
 
 [[nodiscard]] bool is_ascii_space(char c) noexcept {
   return c == ' ' || c == '\t' || c == '\n' || c == '\r' || c == '\f';
@@ -214,16 +288,32 @@ class TreeBuilder {
   /// Fragment parsing: the context element whose children were built.
   [[nodiscard]] dom::NodeId fragment_context_element() const { return context_; }
   [[nodiscard]] dom::NodeId html_element() const { return html_; }
-  void set_fragment_context(std::string_view context_tag) { fragment_tag_ = context_tag; }
+  /// `context` is either a bare tag name (HTML) or `svg tag` / `math tag`, the way
+  /// the html5lib corpus spells a foreign fragment context.
+  void set_fragment_context(std::string_view context) {
+    if (context.size() > 4 && context.substr(0, 4) == "svg ") {
+      fragment_namespace_ = dom::Namespace::Svg;
+      context.remove_prefix(4);
+    } else if (context.size() > 5 && context.substr(0, 5) == "math ") {
+      fragment_namespace_ = dom::Namespace::Mathml;
+      context.remove_prefix(5);
+    }
+    fragment_tag_ = context;
+  }
 
   void run(std::string_view input) {
     tokenizer_ = std::make_unique<Tokenizer>(input, diagnostics_);
     if (!fragment_tag_.empty()) begin_fragment(fragment_tag_);
     for (;;) {
+      // The tokenizer asks about the adjusted current node for CDATA sections.
+      tokenizer_->set_foreign_content(current_namespace() != dom::Namespace::Html);
       Token token = tokenizer_->next();
       if (token.type == TokenType::EndOfFile) break;
       process(token);
-      if (token.type == TokenType::StartTag) {
+      // Only an HTML element switches the tokenizer to a text state: an SVG
+      // <title>, <script> or <style> is a plain foreign element whose content stays
+      // markup.
+      if (token.type == TokenType::StartTag && current_namespace() == dom::Namespace::Html) {
         if (contains(kRawText, token.name)) tokenizer_->enter_text_element(token.name, false);
         if (contains(kRcData, token.name)) tokenizer_->enter_text_element(token.name, true);
         if (token.name == "noscript" && options_.scripting_enabled) {
@@ -267,15 +357,24 @@ class TreeBuilder {
     return top;
   }
 
+  /// An HTML element named `tag`. Scope walks and "close the nearest <p>" style
+  /// searches must not match a foreign element that merely shares a name: `<svg td>`
+  /// is not a table cell and `<svg template>` is not a template, so `</td>` and
+  /// `</template>` walk straight past them.
+  [[nodiscard]] bool is_html_named(dom::NodeId node, std::string_view tag) const {
+    return document_.type(node) == dom::NodeType::Element &&
+           document_.element_namespace(node) == dom::Namespace::Html && document_.tag_name(node) == tag;
+  }
+
   [[nodiscard]] bool has_open(std::string_view tag) const {
     for (const dom::NodeId node : stack_) {
-      if (document_.tag_name(node) == tag) return true;
+      if (is_html_named(node, tag)) return true;
     }
     return false;
   }
 
   [[nodiscard]] bool current_is(std::string_view tag) const {
-    return !stack_.empty() && document_.tag_name(stack_.back()) == tag;
+    return !stack_.empty() && is_html_named(stack_.back(), tag);
   }
 
   /// True when the "in select" insertion mode applies: an open <select> with no
@@ -313,11 +412,20 @@ class TreeBuilder {
   void begin_fragment(std::string_view context_tag) {
     fragment_mode_ = true;
     ensure_html();
-    context_ = document_.create_element(context_tag);
+    const dom::Namespace context_namespace =
+        fragment_namespace_ != dom::Namespace::Html
+            ? fragment_namespace_
+            : (context_tag == "svg" ? dom::Namespace::Svg
+               : context_tag == "math" ? dom::Namespace::Mathml
+                                       : dom::Namespace::Html);
+    context_ = document_.create_element(context_tag, context_namespace);
     document_.append_child(document_.root(), context_);
     fragment_initial_mode_ = initial_mode_for(context_tag);
     // RCDATA/RAWTEXT/PLAINTEXT, but with no appropriate end tag: the context tag
     // was never a start tag we emitted, so `</script>` in the fragment is text.
+    // Only HTML contexts get a text state — an SVG `<title>` is an ordinary foreign
+    // element, and markup inside it stays markup.
+    if (context_namespace != dom::Namespace::Html) return;
     if (context_tag == "title" || context_tag == "textarea") {
       tokenizer_->enter_context_text_state(true);
     } else if (context_tag == "style" || context_tag == "xmp" || context_tag == "iframe" ||
@@ -383,7 +491,7 @@ class TreeBuilder {
   /// Pops the stack down to (and including) the nearest `tag`; no-op when absent.
   bool close_open(std::string_view tag) {
     for (std::size_t i = stack_.size(); i > 0; --i) {
-      if (document_.tag_name(stack_[i - 1]) == tag) {
+      if (is_html_named(stack_[i - 1], tag)) {
         stack_.resize(i - 1);
         return true;
       }
@@ -396,9 +504,10 @@ class TreeBuilder {
   [[nodiscard]] bool p_in_scope() const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       const std::string_view tag = document_.tag_name(stack_[i - 1]);
-      if (tag == "p") return true;
+      if (is_html_named(stack_[i - 1], "p")) return true;
       if (tag == "button" || tag == "table" || tag == "td" || tag == "th" || tag == "caption" ||
-          tag == "marquee" || tag == "object" || tag == "applet" || tag == "template" || tag == "html") {
+          tag == "marquee" || tag == "object" || tag == "applet" || tag == "template" || tag == "html" ||
+          is_scope_boundary(stack_[i - 1])) {
         return false;
       }
     }
@@ -411,6 +520,7 @@ class TreeBuilder {
   /// sibling annotations instead of a nesting ladder.
   void generate_implied_end_tags(std::string_view except = {}) {
     while (!stack_.empty()) {
+      if (document_.element_namespace(stack_.back()) != dom::Namespace::Html) break;  // never a foreign element
       const std::string_view top = tag_of(stack_.back());
       if (top == except) break;
       if (top != "dd" && top != "dt" && top != "li" && top != "optgroup" && top != "option" && top != "p" &&
@@ -484,7 +594,7 @@ class TreeBuilder {
   [[nodiscard]] bool select_in_table() const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       if (tag_of(stack_[i - 1]) == "select") return in_table_scope("table");
-      if (tag_of(stack_[i - 1]) == "template") return false;
+      if (is_html_named(stack_[i - 1], "template")) return false;
     }
     return false;
   }
@@ -587,7 +697,7 @@ class TreeBuilder {
       // so the node simply joins the template's contents after what is already
       // there — html5lib's corpus has no table-less foster parent at all.
       for (std::size_t i = stack_.size(); i > 0; --i) {
-        if (tag_of(stack_[i - 1]) == "template") {
+        if (is_html_named(stack_[i - 1], "template")) {
           const dom::NodeId content = template_content(stack_[i - 1]);
           document_.append_child(content.valid() ? content : stack_[i - 1], child);
           return;
@@ -641,6 +751,24 @@ class TreeBuilder {
   // rewrites when an end tag arrives for an element that is not the current node.
   [[nodiscard]] static bool is_formatting(std::string_view tag) { return contains(kFormatting, tag); }
   [[nodiscard]] static bool is_special(std::string_view tag) { return contains(kSpecial, tag); }
+
+  /// "Special" elements are the boundaries of the adoption agency algorithm. Only a
+  /// few foreign elements qualify — `<svg tr>` is *not* one, which is what keeps
+  /// `<a><svg><tr></a>` from being rebuilt around a table row.
+  [[nodiscard]] bool is_special_node(dom::NodeId node) const {
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return false;
+    const std::string_view tag = tag_of(node);
+    switch (document_.element_namespace(node)) {
+      case dom::Namespace::Html:
+        return is_special(tag);
+      case dom::Namespace::Mathml:
+        return tag == "mi" || tag == "mo" || tag == "mn" || tag == "ms" || tag == "mtext" ||
+               tag == "annotation-xml";
+      case dom::Namespace::Svg:
+        return tag == "foreignObject" || tag == "desc" || tag == "title";
+    }
+    return false;
+  }
 
   [[nodiscard]] int index_in_stack(dom::NodeId node) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
@@ -789,7 +917,7 @@ class TreeBuilder {
       //    element (the boundary the misnested content has to be moved into).
       int furthest_index = -1;
       for (std::size_t i = static_cast<std::size_t>(formatting_stack_index) + 1; i < stack_.size(); ++i) {
-        if (is_special(tag_of(stack_[i]))) {
+        if (is_special_node(stack_[i])) {
           furthest_index = static_cast<int>(i);
           break;
         }
@@ -885,7 +1013,7 @@ class TreeBuilder {
   [[nodiscard]] bool in_table_scope(std::string_view tag) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       const std::string_view top = tag_of(stack_[i - 1]);
-      if (top == tag) return true;
+      if (is_html_named(stack_[i - 1], tag)) return true;
       if (top == "html" || top == "table" || top == "template") return false;
     }
     return false;
@@ -900,12 +1028,30 @@ class TreeBuilder {
            tag == "th" || tag == "marquee" || tag == "object" || tag == "select" || tag == "template";
   }
 
+  /// Foreign integration points are scope boundaries too: `</p>` must not reach out
+  /// of an SVG `<title>` (`<p><svg><title><p>` keeps the inner `<p>` inside the
+  /// title, it does not close the outer paragraph).
+  [[nodiscard]] bool is_scope_boundary(dom::NodeId node) const {
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return false;
+    const std::string_view tag = tag_of(node);
+    switch (document_.element_namespace(node)) {
+      case dom::Namespace::Html:
+        return is_default_scope_boundary(tag);
+      case dom::Namespace::Mathml:
+        return tag == "mi" || tag == "mo" || tag == "mn" || tag == "ms" || tag == "mtext" ||
+               tag == "annotation-xml";
+      case dom::Namespace::Svg:
+        return tag == "foreignObject" || tag == "desc" || tag == "title";
+    }
+    return false;
+  }
+
   /// True when `tag` is open above the nearest scope boundary.
   [[nodiscard]] bool tag_in_scope(std::string_view tag, bool list_scope = false) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       const std::string_view top = tag_of(stack_[i - 1]);
-      if (top == tag) return true;
-      if (is_default_scope_boundary(top)) return false;
+      if (is_html_named(stack_[i - 1], tag)) return true;
+      if (is_scope_boundary(stack_[i - 1])) return false;
       if (list_scope && (top == "ol" || top == "ul" || top == "dl")) return false;
     }
     return false;
@@ -915,9 +1061,246 @@ class TreeBuilder {
   [[nodiscard]] bool in_scope(dom::NodeId node) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       if (stack_[i - 1] == node) return true;
-      if (is_default_scope_boundary(document_.tag_name(stack_[i - 1]))) return false;
+      if (is_scope_boundary(stack_[i - 1])) return false;
     }
     return false;
+  }
+
+  // --- foreign content (SVG / MathML) ------------------------------------
+  //
+  // Everything below implements the "in foreign content" rules and the tree
+  // construction dispatcher that decides when they apply: an SVG or MathML element
+  // is not an HTML element, so the ordinary insertion modes must not see its
+  // children until an integration point re-enters HTML.
+
+  /// The namespace of the "adjusted current node" — the fragment context element
+  /// while the stack is down to the fake root, the current node otherwise.
+  [[nodiscard]] dom::Namespace current_namespace() const {
+    const dom::NodeId node = current();
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return dom::Namespace::Html;
+    return document_.element_namespace(node);
+  }
+
+  /// MathML `mi`, `mo`, `mn`, `ms` and `mtext`: their *children* are HTML again,
+  /// except for `<mglyph>`/`<malignmark>`.
+  [[nodiscard]] bool is_mathml_text_integration_point(dom::NodeId node) const {
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return false;
+    if (document_.element_namespace(node) != dom::Namespace::Mathml) return false;
+    const std::string_view tag = document_.tag_name(node);
+    return tag == "mi" || tag == "mo" || tag == "mn" || tag == "ms" || tag == "mtext";
+  }
+
+  /// `annotation-xml` with an HTML encoding, and SVG's `foreignObject`/`desc`/`title`:
+  /// their children are parsed with the HTML rules.
+  [[nodiscard]] bool is_html_integration_point(dom::NodeId node) const {
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return false;
+    const std::string_view tag = document_.tag_name(node);
+    switch (document_.element_namespace(node)) {
+      case dom::Namespace::Mathml: {
+        if (tag != "annotation-xml") return false;
+        const std::string_view encoding = document_.attribute(node, "encoding");
+        return equals_ascii_ci(encoding, "text/html") || equals_ascii_ci(encoding, "application/xhtml+xml");
+      }
+      case dom::Namespace::Svg:
+        return tag == "foreignObject" || tag == "desc" || tag == "title";
+      case dom::Namespace::Html:
+        return false;
+    }
+    return false;
+  }
+
+  /// The dispatcher (HTML §13.2.6.5): true when the token has to be handled by the
+  /// "in foreign content" rules instead of the current insertion mode.
+  [[nodiscard]] bool use_foreign_rules(const Token& token) const {
+    const dom::NodeId node = current();
+    if (!node.valid() || document_.type(node) != dom::NodeType::Element) return false;
+    const dom::Namespace ns = document_.element_namespace(node);
+    if (ns == dom::Namespace::Html) return false;
+    if (token.type == TokenType::EndOfFile) return false;
+    if (token.type == TokenType::Doctype) return false;  // "in body" ignores it too
+    if (is_mathml_text_integration_point(node)) {
+      if (token.type == TokenType::Characters) return false;
+      if (token.type == TokenType::StartTag && token.name != "mglyph" && token.name != "malignmark") return false;
+    } else if (is_html_integration_point(node)) {
+      if (token.type == TokenType::Characters) return false;
+      if (token.type == TokenType::StartTag) return false;
+    } else if (ns == dom::Namespace::Mathml && document_.tag_name(node) == "annotation-xml" &&
+               token.type == TokenType::StartTag && token.name == "svg") {
+      return false;
+    }
+    return true;
+  }
+
+  /// Pops foreign elements until HTML (or an integration point) is current again.
+  void pop_to_html_or_integration_point() {
+    while (stack_.size() > (fragment_mode_ ? std::size_t{1} : std::size_t{0})) {
+      const dom::NodeId node = current();
+      if (document_.type(node) != dom::NodeType::Element) break;
+      if (document_.element_namespace(node) == dom::Namespace::Html) break;
+      if (is_mathml_text_integration_point(node) || is_html_integration_point(node)) break;
+      stack_.pop_back();
+    }
+  }
+
+  /// `adjust SVG attributes` / `adjust MathML attributes`: fix up the case of the
+  /// handful of names that are not all lowercase.
+  static void adjust_attributes_for(dom::Namespace ns, Token& token) {
+    const NamePair* table = nullptr;
+    std::size_t count = 0;
+    if (ns == dom::Namespace::Svg) {
+      table = kSvgAttributeNames;
+      count = std::size(kSvgAttributeNames);
+    }
+    if (table == nullptr) {
+      if (ns == dom::Namespace::Mathml) {
+        for (auto& [key, value] : token.attributes) {
+          if (key == "definitionurl") key = "definitionURL";
+        }
+      }
+      return;
+    }
+    for (auto& [key, value] : token.attributes) {
+      for (std::size_t i = 0; i < count; ++i) {
+        if (key == table[i].from) {
+          key = table[i].to;
+          break;
+        }
+      }
+    }
+  }
+
+  void insert_foreign_element(const Token& token, dom::Namespace ns) {
+    const dom::NodeId element = document_.create_element(token.name, ns);
+    for (const auto& [key, value] : token.attributes) {
+      // Only the names in the table become namespaced attributes; `xml:base`, for
+      // instance, stays a literal attribute name (`xml:baaah=""` in the outlines).
+      const ForeignAttribute* known = nullptr;
+      for (const ForeignAttribute& entry : kForeignAttributes) {
+        if (key == entry.name) {
+          known = &entry;
+          break;
+        }
+      }
+      // A bare `xmlns` is a namespaced attribute with no prefix: it keeps its name.
+      if (known != nullptr && std::string_view(known->prefix) != known->local) {
+        document_.set_attribute(element, known->prefix, known->local, value);
+      } else {
+        document_.set_attribute(element, key, value);
+      }
+    }
+    insert_node(element);
+    stack_.push_back(element);
+  }
+
+  /// `<svg>` / `<math>` seen in HTML content ("in body"): the element starts a new
+  /// foreign subtree, so it goes in with its own namespace and, from then on, the
+  /// dispatcher routes its children through the foreign rules.
+  void insert_html_foreign_root(const Token& token) {
+    const dom::Namespace ns = token.name == "svg" ? dom::Namespace::Svg : dom::Namespace::Mathml;
+    Token adjusted = token;
+    adjust_attributes_for(ns, adjusted);
+    reconstruct_formatting();
+    insert_foreign_element(adjusted, ns);
+    if (adjusted.self_closing) stack_.pop_back();
+  }
+
+  void foreign_start_tag(const Token& token) {
+    const std::string_view name = token.name;
+    const bool breakout_font =
+        name == "font" && (token.has_attribute("color") || token.has_attribute("face") || token.has_attribute("size"));
+    if (contains(kForeignBreakoutTags, name) || breakout_font) {
+      report("html.breakout_from_foreign_content",
+             "<" + std::string(name) + "> ends the foreign content");
+      pop_to_html_or_integration_point();
+      handle_start_tag(token);
+      return;
+    }
+    Token adjusted = token;
+    const dom::Namespace ns = current_namespace();
+    if (ns == dom::Namespace::Svg) {
+      for (const NamePair& pair : kSvgTagNames) {
+        if (adjusted.name == pair.from) {
+          adjusted.name = pair.to;
+          break;
+        }
+      }
+    }
+    adjust_attributes_for(ns, adjusted);
+    insert_foreign_element(adjusted, ns);
+    if (adjusted.self_closing) stack_.pop_back();
+  }
+
+  /// Characters inside foreign content: inserted as they are (NUL becomes U+FFFD),
+  /// with no reconstruction and no whitespace gymnastics.
+  void foreign_characters(std::string_view text) {
+    std::string data;
+    data.reserve(text.size());
+    for (const char c : text) {
+      if (c == '\0') {
+        append_utf8(data, kReplacementCharacter);
+      } else {
+        data.push_back(c);
+      }
+    }
+    if (!data.empty()) document_.append_text(insertion_parent(), data);
+    // Whitespace and NUL (already replaced by U+FFFD above) do not close the door on
+    // a <frameset>; any other character does.
+    for (const char c : text) {
+      if (c != '\0' && !is_ascii_space(c)) {
+        frameset_ok_ = false;
+        break;
+      }
+    }
+  }
+
+  void foreign_end_tag(std::string_view name) {
+    if (name == "br" || name == "p") {  // `<br>`/`<p>` end tags are breakout tags too
+      pop_to_html_or_integration_point();
+      handle_end_tag_name(name);
+      return;
+    }
+    if (name == "script" && current_namespace() == dom::Namespace::Svg && current_is("script")) {
+      stack_.pop_back();  // SVG script: the script itself is simply closed
+      return;
+    }
+    int index = static_cast<int>(stack_.size()) - 1;
+    dom::NodeId node = stack_[static_cast<std::size_t>(index)];
+    if (!equals_ascii_ci(tag_of(node), name)) {
+      report("html.misnested_foreign_end_tag", "</" + std::string(name) + "> does not match the current node");
+    }
+    for (;;) {
+      if (index == 0) return;  // fragment case: the fake root is the topmost element
+      if (equals_ascii_ci(tag_of(node), name)) {
+        stack_.resize(static_cast<std::size_t>(index));
+        return;
+      }
+      --index;
+      node = stack_[static_cast<std::size_t>(index)];
+      if (document_.element_namespace(node) == dom::Namespace::Html) {
+        handle_end_tag_name(name);  // back in HTML: the ordinary rules decide
+        return;
+      }
+    }
+  }
+
+  /// "In caption" folded into the body rules: `mode()` reports Body while a caption
+  /// is the nearest table-related element on the stack, so the table-structure
+  /// tokens that the spec's "in caption" mode owns are intercepted here. They close
+  /// the caption and are reprocessed one insertion mode up (`<caption><p></table>`
+  /// must close the caption *and* the table, not stop at the paragraph).
+  [[nodiscard]] bool caption_context() const {
+    return mode() == Mode::Body && in_table_scope("caption");
+  }
+
+  void close_caption() {
+    generate_implied_end_tags();
+    pop_through("caption");
+    clear_to_last_marker();
+  }
+
+  [[nodiscard]] static bool is_table_structure(std::string_view name) {
+    return name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "td" ||
+           name == "tfoot" || name == "th" || name == "thead" || name == "tr" || name == "table";
   }
 
   /// Block-level end tags: `<div>`, `<ul>`, `<button>`, … The spec pops them after
@@ -976,6 +1359,9 @@ class TreeBuilder {
   /// which is what keeps `<table><a>1<td>` in the "in table" rules.
   [[nodiscard]] Mode mode() const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
+      // Foreign elements do not own an insertion mode: `<svg template>` must not
+      // pretend a template's mode is current.
+      if (document_.element_namespace(stack_[i - 1]) != dom::Namespace::Html) continue;
       const std::string_view tag = tag_of(stack_[i - 1]);
       if (tag == "td" || tag == "th") return Mode::Cell;
       if (tag == "tr") return Mode::Row;
@@ -1025,7 +1411,10 @@ class TreeBuilder {
     bool popped = false;
     while (!stack_.empty()) {
       const std::string_view top = tag_of(stack_.back());
-      const bool hit = top == tag_a || (tag_b.size() != 0 && top == tag_b) || (tag_c.size() != 0 && top == tag_c);
+      const dom::NodeId top_node = stack_.back();
+      const bool hit = is_html_named(top_node, tag_a) ||
+                       (tag_b.size() != 0 && is_html_named(top_node, tag_b)) ||
+                       (tag_c.size() != 0 && is_html_named(top_node, tag_c));
       if (stack_.size() == 1) {  // never pop the document's <html> element
         report("html.misnested_end_tag", "pop through <" + std::string(top) + "> stopped at <html>");
         return popped;
@@ -1118,6 +1507,12 @@ class TreeBuilder {
     }
     if (name == "input" && is_hidden_input(token)) {
       insert_element(token, false);
+      return true;
+    }
+    // `<svg>`/`<math>` open foreign content from inside a table too; they are
+    // fostered out of the table like any other content.
+    if (name == "svg" || name == "math") {
+      insert_html_foreign_root(token);
       return true;
     }
     // Anything else is foster-parented and processed by the "in body" rules: that
@@ -1482,10 +1877,10 @@ class TreeBuilder {
         handle_characters(token.data);
         return;
       case TokenType::StartTag:
-        handle_start_tag(token);
+        process_start_tag(token);
         return;
       case TokenType::EndTag:
-        handle_end_tag(token);
+        process_end_tag(token.name);
         return;
       case TokenType::EndOfFile:
         return;
@@ -1510,6 +1905,15 @@ class TreeBuilder {
   }
 
   void handle_characters(std::string_view text) {
+    {
+      Token probe;
+      probe.type = TokenType::Characters;
+      if (use_foreign_rules(probe)) {
+        foreign_characters(text);
+        return;
+      }
+    }
+
     if (ignore_next_lf_) {  // "ignore a LF right after <pre>/<listing>/<textarea>"
       ignore_next_lf_ = false;
       if (!text.empty() && text.front() == '\n') {
@@ -1601,6 +2005,33 @@ class TreeBuilder {
     if (!trim(text).empty()) frameset_ok_ = false;
     reconstruct_formatting();
     insert_text(text);
+  }
+
+  // --- the tree construction dispatcher ----------------------------------
+  //
+  // Every token enters through these two functions: they decide whether the current
+  // insertion mode sees it (HTML content) or the "in foreign content" rules do. The
+  // `handle_*` functions below are the HTML side only — "reprocess the token in HTML
+  // content" calls them directly, so a breakout can never bounce back into the
+  // foreign rules it just left.
+
+  void process_start_tag(const Token& token) {
+    if (use_foreign_rules(token)) {
+      foreign_start_tag(token);
+      return;
+    }
+    handle_start_tag(token);
+  }
+
+  void process_end_tag(std::string_view name) {
+    Token probe;
+    probe.type = TokenType::EndTag;
+    probe.name = std::string(name);
+    if (use_foreign_rules(probe)) {
+      foreign_end_tag(name);
+      return;
+    }
+    handle_end_tag_name(name);
   }
 
   void handle_start_tag(const Token& token) {
@@ -1894,12 +2325,28 @@ class TreeBuilder {
         break;
     }
 
+    // "In caption": a table-structure token closes the caption and is reprocessed
+    // by the "in table" rules.
+    if (name != "table" && is_table_structure(name) && caption_context()) {
+      close_caption();
+      handle_start_tag(token);
+      return;
+    }
+
     // "Anything else" in body, first the table parts: with no table cell above
     // them these are parse errors and must be dropped (`<tr>` outside a table
     // does not get to grow a table-less row).
     if (name == "caption" || name == "col" || name == "colgroup" || name == "tbody" || name == "td" ||
         name == "tfoot" || name == "th" || name == "thead" || name == "tr") {
       report("html.ignored_table_part", "<" + std::string(name) + "> ignored outside a table");
+      return;
+    }
+
+    // `<svg>` and `<math>` open foreign content from HTML: the element goes into its
+    // own namespace and every child token below it follows the foreign rules until
+    // an integration point hands control back.
+    if (name == "svg" || name == "math") {
+      insert_html_foreign_root(token);
       return;
     }
 
@@ -1920,8 +2367,6 @@ class TreeBuilder {
       if (name == "template") template_modes_.push_back(Mode::Template);
     }
   }
-
-  void handle_end_tag(const Token& token) { handle_end_tag_name(token.name); }
 
   void handle_end_tag_name(std::string_view name) {
     // "Before html" treats an end tag for html/head/body/br like "anything else":
@@ -1968,6 +2413,17 @@ class TreeBuilder {
       handle_end_tag_name(name);
       return;
     }
+    // "In caption" end tags: close the caption, then reprocess.
+    if (is_table_structure(name) && caption_context()) {
+      if (name == "caption") {
+        close_caption();
+        return;
+      }
+      close_caption();
+      handle_end_tag_name(name);
+      return;
+    }
+
     switch (mode()) {
       case Mode::Table:
         if (table_end(name)) return;
@@ -2131,7 +2587,7 @@ class TreeBuilder {
       // Pop everything up to and including the template element, then drop the
       // active-formatting entries that were created inside it (back to the marker).
       for (std::size_t i = stack_.size(); i > 0; --i) {
-        if (tag_of(stack_[i - 1]) == "template") {
+        if (is_html_named(stack_[i - 1], "template")) {  // never an <svg template>
           stack_.resize(i - 1);
           clear_to_last_marker();
           if (!template_modes_.empty()) template_modes_.pop_back();
@@ -2263,6 +2719,7 @@ class TreeBuilder {
   bool ignore_next_lf_ = false;  // <pre>/<listing>/<textarea> swallow the first newline
   dom::NodeId context_;  // fragment parsing: the element whose children we build
   Mode fragment_initial_mode_ = Mode::Body;  // "reset the insertion mode", fragment case
+  dom::Namespace fragment_namespace_ = dom::Namespace::Html;  // "svg tag" / "math tag"
   std::string_view fragment_tag_;            // non-empty: run() starts the fragment algorithm
   std::unique_ptr<Tokenizer> tokenizer_;
 

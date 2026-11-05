@@ -347,6 +347,28 @@ test262 — 2 673/13 254 (20.2 %), reftests — 7/7, юнит-тестов 395. 
 состоянием, рендеринг frameset'ов, test262.
 
 
+## Этап 18 — внешний контент: пространства имён SVG и MathML
+
+Последний блок дерева html5lib, остававшийся «вне конверта» (236 случаев),
+закрыт. В DOM появились пространства имён (`Namespace { Html, Svg, Mathml }`,
+`create_element(name, ns)`) и префиксы атрибутов (`xlink:href`, `xml:lang`); в
+tree builder — диспетчер tree construction (`use_foreign_rules`), правила
+«in foreign content» (44 breakout-тега + `font` с color/face/size + `</br>`,
+`</p>`), case-adjust 37 имён SVG-элементов и 58 имён SVG-атрибутов (плюс
+`definitionurl` у MathML), интеграционные точки (`foreignObject`/`desc`/`title`,
+`mi`/`mo`/`mn`/`ms`/`mtext`, `annotation-xml` с HTML-encoding), CDATA-секции и
+namespace-aware проверки области видимости. Подробности:
+[`docs/STAGE-18.md`](STAGE-18.md), решение —
+[`docs/adr/0020-foreign-content-namespaces.md`](adr/0020-foreign-content-namespaces.md).
+
+**Критерий выхода**: корпус дерева идёт целиком, без исключений. Сейчас: tree
+construction — **1 792/1 792 (100 %, 0 вне конверта, 0 пропусков; фрагментных
+192)**, токенайзер — 6 707/6 820 (98.3 %, 113 пропусков), test262 — 2 673/13 254
+(20.2 %), reftests — 7/7, юнит-тестов 403. Открыто: 56 случаев токенайзера с
+неизвестным начальным состоянием, рендеринг внешнего контента, frameset'ы,
+test262.
+
+
 ---
 
 ## Риски и как их снимаем
