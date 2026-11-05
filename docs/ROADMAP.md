@@ -195,6 +195,25 @@ TableBody → Table). Удалены `kTableAllowed` и блок table-fixes. П
 внешний контент SVG/MathML, fragment parsing.
 
 
+## Этап 11 — foster parenting и режимы в `<template>`
+
+Foster parenting стал свойством места вставки (`insert_node`/`insert_text` и
+`foster_target()`), а не флагом режима: `<table><div>x</div></table>` больше не
+перевешивает текст из `<div>`. Текст перед таблицей сливается в один узел
+(`Document::extend_text`), formatting-элементы внутри таблицы реконструируются,
+adoption agency уважает перевешивание. Внутри `<template>` работает стек
+режимов (`template_modes_`). Подробности: [`docs/STAGE-11.md`](STAGE-11.md),
+решение — [`docs/adr/0013-foster-parenting-and-template-modes.md`](adr/0013-foster-parenting-and-template-modes.md).
+
+**Критерий выхода**: перевешивание ведёт себя как в стандарте, «in template»
+переключает режимы, регрессий нет. Сейчас: tree construction — 1 129/1 380
+(81.8 %, было 80.4 %), токенайзер — 6 281/6 820 (92.1 %), test262 — 2 673/13 254
+(20.2 %), reftests — 7/7, юнит-тестов 348. Открыто: полный набор «in body»
+правил (`<h1>` в `<h1>`, `<menuitem>`, `</br>`), `noscript` со scripting,
+`plaintext`, DOCTYPE-идентификаторы, `--!`, рендеринг frameset'ов, внешний
+контент SVG/MathML, fragment parsing.
+
+
 ---
 
 ## Риски и как их снимаем

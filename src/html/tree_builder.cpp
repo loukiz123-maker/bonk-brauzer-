@@ -311,23 +311,68 @@ class TreeBuilder {
     return top == "table" || top == "tbody" || top == "thead" || top == "tfoot" || top == "tr";
   }
 
-  /// Inserts a node just before the innermost open table, merging text with the
-  /// node that already sits there.
-  void foster_insert(dom::NodeId child, bool text) {
+  /// Foster parenting only relocates content whose parent would otherwise be a
+  /// table structure element — `<table><div>` fosters the div, but the div's own
+  /// children then land inside the div, not before the table.
+  [[nodiscard]] bool foster_target() const {
+    const std::string_view top = tag_of(current());
+    return top == "table" || top == "tbody" || top == "tfoot" || top == "thead" || top == "tr";
+  }
+
+  /// "Appropriate place for inserting a node", with foster parenting for tables.
+  void insert_node(dom::NodeId node) {
+    if (foster_target()) {
+      foster_insert(node);
+      return;
+    }
+    document_.append_child(insertion_parent(), node);
+  }
+
+  /// Inserts `node` into `parent`, but fosters it out when `parent` is a table part
+  /// (the adoption agency needs this: the common ancestor may be a <table>).
+  void insert_at(dom::NodeId parent, dom::NodeId node) {
+    const std::string_view tag = tag_of(parent);
+    if (tag == "table" || tag == "tbody" || tag == "tfoot" || tag == "thead" || tag == "tr") {
+      foster_insert(node);
+      return;
+    }
+    document_.append_child(parent, node);
+  }
+
+  void insert_text(std::string_view text) {
+    if (foster_target()) {
+      foster_text(text);
+      return;
+    }
+    document_.append_text(insertion_parent(), text);
+  }
+
+  /// Inserts a node just before the innermost open table.
+  void foster_insert(dom::NodeId child) {
     const dom::NodeId table = nearest_table();
     const dom::NodeId parent = table.valid() ? document_.parent(table) : current();
     if (!parent.valid()) {
       document_.append_child(current(), child);
       return;
     }
-    if (text) {
-      const dom::NodeId previous = previous_sibling_of(table);
-      if (previous.valid() && document_.type(previous) == dom::NodeType::Text) {
-        document_.append_text(previous, document_.text_data(child));
-        return;
-      }
-    }
     document_.insert_before(parent, child, table);
+  }
+
+  /// Foster-parented text joins the Text node that already sits right before the
+  /// table, so `<table>A<td>B</td>C</table>` ends up as a single "AC" node.
+  void foster_text(std::string_view text) {
+    const dom::NodeId table = nearest_table();
+    const dom::NodeId parent = table.valid() ? document_.parent(table) : current();
+    if (!parent.valid()) {
+      document_.append_text(current(), text);
+      return;
+    }
+    const dom::NodeId previous = previous_sibling_of(table);
+    if (previous.valid() && document_.type(previous) == dom::NodeType::Text) {
+      document_.extend_text(previous, text);
+      return;
+    }
+    document_.insert_before(parent, document_.create_text(text), table);
   }
 
   [[nodiscard]] dom::NodeId previous_sibling_of(dom::NodeId node) const {
@@ -426,7 +471,7 @@ class TreeBuilder {
     }
     for (; index < afe_.size(); ++index) {
       const dom::NodeId clone = clone_element(afe_[index]);
-      document_.append_child(insertion_parent(), clone);
+      insert_node(clone);
       stack_.push_back(clone);
       afe_[index] = clone;
     }
@@ -544,9 +589,10 @@ class TreeBuilder {
       }
 
       // 16. Place the last node under the common ancestor (not under the furthest
-      //     block: that is the whole trick that keeps the tree sane).
+      //     block: that is the whole trick that keeps the tree sane). When the
+      //     common ancestor is a table part the node is foster-parented instead.
       detach(last_node);
-      document_.append_child(common_ancestor, last_node);
+      insert_at(common_ancestor, last_node);
 
       // 17.-18. A fresh copy of the formatting element adopts the furthest block's
       //         former children and is appended to the furthest block.
@@ -652,14 +698,23 @@ class TreeBuilder {
   // content of a `<template>`, because the template element is the current node).
   enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup };
 
+  /// The nearest element that defines a mode wins; formatting and block elements
+  /// sitting above it (foster-parented or inside a cell) do not change the mode,
+  /// which is what keeps `<table><a>1<td>` in the "in table" rules.
   [[nodiscard]] Mode mode() const {
-    if (stack_.empty()) return Mode::Body;
-    const std::string_view top = tag_of(stack_.back());
-    if (top == "table") return Mode::Table;
-    if (top == "tbody" || top == "thead" || top == "tfoot") return Mode::TableBody;
-    if (top == "tr") return Mode::Row;
-    if (top == "td" || top == "th") return Mode::Cell;
-    if (top == "colgroup") return Mode::ColumnGroup;
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view tag = tag_of(stack_[i - 1]);
+      if (tag == "td" || tag == "th") return Mode::Cell;
+      if (tag == "tr") return Mode::Row;
+      if (tag == "tbody" || tag == "thead" || tag == "tfoot") return Mode::TableBody;
+      if (tag == "colgroup") return Mode::ColumnGroup;
+      if (tag == "table") return Mode::Table;
+      if (tag == "template") {
+        return template_modes_.empty() ? Mode::Body : template_modes_.back();
+      }
+      // <caption> holds ordinary content; <html> is the outermost element.
+      if (tag == "caption" || tag == "html") return Mode::Body;
+    }
     return Mode::Body;
   }
 
@@ -765,9 +820,16 @@ class TreeBuilder {
       insert_element(token, false);
       return true;
     }
-    // Anything else is foster-parented: put it in front of the table, keep it open.
+    // Anything else is foster-parented and processed by the "in body" rules: that
+    // matters for formatting elements, which have to stay in the active list so a
+    // later character token can reconstruct them.
+    if (is_formatting(name)) {
+      start_formatting(token);
+      return true;
+    }
+    implied_end_tags(name);
     const dom::NodeId element = make_element(token);
-    foster_insert(element, false);
+    insert_node(element);
     if (!contains(kVoid, name)) stack_.push_back(element);
     return true;
   }
@@ -934,6 +996,40 @@ class TreeBuilder {
     return true;
   }
 
+  /// Start tag for a formatting element: the `<a>`/`<nobr>` special cases, then
+  /// reconstruction, insertion and the active-formatting entry.
+  void start_formatting(const Token& token) {
+    const std::string_view name = token.name;
+    if (is_formatting(name)) {
+      if (name == "nobr" && has_open("nobr")) {
+        adoption_agency("nobr");
+        reconstruct_formatting();
+      }
+      if (name == "a") {
+        dom::NodeId open_a;  // copy first: the adoption agency rewrites the list
+        for (std::size_t i = afe_.size(); i > 0; --i) {
+          if (!afe_[i - 1].valid()) break;
+          if (document_.tag_name(afe_[i - 1]) == "a") {
+            open_a = afe_[i - 1];
+            break;
+          }
+        }
+        if (open_a.valid()) {
+          adoption_agency("a");
+          remove_from_afe(open_a);
+        }
+      }
+      reconstruct_formatting();
+      implied_end_tags(name);
+      const dom::NodeId element = make_element(token);
+      insert_node(element);
+      stack_.push_back(element);
+      push_formatting(element);
+      return;
+    }
+
+  }
+
   /// Creates an element with its attributes; `<template>` also gets its contents
   /// fragment, which is where its children will actually land.
   [[nodiscard]] dom::NodeId make_element(const Token& token) {
@@ -952,7 +1048,7 @@ class TreeBuilder {
   void append_text(std::string_view text) {
     if (text.empty()) return;
     if (table_context() && !trim(text).empty()) {  // text inside a table is moved out
-      foster_insert(document_.create_text(text), true);
+      foster_text(text);
       return;
     }
     document_.append_text(insertion_parent(), text);
@@ -1029,13 +1125,14 @@ class TreeBuilder {
       if (trim(text).empty()) {
         document_.append_text(current(), text);  // whitespace may stay inside the table
       } else {
-        foster_insert(document_.create_text(text), true);
+        reconstruct_formatting();  // a formatting element may have been popped above
+        insert_text(text);
       }
       return;
     }
     if (!trim(text).empty()) frameset_ok_ = false;
-    if (!table_context()) reconstruct_formatting();
-    append_text(text);
+    reconstruct_formatting();
+    insert_text(text);
   }
 
   void handle_start_tag(const Token& token) {
@@ -1113,7 +1210,10 @@ class TreeBuilder {
     if (!body_created() && contains(kHeadElements, name)) {
       ensure_head();
       insert_element(token, true);
-      if (name == "template") push_marker();
+      if (name == "template") {
+        push_marker();
+        template_modes_.push_back(Mode::Body);
+      }
       return;
     }
 
@@ -1162,6 +1262,33 @@ class TreeBuilder {
       }
     }
 
+    // --- "in template": table-ish tags switch the template insertion mode ---
+    if (!stack_.empty() && tag_of(stack_.back()) == "template" && !template_modes_.empty() &&
+        template_modes_.back() == Mode::Body) {  // only from "in template" itself
+      Mode& current = template_modes_.back();
+      const std::string_view t = name;
+      if (t == "caption" || t == "colgroup" || t == "tbody" || t == "tfoot" || t == "thead") {
+        current = Mode::Table;
+        handle_start_tag(token);
+        return;
+      }
+      if (t == "col") {
+        current = Mode::ColumnGroup;
+        handle_start_tag(token);
+        return;
+      }
+      if (t == "tr") {
+        current = Mode::TableBody;
+        handle_start_tag(token);
+        return;
+      }
+      if (t == "td" || t == "th") {
+        current = Mode::Row;
+        handle_start_tag(token);
+        return;
+      }
+    }
+
     // --- insertion modes --------------------------------------------------
     // The table modes own <caption>/<col>/<tbody>/<tr>/<td> and foster-parent
     // everything else; the body mode (below) handles ordinary content.
@@ -1185,33 +1312,8 @@ class TreeBuilder {
         break;
     }
 
-    // Formatting elements: reconstruct what an implicit end tag closed, then track
-    // the new element in the active formatting list.
-    if (is_formatting(name)) {
-      if (name == "nobr" && has_open("nobr")) {
-        adoption_agency("nobr");
-        reconstruct_formatting();
-      }
-      if (name == "a") {
-        dom::NodeId open_a;  // copy first: the adoption agency rewrites the list
-        for (std::size_t i = afe_.size(); i > 0; --i) {
-          if (!afe_[i - 1].valid()) break;
-          if (document_.tag_name(afe_[i - 1]) == "a") {
-            open_a = afe_[i - 1];
-            break;
-          }
-        }
-        if (open_a.valid()) {
-          adoption_agency("a");
-          remove_from_afe(open_a);
-        }
-      }
-      reconstruct_formatting();
-      implied_end_tags(name);
-      const dom::NodeId element = make_element(token);
-      document_.append_child(insertion_parent(), element);
-      stack_.push_back(element);
-      push_formatting(element);
+    if (is_formatting(name)) {  // reconstruct what an implicit end tag closed
+      start_formatting(token);
       return;
     }
 
@@ -1221,6 +1323,7 @@ class TreeBuilder {
     if (name == "td" || name == "th" || name == "caption" || name == "applet" || name == "object" ||
         name == "marquee" || name == "template") {
       push_marker();
+      if (name == "template") template_modes_.push_back(Mode::Body);
     }
   }
 
@@ -1311,6 +1414,7 @@ class TreeBuilder {
         if (tag_of(stack_[i - 1]) == "template") {
           stack_.resize(i - 1);
           clear_to_last_marker();
+          if (!template_modes_.empty()) template_modes_.pop_back();
           return;
         }
       }
@@ -1336,6 +1440,11 @@ class TreeBuilder {
   std::unique_ptr<Tokenizer> tokenizer_;
 
   bool document_element_seen_ = false;
+  /// Stack of "template insertion modes": one entry per open <template>. It starts
+  /// as Body and switches to Table/TableBody/Row/ColumnGroup when a table-ish tag
+  /// shows up inside the template, exactly like the spec's stack.
+  std::vector<Mode> template_modes_;
+
   /// "frameset-ok": true while the body has no content that a <frameset> could not
   /// replace. `<p><frameset>` therefore still yields a frameset, `<b><frameset>`
   /// does not.

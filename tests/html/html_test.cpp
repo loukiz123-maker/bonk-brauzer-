@@ -310,3 +310,32 @@ BONK_TEST(html, end_tags_before_body_are_ignored) {
   CHECK_EQ(parse_and_serialize("<head></head></p><!--foo-->"),
            std::string("<html><head></head><!--foo--><body></body></html>"));
 }
+
+// --- foster parenting, precisely --------------------------------------------
+// Foster parenting only applies when the insertion target is a table part, text
+// joins the node already in front of the table, and formatting elements keep
+// being reconstructed while the parser is still in a table mode.
+
+BONK_TEST(html, fostered_text_joins_one_node) {
+  CHECK_EQ(parse_and_serialize("<table>A<td>B</td>C</table>"),
+           std::string("<html><head></head><body>AC<table><tbody><tr><td>B</td></tr></tbody></table>"
+                       "</body></html>"));
+}
+
+BONK_TEST(html, fostered_children_stay_inside_their_element) {
+  CHECK_EQ(parse_and_serialize("<table><div>x</div></table>"),
+           std::string("<html><head></head><body><div>x</div><table></table></body></html>"));
+}
+
+BONK_TEST(html, table_mode_reconstructs_formatting_elements) {
+  CHECK_EQ(parse_and_serialize("<table><a>1<td>2</td>3</table>"),
+           std::string("<html><head></head><body><a>1</a><a>3</a><table><tbody><tr><td>2</td></tr></tbody>"
+                       "</table></body></html>"));
+}
+
+BONK_TEST(html, template_switches_to_table_modes) {
+  // The template insertion mode becomes "in table body" after <tr>, so the next
+  // <td> gets an implicit <tr> of its own — inside the template contents.
+  CHECK_EQ(parse_and_serialize("<template><tr></tr><td></td></template>"),
+           std::string("<html><head><template><tr></tr><tr><td></td></tr></template></head><body></body></html>"));
+}

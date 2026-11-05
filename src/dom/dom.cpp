@@ -292,6 +292,16 @@ void Document::append_text(NodeId parent_id, std::string_view text) {
   append_child(parent_id, create_text(text));
 }
 
+void Document::extend_text(NodeId text_node, std::string_view text) {
+  Node& node = node_ref(text_node);
+  if (node.type != NodeType::Text || text.empty()) return;
+  std::string combined(text_data(text_node));
+  combined.append(text);
+  node.text_offset = static_cast<std::uint32_t>(text_pool_.size());
+  node.text_length = static_cast<std::uint32_t>(combined.size());
+  text_pool_.append(combined);
+}
+
 NodeType Document::type(NodeId id) const { return node_ref(id).type; }
 
 std::string_view Document::tag_name(NodeId id) const {

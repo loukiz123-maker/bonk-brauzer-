@@ -206,3 +206,15 @@ BONK_TEST(dom, fragments_hold_children_and_serialise_them) {
   CHECK_EQ(document.text_content(fragment), std::string("hello"));
   CHECK_EQ(document.to_html(fragment), std::string("hello"));
 }
+
+BONK_TEST(dom, extend_text_appends_to_an_existing_text_node) {
+  dom::Document document;
+  const dom::NodeId paragraph = document.create_element("p");
+  document.append_child(document.root(), paragraph);
+  document.append_text(paragraph, "one");
+  const dom::NodeId text = document.first_child(paragraph);
+  REQUIRE(text.valid());
+  document.extend_text(text, " two");
+  CHECK_EQ(document.text_data(text), std::string("one two"));
+  CHECK_EQ(document.children(paragraph).size(), std::size_t{1});  // still one node
+}

@@ -82,6 +82,9 @@ class Document {
   void unlink(NodeId child);
   void set_attribute(NodeId element, std::string_view name, std::string_view value);
   void append_text(NodeId parent, std::string_view text);  // merges with a trailing Text node
+  /// Appends to the data of an existing Text node (foster parenting needs this:
+  /// text moved in front of a table must join the text node already there).
+  void extend_text(NodeId text_node, std::string_view text);
 
   // --- accessors ---------------------------------------------------------
   [[nodiscard]] bool is_alive(NodeId id) const noexcept;
