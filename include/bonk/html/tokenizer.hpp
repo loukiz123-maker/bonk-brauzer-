@@ -68,6 +68,11 @@ class Tokenizer {
   /// <plaintext> swallows the rest of the document as character data.
   void enter_plain_text();
 
+  /// Start in the CDATA section state. The tree builder reaches the same state from
+  /// "markup declaration open" inside foreign content; the html5lib corpus can also
+  /// start there directly (`initialStates: ["CDATA section state"]`).
+  void enter_cdata_section() { state_ = State::CdataSection; }
+
   /// The tree builder owns the "adjusted current node", so it tells the tokenizer
   /// whether that node sits in foreign content: `<![CDATA[…]]>` is character data
   /// there and a bogus comment in HTML content (HTML §13.2.5.42).

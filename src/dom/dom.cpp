@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 
+#include "bonk/core/strings.hpp"
 #include "bonk/core/utf8.hpp"
 
 namespace bonk::dom {
@@ -489,7 +490,16 @@ std::vector<NodeId> Document::get_elements_by_tag_name(std::string_view tag) con
   std::vector<NodeId> out;
   for (const NodeId kid : descendants(root())) {
     if (nodes_[kid.index].type != NodeType::Element) continue;
-    if (tag == "*" || tag_name(kid) == tag) out.push_back(kid);
+    if (tag == "*") {
+      out.push_back(kid);
+      continue;
+    }
+    // `getElementsByTagName` matches HTML elements ASCII case-insensitively in an
+    // HTML document, while foreign elements have to match exactly: "DIV" finds
+    // `<div>`, "foreignobject" does not find `<foreignObject>`.
+    const bool matched = nodes_[kid.index].ns == Namespace::Html ? equals_ci(tag_name(kid), tag)
+                                                                 : tag_name(kid) == tag;
+    if (matched) out.push_back(kid);
   }
   return out;
 }

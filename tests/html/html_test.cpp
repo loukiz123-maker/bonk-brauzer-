@@ -903,3 +903,63 @@ BONK_TEST(html, namespace_aware_scope_checks) {
            std::string("<html><head><template><svg><template></template></svg></template></head>"
                        "<body><div></div></body></html>"));
 }
+
+BONK_TEST(tokenizer, cdata_section_state) {
+  // The corpus can start the tokenizer in the CDATA section state (`initialStates`);
+  // the tree builder reaches the same state from "markup declaration open".
+  Tokenizer tokenizer{"a]]>b", nullptr};
+  tokenizer.enter_cdata_section();
+  Token first = tokenizer.next();
+  CHECK_EQ(first.type, TokenType::Characters);
+  CHECK_EQ(first.data, std::string("a"));
+  Token second = tokenizer.next();
+  CHECK_EQ(second.type, TokenType::Characters);
+  CHECK_EQ(second.data, std::string("b"));  // `]]>` ends the section, data state follows
+  CHECK_EQ(tokenizer.next().type, TokenType::EndOfFile);
+
+  // Branching brackets survive: `]]]>` ends the section after emitting one `]`, and
+  // an unterminated section runs to end of file.
+  Tokenizer brackets{"]a]]b]]>c", nullptr};
+  brackets.enter_cdata_section();
+  CHECK_EQ(brackets.next().data, std::string("]a]]b"));
+  CHECK_EQ(brackets.next().data, std::string("c"));
+  Tokenizer unterminated{"abc", nullptr};
+  unterminated.enter_cdata_section();
+  const Token text = unterminated.next();
+  CHECK_EQ(text.type, TokenType::Characters);
+  CHECK_EQ(text.data, std::string("abc"));
+  CHECK_EQ(unterminated.next().type, TokenType::EndOfFile);
+}
+
+BONK_TEST(tokenizer, unexpected_question_mark_is_a_bogus_comment) {
+  // `<?` is not a processing instruction in HTML: the spec turns it into a bogus
+  // comment that keeps the `?`. The html5lib corpus still expects no token here,
+  // which is why those cases are reported as a documented divergence, not a pass.
+  const std::vector<Token> tokens = tokenize_all("<?xml version=1?>");
+  REQUIRE(!tokens.empty());
+  CHECK_EQ(tokens[0].type, TokenType::Comment);
+  CHECK_EQ(tokens[0].data, std::string("?xml version=1?"));
+}
+
+BONK_TEST(html, foreign_elements_are_visible_to_tag_name_lookups) {
+  dom::Document document;
+  CHECK(parse_html("<!DOCTYPE html><body><svg><g id=g></g><foreignobject id=fo></foreignobject></svg>"
+                   "<math><mi id=m></mi></math></body>",
+                   document, nullptr)
+            .is_ok());
+  // HTML names are ASCII case-insensitive in an HTML document ...
+  CHECK_EQ(document.get_elements_by_tag_name("DIV").size(), std::size_t{0});
+  CHECK_EQ(document.get_elements_by_tag_name("body").size(), std::size_t{1});
+  CHECK_EQ(document.get_elements_by_tag_name("BODY").size(), std::size_t{1});
+  // ... foreign ones are exact: the parser adjusted the case, so the lowercased
+  // spelling finds nothing and the camel-case one finds the element.
+  CHECK_EQ(document.get_elements_by_tag_name("foreignObject").size(), std::size_t{1});
+  CHECK_EQ(document.get_elements_by_tag_name("foreignobject").size(), std::size_t{0});
+  CHECK_EQ(document.get_elements_by_tag_name("svg").size(), std::size_t{1});
+  CHECK_EQ(document.get_elements_by_tag_name("SVG").size(), std::size_t{0});
+  CHECK_EQ(document.get_elements_by_tag_name("g").size(), std::size_t{1});
+  CHECK_EQ(document.get_elements_by_tag_name("mi").size(), std::size_t{1});
+  // `*` is everything, namespaces included: html, head, body, svg, g, foreignObject,
+  // math, mi.
+  CHECK_EQ(document.get_elements_by_tag_name("*").size(), std::size_t{8});
+}

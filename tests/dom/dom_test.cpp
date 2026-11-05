@@ -2,6 +2,7 @@
 
 #include "bonk/dom/dom.hpp"
 #include "bonk/dom/selector.hpp"
+#include "bonk/html/html.hpp"
 
 using namespace bonk;
 using namespace bonk::dom;
@@ -217,4 +218,60 @@ BONK_TEST(dom, extend_text_appends_to_an_existing_text_node) {
   document.extend_text(text, " two");
   CHECK_EQ(document.text_data(text), std::string("one two"));
   CHECK_EQ(document.children(paragraph).size(), std::size_t{1});  // still one node
+}
+
+namespace {
+
+/// A document with an HTML subtree and a foreign one, built through the parser so
+/// the namespaces are the real thing.
+struct ForeignFixture {
+  Document document;
+
+  ForeignFixture() {
+    const std::string html =
+        "<!DOCTYPE html><body><div id=plain class=box></div>"
+        "<svg id=svg class=box><foreignObject id=fo><span id=inside>x</span></foreignObject>"
+        "<g id=g fill=red></g></svg></body>";
+    Diagnostics diagnostics;
+    CHECK(html::parse_html(html, document, &diagnostics).is_ok());
+  }
+
+  [[nodiscard]] bool matches(std::string_view selector, std::string_view id) const {
+    const Result<std::vector<ComplexSelector>> parsed = parse_selector_list(selector);
+    CHECK(parsed.is_ok());
+    return dom::matches_any(document, document.get_element_by_id(id), parsed.value());
+  }
+};
+
+}  // namespace
+
+BONK_TEST(dom, type_selectors_follow_the_namespace) {
+  const ForeignFixture page;
+  // HTML elements: ASCII case-insensitive type selectors.
+  CHECK(page.matches("div", "plain"));
+  CHECK(page.matches("DIV", "plain"));
+  CHECK(page.matches("div.box", "plain"));
+  // Foreign elements: the CSS spelling must match the adjusted name exactly.
+  CHECK(page.matches("svg", "svg"));
+  CHECK(page.matches("foreignObject", "fo"));
+  CHECK(!page.matches("foreignobject", "fo"));
+  CHECK(!page.matches("FOREIGNOBJECT", "fo"));
+  CHECK(page.matches("g", "g"));
+  CHECK(page.matches("svg foreignObject", "fo"));
+  CHECK(page.matches("svg > g", "g"));
+  // The child of `foreignObject` is HTML again, so its selector is insensitive too.
+  CHECK(page.matches("SPAN", "inside"));
+  CHECK(page.matches("svg foreignObject span", "inside"));
+  // Class selectors work on foreign elements as well.
+  CHECK(page.matches(".box", "svg"));
+  CHECK(!page.matches("div", "svg"));
+}
+
+BONK_TEST(dom, query_selector_finds_foreign_elements) {
+  const ForeignFixture page;
+  CHECK(page.document.query_selector(page.document.root(), "foreignObject").valid());
+  CHECK(!page.document.query_selector(page.document.root(), "foreignobject").valid());
+  CHECK(page.document.query_selector(page.document.root(), "svg g").valid());
+  CHECK(!page.document.query_selector(page.document.root(), "svg > foreignobject").valid());
+  CHECK_EQ(page.document.query_selector_all(page.document.root(), "g").size(), std::size_t{1});
 }

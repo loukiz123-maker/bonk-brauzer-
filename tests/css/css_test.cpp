@@ -214,3 +214,17 @@ BONK_TEST(css, font_face_is_collected) {
   CHECK_EQ(sheet.value().font_faces()[0].family, std::string("Custom"));
   CHECK_EQ(sheet.value().font_faces()[0].source, std::string("url(custom.ttf)"));
 }
+
+BONK_TEST(css, foreign_type_selectors_keep_their_case) {
+  // `svg` and `foreignObject` are matched exactly; the HTML content *inside*
+  // `foreignObject` is matched case-insensitively like any other HTML element.
+  StyledPage page("<body><svg><foreignObject><span>hi</span></foreignObject></svg></body>",
+                  "svg { color: #111111 } foreignObject { color: #222222 } SPAN { color: #333333 }");
+  const dom::NodeId svg = page.document.query_selector(page.document.root(), "svg");
+  const dom::NodeId foreign_object = page.document.query_selector(page.document.root(), "foreignObject");
+  const dom::NodeId span = page.document.query_selector(page.document.root(), "span");
+  REQUIRE(svg.valid() && foreign_object.valid() && span.valid());
+  CHECK_EQ(static_cast<int>(page.styles.get(page.document, svg).color.r), 0x11);
+  CHECK_EQ(static_cast<int>(page.styles.get(page.document, foreign_object).color.r), 0x22);
+  CHECK_EQ(static_cast<int>(page.styles.get(page.document, span).color.r), 0x33);
+}

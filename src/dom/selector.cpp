@@ -189,7 +189,9 @@ bool parse_compound(std::string_view input, std::size_t& i, SimpleSelector& simp
         error = selector_error("unexpected type selector '" + std::string(name) + "'");
         return false;
       }
-      simple.tag = to_ascii_lower(name);
+      // The spelling is kept: type selectors are case-insensitive for HTML elements
+      // and exact for foreign ones (`foreignObject`), decided at match time.
+      simple.tag = std::string(name);
       any = true;
       continue;
     }
@@ -311,7 +313,16 @@ bool matches_pseudo(const Document& document, NodeId element, const std::string&
 
 bool matches_simple(const Document& document, NodeId element, const SimpleSelector& simple) {
   if (document.type(element) != NodeType::Element) return false;
-  if (!simple.tag.empty() && simple.tag != "*" && document.tag_name(element) != simple.tag) return false;
+  if (!simple.tag.empty() && simple.tag != "*") {
+    const std::string_view tag = document.tag_name(element);
+    // HTML type selectors are ASCII case-insensitive (`DIV` matches `div`); foreign
+    // ones are exact, because SVG's `foreignObject`/`linearGradient` are not
+    // lowercase in the first place.
+    const bool matched = document.element_namespace(element) == Namespace::Html
+                             ? equals_ci(tag, simple.tag)
+                             : tag == simple.tag;
+    if (!matched) return false;
+  }
   if (!simple.id.empty() && document.attribute(element, "id") != simple.id) return false;
   for (const std::string& class_name : simple.classes) {
     if (!document.has_class(element, class_name)) return false;

@@ -5,8 +5,11 @@
 // doubleEscaped?}` and `output` is a list of tokens in the html5lib notation
 // (Character runs, StartTag/EndTag with an attribute object, Comment, DOCTYPE
 // with four or five fields, and ParseError markers which we ignore).
+//
+// The tokenizer can be started in any of the six states the corpus names
+// (`initialStates`), including the CDATA section state, which is also what the tree
+// builder enters from "markup declaration open" inside foreign content.
 #include <algorithm>
-#include <cstring>
 #include <filesystem>
 #include <string>
 #include <string_view>
@@ -20,32 +23,6 @@ namespace bonk::conformance {
 namespace {
 
 using json::Value;
-
-// Expectations that predate the current WHATWG text and that we deliberately do
-// not follow. Each entry is (file, description substring, reason) and is counted
-// as "skipped", never as a pass — the reason is printed in the report.
-struct KnownDivergence {
-  const char* file;
-  const char* description;  // matched as a prefix (may contain NUL escapes)
-  const char* reason;
-};
-
-constexpr KnownDivergence kKnownDivergences[] = {
-    {"test2.test", "Null Byte Replacement", "legacy: expects U+0000 in data; the spec emits U+FFFD"},
-    {"test3.test", "<\\u0000", "legacy: expects U+0000 in data; the spec emits U+FFFD"},
-    {"test3.test", "<?", "legacy: expects no comment token for '<?'; the spec emits a bogus comment"},
-    {"test4.test", "U+0000 in lookahead region", "legacy: expects U+0000 in data; the spec emits U+FFFD"},
-    {"unicodeCharsProblematic.test", "CR followed by U+0000", "legacy: expects U+0000 in data; the spec emits U+FFFD"},
-};
-
-[[nodiscard]] const KnownDivergence* divergence(const std::string& file, const std::string& description) {
-  for (const KnownDivergence& entry : kKnownDivergences) {
-    if (file == entry.file && description.compare(0, std::strlen(entry.description), entry.description) == 0) {
-      return &entry;
-    }
-  }
-  return nullptr;
-}
 
 struct ExpectedToken {
   enum class Kind { Doctype, StartTag, EndTag, Comment, Characters } kind = Kind::Characters;
@@ -122,8 +99,9 @@ void merge_character_runs(std::vector<ExpectedToken>& tokens) {
   tokens = std::move(merged);
 }
 
-/// Converts one html5lib output entry into our shape; returns false for entries
-/// we cannot model (foreign-content namespace prefixes) or ParseError markers.
+/// Converts one html5lib output entry into our shape; `Ignore` marks ParseError
+/// markers, `Unsupported` an entry we cannot model (a token type the modern spec
+/// dropped, or a namespace-qualified tag name).
 enum class EntryStatus { Ok, Ignore, Unsupported };
 
 [[nodiscard]] EntryStatus from_expected(const Value& entry, bool double_escaped, ExpectedToken& out) {
@@ -226,6 +204,8 @@ enum class EntryStatus { Ok, Ignore, Unsupported };
   } else if (initial_state == "Script data state") {
     tokenizer.enter_text_element(last_start_tag.empty() ? std::string_view{"script"} : std::string_view{last_start_tag},
                                  false);
+  } else if (initial_state == "CDATA section state") {
+    tokenizer.enter_cdata_section();
   }
 
   std::vector<ExpectedToken> actual;
@@ -264,7 +244,22 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
 
   std::size_t state_skips = 0;
   std::size_t namespace_skips = 0;
-  std::size_t divergence_skips = 0;
+  std::size_t pi_skips = 0;  // cases that still expect html5lib's processing instructions
+  std::size_t unsupported_skips = 0;
+
+  /// The report explains every skipped case; keep the wording in one place.
+  const auto finish_notes = [&]() {
+    std::vector<std::string> notes;
+    if (state_skips != 0) notes.push_back("skipped (unknown initial state): " + std::to_string(state_skips));
+    if (namespace_skips != 0) {
+      notes.push_back("skipped (namespace-qualified tag names): " + std::to_string(namespace_skips));
+    }
+    if (pi_skips != 0) {
+      notes.push_back("skipped (html5lib processing-instruction model): " + std::to_string(pi_skips));
+    }
+    if (unsupported_skips != 0) notes.push_back("skipped (unmodelled output): " + std::to_string(unsupported_skips));
+    return notes;
+  };
 
   for (const std::string& path : detail::list_files(directory, ".test")) {
     const std::string text = detail::read_file(path);
@@ -277,18 +272,11 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
 
     for (const Value& test : tests->items) {
       if (options.limit != 0 && report.total >= options.limit) {
-        report.notes = {"skipped (unknown initial state): " + std::to_string(state_skips),
-                        "skipped (foreign-content names): " + std::to_string(namespace_skips),
-                        "skipped (documented divergence): " + std::to_string(divergence_skips)};
+        report.notes = finish_notes();
         return report;
       }
       ++report.total;
       const std::string description = test.find("description") ? test.find("description")->string_or_empty() : file;
-      if (divergence(file, description) != nullptr) {
-        ++report.skipped;
-        ++divergence_skips;
-        continue;
-      }
       const std::string input_raw = test.find("input") ? test.find("input")->string_or_empty() : std::string{};
       const bool double_escaped = test.find("doubleEscaped") != nullptr;
       const std::string input = double_escaped ? json::unescape(input_raw) : input_raw;
@@ -313,7 +301,16 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
         const EntryStatus status = from_expected(entry, double_escaped, token);
         if (status == EntryStatus::Unsupported) {
           unsupported = true;
-          ++namespace_skips;
+          // "ProcessingInstruction" is a token type html5lib dropped long ago; the
+          // spec parses `<?…?>` as a bogus comment. Anything else unmodelled (a
+          // namespace-qualified tag name) gets its own line in the report.
+          const bool legacy_pi = entry.kind == Value::Kind::Array && !entry.items.empty() &&
+                                 entry.items[0].string_or_empty() == "ProcessingInstruction";
+          if (legacy_pi) {
+            ++pi_skips;
+          } else {
+            ++namespace_skips;
+          }
           break;
         }
         if (status == EntryStatus::Ignore) continue;
@@ -325,13 +322,26 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
       }
       merge_character_runs(expected);
 
+      // html5lib-tests still models `<?…?>` as a *processing instruction* and drops it
+      // at EOF; the HTML spec — and every browser — turn `<?` into a bogus comment that
+      // is emitted even at end of file (`<?a` → Comment "?a"). Cases that expect the old
+      // model are skipped, never counted as passes: an empty expectation for input that
+      // starts with `<?`, or an output entry of the `ProcessingInstruction` token type.
+      // A corpus that switches to comments makes the very same cases run (and pass).
+      if (input.rfind("<?", 0) == 0 && expected.empty()) {
+        ++pi_skips;
+        ++report.skipped;
+        continue;
+      }
+
       bool ok = true;
       std::string detail;
       bool state_supported = true;
       for (const std::string& state : initial_states) {
         if (state != "Data state" && state != "RCDATA state" && state != "RAWTEXT state" &&
-            state != "Script data state" && state != "PLAINTEXT state") {
-          state_supported = false;  // e.g. "CDATA section state", which the tree builder owns
+            state != "Script data state" && state != "PLAINTEXT state" &&
+            state != "CDATA section state") {
+          state_supported = false;  // a state the corpus invented after this engine's snapshot
           break;
         }
       }
@@ -355,9 +365,7 @@ SuiteReport run_tokenizer_corpus(std::string_view directory, const SuiteOptions&
       }
     }
   }
-  report.notes = {"skipped (unknown initial state): " + std::to_string(state_skips),
-                  "skipped (foreign-content names): " + std::to_string(namespace_skips),
-                  "skipped (documented divergence): " + std::to_string(divergence_skips)};
+  report.notes = finish_notes();
   return report;
 }
 
