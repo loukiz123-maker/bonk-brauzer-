@@ -23,6 +23,13 @@ std::string str(const std::string& source, const std::string& name = "v") {
   return to_string(eval_global(source, name));
 }
 
+/// True when evaluating `source` fails with a message containing `needle`.
+bool fails_with(const std::string& source, const std::string& needle) {
+  Context context;
+  const ExecutionResult result = context.evaluate(source);
+  return !result.ok && result.message.find(needle) != std::string::npos;
+}
+
 }  // namespace
 
 BONK_TEST(js_properties, object_keys_lists_own_enumerable_properties) {
@@ -155,4 +162,44 @@ BONK_TEST(js_properties, non_writable_and_non_extensible_do_not_throw_in_sloppy_
       "var v = o.fixed;");
   CHECK(result.ok);
   CHECK_EQ(to_number(context.runtime().global("v")), 1.0);
+}
+
+BONK_TEST(js_properties, functions_have_own_length_name_and_prototype) {
+  CHECK_EQ(num("function f(a, b, c) {} var v = f.length;"), 3.0);
+  CHECK_EQ(str("function f() {} var v = f.name;"), std::string("f"));
+  CHECK_EQ(str("function f() {} var d = Object.getOwnPropertyDescriptor(f, 'name');\n"
+               "var v = [d.writable, d.enumerable, d.configurable].join(',');"),
+           std::string("false,false,true"));
+  CHECK_EQ(str("function f() {} var d = Object.getOwnPropertyDescriptor(f, 'length');\n"
+               "var v = [d.value, d.writable, d.enumerable, d.configurable].join(',');"),
+           std::string("0,false,false,true"));
+  CHECK_EQ(num("function f() {} var v = f.hasOwnProperty('length') ? 1 : 0;"), 1.0);
+  CHECK_EQ(num("function f() {} var v = f.hasOwnProperty('nothing') ? 1 : 0;"), 0.0);
+  CHECK_EQ(str("var v = Object.getOwnPropertyNames(Array.prototype.concat).join(',');"),
+           std::string("length,name"));
+}
+
+BONK_TEST(js_properties, thrown_errors_are_instances_of_their_constructor) {
+  CHECK(num("var v = (function () { try { null.x; } catch (e) { return e instanceof TypeError; } })()"));
+  CHECK(num("var v = (function () { try { notDefined; } catch (e) { return e instanceof ReferenceError; } })()"));
+  CHECK(num("var v = (function () { try { null.x; } catch (e) { return e instanceof Error; } })()"));
+  CHECK(!bool(to_boolean(eval_global(
+      "var v = (function () { try { null.x; } catch (e) { return e instanceof RangeError; } })()", "v"))));
+}
+
+BONK_TEST(js_properties, array_from_and_of) {
+  CHECK_EQ(str("var v = Array.from('abc').join('|');"), std::string("a|b|c"));
+  CHECK_EQ(str("var v = Array.from([1, 2], function (x) { return x * 2; }).join(',');"), std::string("2,4"));
+  CHECK_EQ(str("var v = Array.from({0: 'a', 1: 'b', length: 2}).join('-');"), std::string("a-b"));
+  CHECK_EQ(num("var v = Array.of(1, 2, 3).length;"), 3.0);
+  CHECK_EQ(str("var v = Array.of('x').join();"), std::string("x"));
+  CHECK(fails_with("Array.from(null);", "TypeError"));
+}
+
+BONK_TEST(js_properties, array_length_is_validated) {
+  CHECK(fails_with("var a = [1, 2, 3]; a.length = -1;", "RangeError"));
+  CHECK(fails_with("var a = [1, 2, 3]; a.length = 1.5;", "RangeError"));
+  CHECK(fails_with("var a = [1, 2, 3]; Object.defineProperty(a, 'length', {value: -5});", "RangeError"));
+  CHECK_EQ(str("var a = [1, 2, 3]; a.length = 2; var v = a.join(',');"), std::string("1,2"));
+  CHECK_EQ(num("var a = [1, 2]; a.length = 4; var v = a.length;"), 4.0);
 }

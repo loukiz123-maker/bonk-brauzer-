@@ -207,7 +207,14 @@ var $isErrorClass = function (value, expected) {
   return false;
 };
 
-var assert = {};
+// `assert` is a function *and* a namespace: tests call assert(cond, msg) as well
+// as assert.sameValue(...). Functions are objects in this engine (stage 23).
+var assert = function (mustBeTrue, message) {
+  if (!mustBeTrue) {
+    throw new Test262Error("Expected true but got " + mustBeTrue +
+                           (message === undefined ? "" : ": " + message));
+  }
+};
 assert.sameValue = function (actual, expected, message) {
   if (!$sameValue(actual, expected)) {
     throw new Test262Error("Expected SameValue(«" + actual + "», «" + expected + "») to be true" +

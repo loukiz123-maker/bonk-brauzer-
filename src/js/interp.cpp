@@ -368,7 +368,12 @@ Value call_function(const Value& callee, const Value& this_value, std::vector<Va
 std::shared_ptr<Object> property_bag(const Value& value) {
   if (value.type == ValueType::Object) return value.object;
   if (value.type == ValueType::Function && value.function != nullptr) {
-    if (value.function->statics == nullptr) value.function->statics = std::make_shared<Object>();
+    if (value.function->statics == nullptr) {
+      value.function->statics = std::make_shared<Object>();
+      // The bag must answer for `length`/`name`/`prototype`: own, non-enumerable,
+      // non-writable properties of every function.
+      value.function->statics->owner_function = value.function;
+    }
     return value.function->statics;
   }
   return nullptr;
@@ -406,6 +411,7 @@ std::vector<std::string> own_property_keys(const Object& object, bool enumerable
   if (object.is_array()) {
     for (std::size_t i = 0; i < object.elements.size(); ++i) indices.push_back(std::to_string(i));
   }
+  if (!enumerable_only && !object.owner_function.expired()) names.push_back("length");
   auto numeric_less = [](const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return a.size() < b.size();
     return a < b;
@@ -509,6 +515,14 @@ void define_own_property(const std::shared_ptr<Object>& object, const std::strin
                          const std::optional<Value>& data_value, const std::optional<Value>& getter,
                          const std::optional<Value>& setter, std::optional<bool> writable,
                          std::optional<bool> enumerable, std::optional<bool> configurable) {
+  if (object->is_array() && key == "length" && data_value.has_value()) {
+    const double length = to_number(*data_value);
+    if (!(length >= 0.0) || std::trunc(length) != length || length > 4294967295.0) {
+      throw thrown(make_error("RangeError", "Invalid array length"));
+    }
+    object->elements.resize(static_cast<std::size_t>(length));
+    return;
+  }
   const auto existing = object->properties.find(key);
   const bool is_accessor = has_accessor(*object, key);
   if (existing != object->properties.end()) {
@@ -566,6 +580,10 @@ void define_own_property(const std::shared_ptr<Object>& object, const std::strin
 /// Does `object` own a property (data, accessor or array element)?
 bool has_own_property(const Object& object, const std::string& key) {
   if (key == "constructor" && !object.owner_function.expired()) return true;
+  if (const std::shared_ptr<Function> owner = object.owner_function.lock()) {
+    if (key == "length" || key == "name") return true;
+    if (key == "prototype" && owner->prototype_object != nullptr) return true;
+  }
   if (has_accessor(object, key)) return true;
   if (object.properties.count(key) != 0) return true;
   std::size_t index = 0;
@@ -581,6 +599,29 @@ Value property_descriptor(const Object& object, const std::string& key) {
     property.enumerable = enumerable;
     descriptor->properties[name] = property;
   };
+  if (const std::shared_ptr<Function> owner = object.owner_function.lock()) {
+    if (key == "length" || key == "name" || key == "prototype") {
+      auto own_descriptor = std::make_shared<Object>();
+      auto add_attribute = [&own_descriptor](const char* name, Value value) {
+        Property property{std::move(value)};
+        property.enumerable = false;
+        property.configurable = true;
+        property.writable = false;
+        own_descriptor->properties[name] = property;
+      };
+      if (key == "length") {
+        add_attribute("value", Value::number_of(static_cast<double>(owner->parameter_count)));
+      } else if (key == "name") {
+        add_attribute("value", Value::string_of(owner->name));
+      } else {
+        add_attribute("value", Value::object_of(owner->prototype_object));
+      }
+      add_attribute("writable", Value::boolean_of(key == "prototype"));
+      add_attribute("enumerable", Value::boolean_of(false));
+      add_attribute("configurable", Value::boolean_of(key != "prototype"));
+      return Value::object_of(std::move(own_descriptor));
+    }
+  }
   const auto stored = object.properties.find(key);
   const bool enumerable = stored == object.properties.end() || stored->second.enumerable;
   const bool configurable = stored == object.properties.end() || stored->second.configurable;
@@ -881,7 +922,11 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
   const std::shared_ptr<Object> target = object.object;
   if (target->is_array()) {
     if (key == "length") {
-      target->elements.resize(static_cast<std::size_t>(std::max(0.0, to_number(value))));
+      const double length = to_number(value);
+      if (!(length >= 0.0) || std::trunc(length) != length || length > 4294967295.0) {
+        throw thrown(make_error("RangeError", "Invalid array length"));
+      }
+      target->elements.resize(static_cast<std::size_t>(length));
       return;
     }
     std::size_t index = 0;
@@ -1431,6 +1476,14 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
           prototype = right.function != nullptr ? right.function->prototype_object : nullptr;
         } else {
           prototype = right.object;
+        }
+        // Errors the interpreter throws itself are plain Error objects without a
+        // prototype link, so `e instanceof TypeError` is answered by name.
+        if (left.object->kind == Object::Kind::Error && right.type == ValueType::Function &&
+            right.function != nullptr) {
+          const auto name = left.object->properties.find("name");
+          const std::string error_name = name != left.object->properties.end() ? to_string(name->second.value) : "";
+          if (right.function->name == "Error" || right.function->name == error_name) return Value::boolean_of(true);
         }
         if (prototype == nullptr) return Value::boolean_of(false);
         std::shared_ptr<Object> current = left.object->prototype;
@@ -2392,6 +2445,41 @@ void install_builtins(RuntimeState& runtime) {
         return Value::boolean_of(arguments[0].is_object() && arguments[0].object != nullptr &&
                                  arguments[0].object->is_array());
       })};
+  array_constructor.function->statics->properties["of"] = Property{native_value(
+      "of", [](const std::vector<Value>& arguments, Value) { return Value::object_of(make_array(arguments)); })};
+  array_constructor.function->statics->properties["from"] = Property{native_value(
+      "from", [](const std::vector<Value>& arguments, Value) {
+        auto result = std::make_shared<Object>();
+        result->kind = Object::Kind::Array;
+        if (arguments.empty() || arguments[0].is_nullish()) {
+          throw thrown(type_error("Array.from requires an array-like or iterable"));
+        }
+        const Value source = arguments[0];
+        const Value mapper = arguments.size() > 1 && arguments[1].type == ValueType::Function ? arguments[1]
+                                                                                              : Value::undefined();
+        const Value this_arg = arguments.size() > 2 ? arguments[2] : Value::undefined();
+        std::size_t length = 0;
+        if (source.is_object() && source.object != nullptr) {
+          length = array_like_length(*source.object);
+        } else if (source.is_string()) {
+          length = source.text.size();
+        } else {
+          return Value::object_of(std::move(result));
+        }
+        for (std::size_t i = 0; i < length; ++i) {
+          Value element;
+          if (source.is_string()) {
+            element = Value::string_of(std::string(1, source.text[i]));
+          } else {
+            element = array_like_get(*source.object, i);
+          }
+          if (mapper.type == ValueType::Function) {
+            element = call_function(mapper, this_arg, {element, Value::number_of(static_cast<double>(i))});
+          }
+          result->elements.push_back(element);
+        }
+        return Value::object_of(std::move(result));
+      })};
   global->variables["Array"] = array_constructor;
 
   // Object.prototype: the one object every plain object inherits from, so
@@ -2543,7 +2631,12 @@ void install_builtins(RuntimeState& runtime) {
     std::vector<Value> keys;
     const std::shared_ptr<Object> bag = property_bag(target);
     if (bag != nullptr) {
-      for (const std::string& key : own_property_keys(*bag, false)) keys.push_back(Value::string_of(key));
+      std::vector<std::string> own = own_property_keys(*bag, false);
+      if (!bag->owner_function.expired()) {
+        own.push_back("name");
+        if (bag->owner_function.lock()->prototype_object != nullptr) own.push_back("prototype");
+      }
+      for (const std::string& key : own) keys.push_back(Value::string_of(key));
       if (bag->is_array()) keys.push_back(Value::string_of("length"));
     }
     return Value::object_of(make_array(std::move(keys)));
