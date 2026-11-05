@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -102,23 +103,82 @@ Value native_value(std::string name, Function::Native native) {
 
 // --------------------------------------------------------------- helpers ----
 
+/// ECMAScript ToString(Number) (ES2015 7.1.12.1): the shortest decimal that
+/// round-trips, printed in fixed notation while 1e-6 <= |x| < 1e21 and in
+/// exponential notation outside that window ("1e-7", "1e+21" -- no zero padding).
 std::string number_to_raw_string(double value) {
   if (std::isnan(value)) return "NaN";
   if (std::isinf(value)) return value > 0 ? "Infinity" : "-Infinity";
   if (value == 0.0) return "0";
-  if (value == std::floor(value) && std::fabs(value) < 1e21) {
-    char buffer[32];
-    std::snprintf(buffer, sizeof(buffer), "%.0f", value);
-    return buffer;
-  }
-  for (int precision = 1; precision <= 17; ++precision) {
-    char candidate[40];
-    std::snprintf(candidate, sizeof(candidate), "%.*g", precision, value);
-    if (std::strtod(candidate, nullptr) == value) return candidate;
-  }
+
+  // Shortest representation that parses back to the same double.
   char buffer[40];
-  std::snprintf(buffer, sizeof(buffer), "%.17g", value);
-  return buffer;
+  std::string repr;
+  for (int precision = 1; precision <= 17; ++precision) {
+    std::snprintf(buffer, sizeof(buffer), "%.*g", precision, value);
+    if (std::strtod(buffer, nullptr) == value) {
+      repr = buffer;
+      break;
+    }
+  }
+  if (repr.empty()) {
+    std::snprintf(buffer, sizeof(buffer), "%.17g", value);
+    repr = buffer;
+  }
+
+  const double magnitude = std::fabs(value);
+  const bool fixed = magnitude >= 1e-6 && magnitude < 1e21;
+  const std::size_t exponent_at = repr.find_first_of("eE");
+  if (exponent_at == std::string::npos) return repr;
+
+  // Scientific notation: split mantissa digits from the exponent.
+  const std::string mantissa = repr.substr(0, exponent_at);
+  const int exponent = std::atoi(repr.c_str() + exponent_at + 1);
+  std::string digits;
+  int integer_digits = 0;
+  bool seen_point = false;
+  for (const char c : mantissa) {
+    if (c == '-') continue;
+    if (c == '.') {
+      seen_point = true;
+      continue;
+    }
+    digits.push_back(c);
+    if (!seen_point) ++integer_digits;
+  }
+  const bool negative = mantissa.front() == '-';
+  // Strip trailing zeros: they carry no information in the shortest form.
+  while (digits.size() > 1 && digits.back() == '0') digits.pop_back();
+
+  std::string out = negative ? "-" : "";
+  if (fixed) {
+    const int point = integer_digits + exponent;  // digits before the decimal point
+    if (point <= 0) {
+      out += "0.";
+      for (int i = 0; i < -point; ++i) out += '0';
+      out += digits;
+    } else if (static_cast<std::size_t>(point) >= digits.size()) {
+      out += digits;
+      for (std::size_t i = digits.size(); i < static_cast<std::size_t>(point); ++i) out += '0';
+    } else {
+      out += digits.substr(0, static_cast<std::size_t>(point));
+      out += ".";
+      out += digits.substr(static_cast<std::size_t>(point));
+    }
+    return out;
+  }
+  // Exponential notation, as the spec prints it: one digit, optional fraction,
+  // 'e', sign, exponent without padding.
+  out += digits.substr(0, 1);
+  if (digits.size() > 1) {
+    out += ".";
+    out += digits.substr(1);
+  }
+  const int scientific = exponent + integer_digits - 1;
+  out += "e";
+  out += scientific >= 0 ? "+" : "-";
+  out += std::to_string(scientific >= 0 ? scientific : -scientific);
+  return out;
 }
 
 std::string join_values(const std::vector<Value>& values, const std::string& separator) {
@@ -341,6 +401,9 @@ struct RuntimeState {
   std::shared_ptr<Object> string_prototype;
   std::shared_ptr<Object> number_prototype;
   std::shared_ptr<Object> boolean_prototype;
+  /// `Function.prototype` (stage 28): answers `constructor` without storing a
+  /// back-reference to the `Function` global in itself.
+  std::shared_ptr<Object> function_prototype;
 
   void log(ConsoleEntry::Level level, const std::string& message) {
     console.push_back(ConsoleEntry{level, message});
@@ -425,7 +488,7 @@ std::vector<std::string> own_property_keys(const Object& object, bool enumerable
 /// Array methods work on *array-likes*: real arrays, `arguments`, and any object
 /// with a numeric `length` (that is what `Array.prototype.slice.call(…)` relies on).
 std::size_t array_like_length(const Object& object) {
-  if (object.is_array()) return object.elements.size();
+  if (object.is_array()) return std::max(object.elements.size(), object.length_hint);
   const auto found = object.properties.find("length");
   if (found == object.properties.end()) return 0;
   const double length = to_number(found->second.value);
@@ -452,6 +515,7 @@ void array_like_set(Object& object, std::size_t index, const Value& value) {
   if (object.is_array()) {
     if (index >= object.elements.size()) object.elements.resize(index + 1);
     object.elements[index] = value;
+    object.length_hint = std::max(object.length_hint, index + 1);
     return;
   }
   object.properties[key] = Property{value};
@@ -475,11 +539,13 @@ std::vector<Value> array_like_values(const Object& object) {
 }
 
 /// Property lookup that follows the whole prototype chain.
-bool lookup_property(const std::shared_ptr<Object>& start, const std::string& key, Value& out) {
+bool lookup_property(const std::shared_ptr<Object>& start, const std::string& key, Value& out,
+                     const Value* receiver = nullptr) {
   for (std::shared_ptr<Object> ancestor = start; ancestor != nullptr; ancestor = ancestor->prototype) {
     const auto receiver_getter = ancestor->receiver_getters.find(key);
     if (receiver_getter != ancestor->receiver_getters.end()) {
-      out = receiver_getter->second(Value::object_of(ancestor));
+      // Accessors see the *receiver* (`o` in `o.m()`), not the prototype owner.
+      out = receiver_getter->second(receiver != nullptr ? *receiver : Value::object_of(ancestor));
       return true;
     }
     const auto getter = ancestor->getters.find(key);
@@ -632,7 +698,9 @@ Value property_descriptor(const Object& object, const std::string& key) {
       property.writable = writable;
       length_descriptor->properties[name] = property;
     };
-    add_field("value", Value::number_of(static_cast<double>(object.elements.size())), true);
+    add_field("value",
+              Value::number_of(static_cast<double>(std::max(object.elements.size(), object.length_hint))),
+              true);
     add_field("writable", Value::boolean_of(true), true);
     add_field("enumerable", Value::boolean_of(false), true);
     add_field("configurable", Value::boolean_of(false), true);
@@ -788,6 +856,8 @@ class Interpreter {
   Value call(const Value& callee, const Value& this_value, std::vector<Value> arguments);
   Value get_member(const Value& object, const std::string& key);
   void set_member(const Value& object, const std::string& key, const Value& value);
+  /// Builds the constructor/prototype/statics of a `class` (stage 28).
+  Value make_class(const std::shared_ptr<ast::ClassNode>& node, const ScopePtr& scope);
   /// `eval(source)`: parses and runs the text in `scope` (direct eval semantics
   /// as far as this engine goes: `var` lands in the calling scope).
   Value eval_source(const std::string& source, const ScopePtr& scope);
@@ -841,8 +911,25 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
         });
       });
     }
-    if (key == "name") return Value::string_of(function->name);
+    if (key == "name") return Value::string_of(function->name == "" ? std::string("") : function->name);
     if (key == "length") return Value::number_of(static_cast<double>(function->parameter_count));
+    if (key == "constructor") {
+      const Lookup found = lookup_scope(global_, "Function");
+      if (found.found) return found.scope->variables["Function"];
+    }
+    if (key == "toString") {
+      return native_value("toString", [function](const std::vector<Value>&, Value) {
+        const std::string name = function->name.empty() ? std::string("") : " " + function->name;
+        return Value::string_of("function" + name + "() { [native code] }");
+      });
+    }
+    if (key == "hasOwnProperty") {
+      return native_value("hasOwnProperty", [](const std::vector<Value>& arguments, Value this_value) {
+        const std::string name = arguments.empty() ? std::string() : to_string(arguments[0]);
+        const std::shared_ptr<Object> bag = property_bag(this_value);
+        return Value::boolean_of(bag != nullptr && has_own_property(*bag, name));
+      });
+    }
     if (key == "prototype") {
       if (!function->prototype_object) {
         function->prototype_object = std::make_shared<Object>();
@@ -864,6 +951,10 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   if (object.is_string()) {
     const std::string& text = object.text;
     if (key == "length") return Value::number_of(static_cast<double>(text.size()));
+    if (key == "constructor") {
+      const Lookup ctor = lookup_scope(global_, "String");
+      if (ctor.found) return ctor.scope->variables["String"];
+    }
     std::size_t index = 0;
     if (is_array_index(key, index) && index < text.size()) return Value::string_of(std::string(1, text[index]));
     Value found;
@@ -873,6 +964,10 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   }
 
   if (object.is_number()) {
+    if (key == "constructor") {
+      const Lookup ctor = lookup_scope(global_, "Number");
+      if (ctor.found) return ctor.scope->variables["Number"];
+    }
     Value found;
     if (runtime_.number_prototype != nullptr && lookup_property(runtime_.number_prototype, key, found)) return found;
     if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found)) return found;
@@ -880,6 +975,10 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   }
 
   if (object.is_boolean()) {
+    if (key == "constructor") {
+      const Lookup ctor = lookup_scope(global_, "Boolean");
+      if (ctor.found) return ctor.scope->variables["Boolean"];
+    }
     Value found;
     if (runtime_.boolean_prototype != nullptr && lookup_property(runtime_.boolean_prototype, key, found)) return found;
     if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found)) return found;
@@ -890,7 +989,9 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   const std::shared_ptr<Object> target = object.object;
 
   if (target->is_array()) {
-    if (key == "length") return Value::number_of(static_cast<double>(target->elements.size()));
+    if (key == "length") {
+      return Value::number_of(static_cast<double>(std::max(target->elements.size(), target->length_hint)));
+    }
     std::size_t index = 0;
     if (is_array_index(key, index) && index < target->elements.size()) return target->elements[index];
   }
@@ -906,16 +1007,34 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
   }
 
   Value found;
-  if (lookup_property(target, key, found)) return found;
+  const Value receiver = Value::object_of(target);
+  if (lookup_property(target, key, found, &receiver)) return found;
   // Arrays and their prototype methods live on Array.prototype (stage 24); it is
   // kept in the runtime rather than linked into every array value.
-  if (target->is_array() && runtime_.array_prototype != nullptr &&
-      lookup_property(runtime_.array_prototype, key, found)) {
-    return found;
+  auto lookup_implicit_prototype = [&](const std::shared_ptr<Object>& prototype) {
+    if (prototype == nullptr || prototype == target) return false;
+    // Accessors on an implicit prototype need the *original* receiver, not the
+    // prototype object (`o.__proto__` must look at `o`).
+    const auto receiver_getter = prototype->receiver_getters.find(key);
+    if (receiver_getter != prototype->receiver_getters.end()) {
+      found = receiver_getter->second(Value::object_of(target));
+      return true;
+    }
+    return lookup_property(prototype, key, found, &receiver);
+  };
+  if (target->is_array() && lookup_implicit_prototype(runtime_.array_prototype)) return found;
+  if (!target->prototype_is_null && lookup_implicit_prototype(runtime_.object_prototype)) return found;
+  // `Function.prototype.constructor === Function` (without a stored value, which
+  // would make a shared_ptr cycle through the prototype object).
+  if (key == "constructor" && target == runtime_.function_prototype) {
+    const Lookup ctor = lookup_scope(global_, "Function");
+    if (ctor.found) return ctor.scope->variables["Function"];
   }
-  if (!target->prototype_is_null && runtime_.object_prototype != nullptr && target != runtime_.object_prototype &&
-      lookup_property(runtime_.object_prototype, key, found)) {
-    return found;
+  // Objects get `constructor` from Object.prototype (by kind, since the implicit
+  // prototypes are not linked into every object here).
+  if (key == "constructor") {
+    const Lookup ctor = lookup_scope(global_, target->is_array() ? "Array" : "Object");
+    if (ctor.found) return ctor.scope->variables[target->is_array() ? "Array" : "Object"];
   }
   return Value::undefined();
 }
@@ -942,13 +1061,16 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
       if (!(length >= 0.0) || std::trunc(length) != length || length > 4294967295.0) {
         throw thrown(make_error("RangeError", "Invalid array length"));
       }
-      target->elements.resize(static_cast<std::size_t>(length));
+      const auto requested = static_cast<std::size_t>(length);
+      if (requested < target->elements.size()) target->elements.resize(requested);
+      target->length_hint = requested;
       return;
     }
     std::size_t index = 0;
     if (is_array_index(key, index)) {
       if (index >= target->elements.size()) target->elements.resize(index + 1);
       target->elements[index] = value;
+      target->length_hint = std::max(target->length_hint, index + 1);
       return;
     }
   }
@@ -971,6 +1093,17 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
       return;
     }
   }
+  // Implicit prototypes (`Object.prototype`, `Array.prototype`) carry setters too:
+  // that is how `o.__proto__ = proto` reaches Object.prototype's accessor.
+  auto apply_implicit_setter = [&](const std::shared_ptr<Object>& prototype) {
+    if (prototype == nullptr || prototype == target) return false;
+    const auto implicit_setter = prototype->receiver_setters.find(key);
+    if (implicit_setter == prototype->receiver_setters.end()) return false;
+    implicit_setter->second(Value::object_of(target), value);
+    return true;
+  };
+  if (target->is_array() && apply_implicit_setter(runtime_.array_prototype)) return;
+  if (!target->prototype_is_null && apply_implicit_setter(runtime_.object_prototype)) return;
   const auto existing = target->properties.find(key);
   if (existing != target->properties.end()) {
     if (!existing->second.writable) {
@@ -1030,6 +1163,9 @@ Value Interpreter::call(const Value& callee, const Value& this_value, std::vecto
     scope->variables["arguments"] = Value::object_of(std::move(arguments_object));
   }
   if (!code->name.empty()) scope->variables[code->name] = callee;
+  if (const std::shared_ptr<Function> parent = function->super_function.lock()) {
+    scope->variables["super"] = Value::function_of(parent);
+  }
 
   Interpreter* previous = g_interpreter;
   g_interpreter = this;
@@ -1165,6 +1301,13 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
         return normal();
       }
 
+      case ast::StmtKind::ClassDecl: {
+        const Value constructor = make_class(statement->class_node, current);
+        const std::string name = statement->class_node != nullptr ? statement->class_node->name : std::string();
+        if (!name.empty()) current->variables[name] = constructor;
+        return normal();
+      }
+
       case ast::StmtKind::ForOf:
       case ast::StmtKind::ForIn: {
         const Value iterable = eval(statement->expression, current);
@@ -1258,6 +1401,89 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
 
 // ------------------------------------------------------------ expressions ----
 
+Value Interpreter::make_class(const std::shared_ptr<ast::ClassNode>& node, const ScopePtr& scope) {
+  Value super_value;
+  if (node->super_class != nullptr) {
+    super_value = eval(node->super_class, scope);
+    if (super_value.type != ValueType::Function || super_value.function == nullptr) {
+      if (!super_value.is_null()) throw thrown(type_error("class extends value is not a constructor"));
+      super_value = Value::undefined();
+    }
+  }
+  const bool derived = super_value.type == ValueType::Function;
+
+  const ast::ClassMethod* constructor_method = nullptr;
+  for (const ast::ClassMethod& method : node->methods) {
+    if (!method.is_static && !method.is_get && !method.is_set && method.key == "constructor") {
+      constructor_method = &method;
+      break;
+    }
+  }
+
+  Value constructor;
+  if (constructor_method != nullptr) {
+    constructor = make_function(constructor_method->function, scope);
+    if (!node->name.empty()) constructor.function->name = node->name;
+  } else if (derived) {
+    // Default derived constructor: `constructor (...args) { super(...args); }`.
+    const Value parent = super_value;
+    constructor = native_value(node->name.empty() ? std::string("class") : node->name,
+                               [parent](const std::vector<Value>& arguments, Value this_value) {
+                                 call_function(parent, this_value, arguments);
+                                 return Value::undefined();
+                               });
+  } else {
+    constructor = native_value(node->name.empty() ? std::string("class") : node->name,
+                               [](const std::vector<Value>&, Value) { return Value::undefined(); });
+  }
+
+  const std::shared_ptr<Function> function = constructor.function;
+  if (!function->prototype_object) function->prototype_object = std::make_shared<Object>();
+  function->prototype_object->owner_function = function;
+  if (!function->statics) function->statics = std::make_shared<Object>();
+  function->statics->owner_function = function;
+  if (derived) {
+    function->super_function = super_value.function;
+    // Prototype chain and static inheritance (`class B extends A`).
+    function->prototype_object->prototype = super_value.function->prototype_object;
+    property_bag(super_value);
+    function->statics->prototype = super_value.function->statics;
+  }
+
+  for (const ast::ClassMethod& method : node->methods) {
+    const bool is_constructor = !method.is_static && !method.is_get && !method.is_set &&
+                                method.key == "constructor";
+    if (is_constructor) continue;
+    Value method_value = make_function(method.function, scope);
+    if (method_value.function != nullptr) {
+      method_value.function->name = method.key;
+      if (derived) method_value.function->super_function = super_value.function;
+    }
+    std::shared_ptr<Object> target = method.is_static ? function->statics : function->prototype_object;
+    if (method.is_get) {
+      const Value getter = method_value;
+      target->receiver_getters[method.key] = [getter](const Value& self) {
+        return call_function(getter, self, {});
+      };
+      Property marker{Value::undefined(), true, false, true};
+      target->properties[method.key] = marker;  // class members are non-enumerable
+    } else if (method.is_set) {
+      const Value setter = method_value;
+      target->receiver_setters[method.key] = [setter](const Value& self, const Value& value) {
+        call_function(setter, self, {value});
+        return;
+      };
+      Property marker{Value::undefined(), true, false, true};
+      target->properties[method.key] = marker;
+    } else {
+      Property property{method_value};
+      property.enumerable = false;  // class methods are non-enumerable
+      target->properties[method.key] = property;
+    }
+  }
+  return constructor;
+}
+
 Value Interpreter::eval_source(const std::string& source, const ScopePtr& scope) {
   Result<ast::StmtPtr> program = parse_script(source);
   if (program.is_error()) {
@@ -1268,10 +1494,67 @@ Value Interpreter::eval_source(const std::string& source, const ScopePtr& scope)
   return completion.value;
 }
 
+namespace {
+
+/// `this` of the innermost enclosing function (class bodies call `super` with it).
+Value lookup_this(const Scope* scope) {
+  for (const Scope* current = scope; current != nullptr; current = current->parent) {
+    if (current->is_function_scope) return current->this_value;
+  }
+  return Value::undefined();
+}
+
+}  // namespace
+
 Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope) {
   const ast::ExprPtr& callee_expression = expression.children[0];
   Value this_value = Value::undefined();
   Value callee;
+
+  // `super(...)` and `super.method(...)`: the parent constructor lives in the
+  // `super` binding of a class body, and method lookup starts at its prototype.
+  const bool is_super_identifier = callee_expression->kind == ast::ExprKind::Identifier &&
+                                   callee_expression->text == "super";
+  const bool is_super_member = callee_expression->kind == ast::ExprKind::Member &&
+                               callee_expression->children[0] != nullptr &&
+                               callee_expression->children[0]->kind == ast::ExprKind::Identifier &&
+                               callee_expression->children[0]->text == "super";
+  if (is_super_identifier || is_super_member) {
+    const Lookup found_super = lookup_scope(scope, "super");
+    const Value parent = found_super.found ? found_super.scope->variables["super"] : Value::undefined();
+    this_value = lookup_this(scope);
+    std::vector<Value> arguments;
+    for (std::size_t i = 1; i < expression.children.size(); ++i) {
+      arguments.push_back(eval(expression.children[i], scope));
+    }
+    if (is_super_identifier) {
+      if (parent.type != ValueType::Function) throw thrown(type_error("'super' keyword unexpected here"));
+      return call(parent, this_value, std::move(arguments));
+    }
+    if (parent.type != ValueType::Function || parent.function == nullptr ||
+        parent.function->prototype_object == nullptr) {
+      throw thrown(type_error("'super' keyword unexpected here"));
+    }
+    const std::string key = callee_expression->boolean
+                                ? to_string(eval(callee_expression->children[1], scope))
+                                : callee_expression->text;
+    for (std::shared_ptr<Object> object = parent.function->prototype_object; object != nullptr;
+         object = object->prototype) {
+      const auto receiver_getter = object->receiver_getters.find(key);
+      if (receiver_getter != object->receiver_getters.end()) {
+        callee = receiver_getter->second(this_value);
+        if (callee.type != ValueType::Function) throw thrown(type_error(to_string(callee) + " is not a function"));
+        return call(callee, this_value, std::move(arguments));
+      }
+      const auto found = object->properties.find(key);
+      if (found != object->properties.end()) {
+        callee = found->second.value;
+        if (callee.type != ValueType::Function) throw thrown(type_error(to_string(callee) + " is not a function"));
+        return call(callee, this_value, std::move(arguments));
+      }
+    }
+    throw thrown(type_error("super property '" + key + "' is not a function"));
+  }
 
   if (callee_expression->kind == ast::ExprKind::Member) {
     const Value object = eval(callee_expression->children[0], scope);
@@ -1323,7 +1606,10 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::Identifier: {
       const Lookup found = lookup_scope(scope, expression->text);
       if (found.found) return found.scope->variables[expression->text];
-      return Value::undefined();
+      if (expression->text == "undefined") return Value::undefined();
+      // Reading an unresolvable reference is a ReferenceError (ES2015 6.2.3.3);
+      // only `typeof` and `delete` are exempt.
+      throw thrown(reference_error("'" + expression->text + "' is not defined"));
     }
 
     case ast::ExprKind::Array: {
@@ -1357,6 +1643,17 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
 
     case ast::ExprKind::Function:
       return make_function(expression->function, scope);
+
+    case ast::ExprKind::Class: {
+      const Value constructor = make_class(expression->class_node, scope);
+      // A named class expression binds its own name inside the body.
+      if (expression->class_node != nullptr && !expression->class_node->name.empty()) {
+        const ScopePtr named = runtime_.new_scope(scope);
+        named->variables[expression->class_node->name] = constructor;
+        return constructor;
+      }
+      return constructor;
+    }
 
     case ast::ExprKind::Sequence: {
       Value last;
@@ -1397,6 +1694,10 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
           }
         }
         return Value::boolean_of(true);
+      }
+      if (op == "typeof" && expression->children[0]->kind == ast::ExprKind::Identifier &&
+          !lookup_scope(scope, expression->children[0]->text).found) {
+        return Value::string_of("undefined");
       }
       const Value operand = eval(expression->children[0], scope);
       if (op == "typeof") return Value::string_of(typeof_string(operand));
@@ -1520,7 +1821,10 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         Value current_value;
         if (target->kind == ast::ExprKind::Identifier) {
           const Lookup found = lookup_scope(scope, target->text);
-          current_value = found.found ? found.scope->variables[target->text] : Value::undefined();
+          if (!found.found) {
+            throw thrown(reference_error("'" + target->text + "' is not defined"));
+          }
+          current_value = found.scope->variables[target->text];
         } else if (target->kind == ast::ExprKind::Member) {
           const Value object = eval(target->children[0], scope);
           const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
@@ -1564,7 +1868,10 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         arguments.push_back(eval(expression->children[i], scope));
       }
       const Value result = call(constructor, Value::object_of(instance), std::move(arguments));
+      // A constructor that returns an object (or a function, as `new Function` does)
+      // wins over the freshly created instance.
       if (result.type == ValueType::Object && result.object != nullptr) return result;
+      if (result.type == ValueType::Function) return result;
       return Value::object_of(std::move(instance));
     }
   }
@@ -1572,6 +1879,10 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
 }
 
 // --------------------------------------------------------------- builtins ----
+
+/// Set once the interpreter exists so `new Function(…)` can parse its body at
+/// construction time (install_builtins runs before the Interpreter is created).
+std::function<Value(const std::string&, const ScopePtr&)> g_eval_source_for_function;
 
 void install_builtins(RuntimeState& runtime) {
   const ScopePtr global = runtime.global;
@@ -1879,6 +2190,9 @@ void install_builtins(RuntimeState& runtime) {
     const std::string text = string_this(this_value, "repeat");
     const long count = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
     if (count < 0) throw thrown(make_error("RangeError", "Invalid count value"));
+    if (static_cast<unsigned long long>(count) * text.size() > (1ULL << 28)) {
+      throw thrown(make_error("RangeError", "Invalid string length"));
+    }
     std::string out;
     for (long i = 0; i < count; ++i) out += text;
     return Value::string_of(out);
@@ -2158,6 +2472,13 @@ void install_builtins(RuntimeState& runtime) {
                                               false, true};
       return wrapper;
     }
+    if (this_value.is_number() || this_value.is_boolean()) {
+      // ToObject(primitive) has no `length`, so it is an empty array-like.
+      auto wrapper = std::make_shared<Object>();
+      wrapper->properties["length"] =
+          Property{Value::number_of(0.0), true, false, true};
+      return wrapper;
+    }
     if (!this_value.is_object() || this_value.object == nullptr) {
       throw thrown(type_error(std::string("Array.prototype.") + method + " called on " +
                               typeof_string(this_value)));
@@ -2239,10 +2560,16 @@ void install_builtins(RuntimeState& runtime) {
                                                                                  : to_string(arguments[0]);
     std::string out;
     const std::size_t length = array_like_length(*target);
+    // Engines cap string length; joining a sparse multi-billion element array must
+    // throw instead of exhausting memory.
+    if (length > (std::size_t{1} << 28)) throw thrown(make_error("RangeError", "Invalid string length"));
     for (std::size_t i = 0; i < length; ++i) {
       if (i != 0) out += separator;
       const Value value = array_like_get(*target, i);
-      if (!value.is_nullish()) out += to_string(value);
+      if (!value.is_nullish()) {
+        if (out.size() > (std::size_t{1} << 28)) throw thrown(make_error("RangeError", "Invalid string length"));
+        out += to_string(value);
+      }
     }
     return Value::string_of(out);
   });
@@ -2439,6 +2766,104 @@ void install_builtins(RuntimeState& runtime) {
       return accumulator;
     });
   }
+  add_array_method("at", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "at");
+    const auto length = static_cast<long>(array_like_length(*target));
+    long index = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    if (index < 0) index += length;
+    if (index < 0 || index >= length) return Value::undefined();
+    return array_like_get(*target, static_cast<std::size_t>(index));
+  });
+  add_array_method("copyWithin", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "copyWithin");
+    const auto length = static_cast<long>(array_like_length(*target));
+    long to = arguments.empty() ? 0 : static_cast<long>(to_number(arguments[0]));
+    long from = arguments.size() < 2 ? 0 : static_cast<long>(to_number(arguments[1]));
+    long end = arguments.size() < 3 || arguments[2].is_undefined() ? length
+                                                                  : static_cast<long>(to_number(arguments[2]));
+    if (to < 0) to = std::max(0L, length + to);
+    if (from < 0) from = std::max(0L, length + from);
+    if (end < 0) end = std::max(0L, length + end);
+    to = std::min(to, length);
+    from = std::min(from, length);
+    end = std::min(end, length);
+    long count = std::min(end - from, length - to);
+    for (long i = 0; i < count; ++i) {
+      array_like_set(*target, static_cast<std::size_t>(to + i),
+                     array_like_get(*target, static_cast<std::size_t>(from + i)));
+    }
+    return this_value;
+  });
+  add_array_method("flat", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "flat");
+    const auto depth = arguments.empty() || arguments[0].is_undefined() ? 1.0 : to_number(arguments[0]);
+    std::vector<Value> values;
+    std::function<void(const Object&, double)> flatten = [&](const Object& source, double level) {
+      const std::size_t length = array_like_length(source);
+      for (std::size_t i = 0; i < length; ++i) {
+        const Value element = array_like_get(source, i);
+        if (level >= 1.0 && element.is_object() && element.object != nullptr && element.object->is_array()) {
+          flatten(*element.object, level - 1.0);
+        } else {
+          values.push_back(element);
+        }
+      }
+    };
+    flatten(*target, depth);
+    return Value::object_of(make_array(std::move(values)));
+  });
+  add_array_method("flatMap", [array_this](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "flatMap");
+    if (arguments.empty() || arguments[0].type != ValueType::Function) {
+      throw thrown(type_error("Array.prototype.flatMap needs a callback"));
+    }
+    std::vector<Value> values;
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      const Value mapped = call_function(arguments[0], Value::undefined(),
+                                         {array_like_get(*target, i), Value::number_of(static_cast<double>(i)),
+                                          this_value});
+      if (mapped.is_object() && mapped.object != nullptr && mapped.object->is_array()) {
+        const std::vector<Value> nested = array_like_values(*mapped.object);
+        values.insert(values.end(), nested.begin(), nested.end());
+      } else {
+        values.push_back(mapped);
+      }
+    }
+    return Value::object_of(make_array(std::move(values)));
+  });
+  for (const char* name : {"findLast", "findLastIndex"}) {
+    const std::string method = name;
+    const bool returns_index = method == "findLastIndex";
+    add_array_method(name, [array_this, returns_index, method](const std::vector<Value>& arguments,
+                                                              Value this_value) {
+      const std::shared_ptr<Object> target = array_this(this_value, method.c_str());
+      if (arguments.empty() || arguments[0].type != ValueType::Function) {
+        throw thrown(type_error("Array.prototype." + method + " needs a callback"));
+      }
+      const std::size_t length = array_like_length(*target);
+      for (std::size_t i = length; i > 0; --i) {
+        const std::size_t index = i - 1;
+        if (to_boolean(call_function(arguments[0], Value::undefined(),
+                                     {array_like_get(*target, index), Value::number_of(static_cast<double>(index)),
+                                      this_value}))) {
+          return returns_index ? Value::number_of(static_cast<double>(index)) : array_like_get(*target, index);
+        }
+      }
+      return returns_index ? Value::number_of(-1) : Value::undefined();
+    });
+  }
+  add_array_method("toLocaleString", [array_this](const std::vector<Value>&, Value this_value) {
+    const std::shared_ptr<Object> target = array_this(this_value, "toLocaleString");
+    std::string out;
+    const std::size_t length = array_like_length(*target);
+    for (std::size_t i = 0; i < length; ++i) {
+      if (i != 0) out += ",";
+      const Value element = array_like_get(*target, i);
+      if (!element.is_nullish()) out += to_string(element);
+    }
+    return Value::string_of(out);
+  });
   add_array_method("fill", [array_this](const std::vector<Value>& arguments, Value this_value) {
     const std::shared_ptr<Object> target = array_this(this_value, "fill");
     const Value value = arguments.empty() ? Value::undefined() : arguments[0];
@@ -2566,6 +2991,26 @@ void install_builtins(RuntimeState& runtime) {
   add_proto_method("toLocaleString", [](const std::vector<Value>&, Value this_value) {
     return Value::string_of(to_string(this_value));
   });
+  // `__proto__` is an accessor on Object.prototype (B.2.2.1), and real pages use it.
+  const std::weak_ptr<Object> implicit_object_prototype = object_prototype;
+  object_prototype->receiver_getters["__proto__"] = [implicit_object_prototype](const Value& self) {
+    const std::shared_ptr<Object> fallback = implicit_object_prototype.lock();
+    if (!fallback) return Value::null();
+    if (!self.is_object() || self.object == nullptr) return Value::object_of(fallback);
+    if (self.object->prototype != nullptr) return Value::object_of(self.object->prototype);
+    if (self.object->prototype_is_null) return Value::null();
+    return Value::object_of(fallback);
+  };
+  object_prototype->receiver_setters["__proto__"] = [](const Value& self, const Value& value) {
+    if (!self.is_object() || self.object == nullptr) return;
+    if (value.is_object() && value.object != nullptr) {
+      self.object->prototype = value.object;
+      self.object->prototype_is_null = false;
+    } else if (value.is_null()) {
+      self.object->prototype = nullptr;
+      self.object->prototype_is_null = true;
+    }
+  };
 
   const Value object_constructor = native_value("Object", [](const std::vector<Value>& arguments, Value) {
     if (!arguments.empty() && arguments[0].is_object()) return arguments[0];
@@ -2817,6 +3262,59 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::boolean_of(strict_equals(first, second));
   });
+  // `new Function(a, b, "return a + b")`: the body is parsed at construction time.
+  Value function_constructor = native_value("Function", [global](const std::vector<Value>& arguments, Value) {
+    std::string parameters;
+    for (std::size_t i = 0; i + 1 < arguments.size(); ++i) {
+      if (i != 0) parameters += ",";
+      parameters += to_string(arguments[i]);
+    }
+    const std::string body = arguments.empty() ? "" : to_string(arguments.back());
+    if (!g_eval_source_for_function) throw thrown(type_error("Function constructor is unavailable"));
+    const std::string source = "(function anonymous(" + parameters + "\n) {\n" + body + "\n})";
+    return g_eval_source_for_function(source, global);
+  });
+  const std::shared_ptr<Function> function_function = function_constructor.function;
+  if (function_function != nullptr) {
+    if (!function_function->prototype_object) {
+      function_function->prototype_object = std::make_shared<Object>();
+      function_function->prototype_object->owner_function = function_function;
+    }
+    const std::shared_ptr<Object> function_prototype = function_function->prototype_object;
+    runtime.function_prototype = function_prototype;
+    function_prototype->properties["toString"] = Property{
+        native_value("toString",
+                     [](const std::vector<Value>& arguments, Value this_value) {
+                       const Value target = arguments.empty() && !this_value.is_undefined() ? this_value
+                                             : (arguments.empty() ? this_value : arguments[0]);
+                       if (target.type == ValueType::Function && target.function != nullptr) {
+                         return Value::string_of("function " + target.function->name + "() { [native code] }");
+                       }
+                       (void)target;
+                       return Value::string_of("function () { [native code] }");
+                     }),
+        true, false, true};
+    function_prototype->properties["call"] = Property{
+        native_value("call", [](const std::vector<Value>& arguments, Value this_value) {
+          const Value target = this_value;
+          const Value receiver = arguments.empty() ? Value::undefined() : arguments[0];
+          std::vector<Value> rest(arguments.begin() + (arguments.empty() ? 0 : 1), arguments.end());
+          return call_function(target, receiver, std::move(rest));
+        }),
+        true, false, true};
+  }
+  global->variables["Function"] = function_constructor;
+
+  add_object_static("hasOwn", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "hasOwn");
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag == nullptr || arguments.size() < 2) return Value::boolean_of(false);
+    return Value::boolean_of(has_own_property(*bag, to_string(arguments[1])));
+  });
+  add_object_static("getOwnPropertySymbols", [](const std::vector<Value>&, Value) {
+    // Symbol is not implemented, so no object has symbol-keyed properties.
+    return Value::object_of(make_array({}));
+  });
   add_object_static("assign", [](const std::vector<Value>& arguments, Value) {
     if (arguments.empty() || !arguments[0].is_object() || arguments[0].object == nullptr) {
       throw thrown(type_error("Object.assign target must be an object"));
@@ -2892,7 +3390,9 @@ void install_builtins(RuntimeState& runtime) {
                        {"splice", 2},   {"join", 1},     {"toString", 0}, {"indexOf", 1},  {"lastIndexOf", 1},
                        {"includes", 1}, {"concat", 1},   {"reverse", 0},  {"sort", 1},     {"forEach", 1},
                        {"map", 1},      {"filter", 1},   {"find", 1},     {"findIndex", 1}, {"every", 1},
-                       {"some", 1},     {"reduce", 1},   {"reduceRight", 1}, {"fill", 1}};
+                       {"some", 1},     {"reduce", 1},   {"reduceRight", 1}, {"fill", 1},
+                       {"at", 1},       {"copyWithin", 2}, {"flat", 0},     {"flatMap", 1},
+                       {"findLast", 1}, {"findLastIndex", 1}, {"toLocaleString", 0}};
   for (const auto& entry : array_arities) set_arity(array_prototype, entry.name, entry.arity);
 
   const struct {
@@ -2913,6 +3413,7 @@ void install_builtins(RuntimeState& runtime) {
   } number_arities[] = {{"toString", 1}, {"valueOf", 0},       {"toFixed", 1},
                         {"toPrecision", 1}, {"toExponential", 1}};
   for (const auto& entry : number_arities) set_arity(number_prototype, entry.name, entry.arity);
+  if (function_constructor.function != nullptr) function_constructor.function->parameter_count = 1;
   set_arity(boolean_prototype, "toString", 0);
   set_arity(boolean_prototype, "valueOf", 0);
   set_arity(array_constructor.function->statics, "isArray", 1);
@@ -3163,6 +3664,10 @@ Context::Context() : impl_(std::make_unique<Impl>()) {
   impl_->runtime.global->is_function_scope = true;
   install_builtins(impl_->runtime);
   impl_->interpreter = std::make_unique<Interpreter>(impl_->runtime, impl_->runtime.global);
+  g_eval_source_for_function = [interpreter = impl_->interpreter.get()](const std::string& source,
+                                                                      const ScopePtr& scope) {
+    return interpreter->eval_source(source, scope);
+  };
   impl_->public_runtime.impl_->state = &impl_->runtime;
   impl_->public_runtime.impl_->interpreter = impl_->interpreter.get();
 }

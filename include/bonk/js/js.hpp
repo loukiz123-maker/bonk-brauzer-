@@ -86,6 +86,9 @@ struct Function {
   /// Static properties of a builtin constructor (`Object.keys`, `Array.isArray`):
   /// functions are plain Values, so they carry their own namespace object.
   std::shared_ptr<Object> statics;
+  /// For a class constructor/method: the parent constructor, so `super(…)` and
+  /// `super.m(…)` resolve without a special `this`-scope object (stage 28).
+  std::weak_ptr<Function> super_function;
 
   [[nodiscard]] bool is_native() const noexcept { return static_cast<bool>(native); }
 };
@@ -111,7 +114,10 @@ struct Object {
 
   Kind kind = Kind::Plain;
   std::unordered_map<std::string, Property> properties;
-  std::vector<Value> elements;  // only for Kind::Array
+  std::vector<Value> elements;
+  /// `length` of an array can exceed the number of stored elements (`a.length = 2**31`
+  /// must not allocate); `elements` is then the sparse prefix.
+  std::size_t length_hint = 0;  // only for Kind::Array
   std::shared_ptr<Function> function;
   std::shared_ptr<Object> prototype;
   /// `Object.create(null)` / `setPrototypeOf(o, null)`: the chain really ends

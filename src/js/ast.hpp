@@ -10,6 +10,7 @@ namespace bonk::js::ast {
 struct Expr;
 struct Stmt;
 struct FunctionNode;
+struct ClassNode;
 
 using ExprPtr = std::shared_ptr<Expr>;
 using StmtPtr = std::shared_ptr<Stmt>;
@@ -37,6 +38,23 @@ enum class ExprKind {
   Member,
   Sequence,
   Template,
+  Class,
+};
+
+/// One method of a class body: `m() {}`, `static m() {}`, `get m() {}`, `set m(v) {}`.
+struct ClassMethod {
+  std::string key;
+  FunctionPtr function;
+  bool is_static = false;
+  bool is_get = false;
+  bool is_set = false;
+};
+
+/// `class Name extends Super { … }` — shared by declarations and expressions.
+struct ClassNode {
+  std::string name;          // empty for anonymous class expressions
+  ExprPtr super_class;       // null when there is no `extends`
+  std::vector<ClassMethod> methods;
 };
 
 struct PropertyDef {
@@ -54,6 +72,7 @@ struct Expr {
   std::vector<ExprPtr> children;    // operands, elements, arguments, template parts
   std::vector<PropertyDef> properties;
   FunctionPtr function;             // for Function expressions
+  std::shared_ptr<ClassNode> class_node;  // for Class expressions
 };
 
 enum class StmtKind {
@@ -67,6 +86,7 @@ enum class StmtKind {
   ForOf,
   ForIn,
   FunctionDecl,
+  ClassDecl,
   Return,
   Break,
   Continue,
@@ -90,6 +110,7 @@ struct Stmt {
 
   std::vector<StmtPtr> statements;  // program / block contents
   FunctionPtr function;             // function declaration
+  std::shared_ptr<ClassNode> class_node;  // class declaration
 
   StmtPtr try_block;
   StmtPtr catch_block;

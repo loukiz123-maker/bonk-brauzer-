@@ -64,16 +64,18 @@ BONK_TEST(js_parser, nested_blocks_and_if_else_chains) {
   CHECK_EQ(num(source), 2.0);
 }
 
-BONK_TEST(js_parser, switch_and_class_are_rejected_with_a_message) {
+BONK_TEST(js_parser, switch_is_rejected_with_a_message) {
   Context context;
   const ExecutionResult switch_result = context.evaluate("switch (1) { case 1: break; }");
   CHECK(!switch_result.ok);
   CHECK(switch_result.message.find("switch") != std::string::npos);
+}
 
-  Context class_context;
-  const ExecutionResult class_result = class_context.evaluate("class A {}");
-  CHECK(!class_result.ok);
-  CHECK(class_result.message.find("class") != std::string::npos);
+BONK_TEST(js_parser, class_declarations_and_expressions_parse) {
+  Context declaration;
+  CHECK(declaration.evaluate("class A { constructor() { this.x = 1; } m() { return 2; } }").ok);
+  Context expression;
+  CHECK(expression.evaluate("var C = class Named extends Object { get g() { return 1; } };").ok);
 }
 
 BONK_TEST(js_parser, missing_operand_is_a_syntax_error) {

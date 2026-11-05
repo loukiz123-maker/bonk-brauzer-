@@ -558,6 +558,29 @@ construction 1 792/1 792 (100 %), юнит-тестов **478**. Открыто:
 spread/`with`, `RegExp`/`Date`/`Promise`/`Map`/`Set`/типизированные массивы.
 
 
+## Этап 28 — `class`, `ToString` чисел и ссылочная семантика
+
+Появились классы: `class`/`extends`/`super`/`static`/`get`/`set` — конструктор,
+прототип с неперечисляемыми методами, статическое наследование и `super(...)`/
+`super.m(...)` поверх существующей модели функций. `ToString` числа приведён к
+алгоритму ES2015 (кратчайшая обратная запись, обычная запись при
+`1e-6 ≤ |x| < 1e21`, экспонента без паддинга), из-за чего исправились и ключи
+свойств (`Object.defineProperty(o, 0.000001, …)`). Чтение неразрешённого имени
+стало `ReferenceError`, примитивы в `Array.prototype.*` запаковываются в пустой
+array-like, добавлены `Function`, `__proto__`, `Object.hasOwn`,
+`at/copyWithin/flat/flatMap/findLast/findLastIndex`, а `length` массива больше
+не аллоцирует 4 ГБ. Подробности: [`docs/STAGE-28.md`](STAGE-28.md), решение —
+[`docs/adr/0030-classes-number-tostring-and-reference-semantics.md`](adr/0030-classes-number-tostring-and-reference-semantics.md).
+
+**Критерий выхода**: классы и `super` работают по цепочке прототипов,
+`typeof`/`delete`/присваивание не ломаются от `ReferenceError`, формат чисел
+совпадает со стандартом. Сейчас: test262 — **7 290/14 759 (49.4 %)**, reftests
+13/13, токенайзер 6 792/6 820 (99.6 %), tree construction 1 792/1 792 (100 %),
+юнит-тестов **498**. Открыто: `Symbol`/итераторы/`for-of`, strict-режим,
+деструктуризация/spread/`switch`/`with`, `RegExp`/`Date`/`Promise`/`Map`/`Set`/
+типизированные массивы, полная валидация дескрипторов в `defineProperty`.
+
+
 ---
 
 ## Риски и как их снимаем

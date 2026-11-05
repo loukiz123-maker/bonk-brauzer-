@@ -354,7 +354,12 @@ struct Parser {
       return statement;
     }
     if (is("try")) return parse_try();
-    if (is("switch") || is("class") || is("import") || is("export")) {
+    if (is("class")) {
+      auto statement = make_stmt(StmtKind::ClassDecl);
+      statement->class_node = parse_class();
+      return statement;
+    }
+    if (is("switch") || is("import") || is("export")) {
       error = "'" + current().text + "' statements are not supported by this engine yet";
       return nullptr;
     }
@@ -363,6 +368,43 @@ struct Parser {
     statement->expression = parse_expression();
     expect_semicolon();
     return statement;
+  }
+
+  /// `class [Name] [extends Expr] { constructor() {} m() {} static s() {} get g() {} }`
+  std::shared_ptr<ast::ClassNode> parse_class() {
+    auto node = std::make_shared<ast::ClassNode>();
+    expect("class");
+    if (is_identifier()) node->name = take().text;
+    if (is("extends")) {
+      take();
+      node->super_class = parse_call_member();
+    }
+    if (!expect("{")) return node;
+    while (!is("}") && current().type != Token::Type::EndOfFile && error.empty()) {
+      ast::ClassMethod method;
+      if (is("static") && !(peek().text == "(")) {
+        take();
+        method.is_static = true;
+      }
+      if ((is_text("get") || is_text("set")) && peek().text != "(") {
+        method.is_get = is_text("get");
+        method.is_set = is_text("set");
+        take();
+      }
+      if (is_identifier() || current().type == Token::Type::Keyword || current().type == Token::Type::String ||
+          current().type == Token::Type::Number) {
+        method.key = take().text;
+      } else {
+        if (error.empty()) error = "expected a method name";
+        break;
+      }
+      method.function = parse_function(false, false);
+      method.function->name = method.key;
+      node->methods.push_back(std::move(method));
+      match(";");
+    }
+    expect("}");
+    return node;
   }
 
   StmtPtr parse_block() {
@@ -899,6 +941,18 @@ struct Parser {
         if (token.text == "function") {
           auto expression = make(ExprKind::Function);
           expression->function = parse_function(false, false);
+          return expression;
+        }
+        if (token.text == "class") {
+          auto expression = make(ExprKind::Class);
+          expression->class_node = parse_class();
+          return expression;
+        }
+        if (token.text == "super") {
+          // Resolved at runtime from the class body's `super` binding.
+          take();
+          auto expression = make(ExprKind::Identifier);
+          expression->text = "super";
           return expression;
         }
         if (error.empty()) error = "unexpected keyword '" + token.text + "'";

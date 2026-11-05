@@ -97,7 +97,7 @@ BONK_TEST(js_builtins, number_formatting) {
   CHECK_EQ(str("var v = (1.005).toFixed(2);"), std::string("1.00"));
   CHECK_EQ(str("var v = String(42);"), std::string("42"));
   CHECK_EQ(num("var v = Number('42') + 1;"), 43.0);
-  CHECK_EQ(str("var v = numberToString ? 'x' : String(0.5);"), std::string("0.5"));
+  CHECK_EQ(str("var v = String(0.5);"), std::string("0.5"));
 }
 
 BONK_TEST(js_builtins, error_construction) {

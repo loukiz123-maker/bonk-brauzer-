@@ -109,8 +109,9 @@ BONK_TEST(js_arrays, arguments_aliases_parameters_in_sloppy_code) {
            std::string("changed"));
   // Extra actual arguments are not mapped.
   CHECK_EQ(num("function f(a) { arguments[1] = 5; return arguments.length; } var v = f(1, 2);"), 2.0);
-  CHECK_EQ(num("function f(a) { return f2(arguments); } function f2(a) { return a.length; } var v = f1 ? 0 : 1;"),
-           1.0);
+  // `arguments` can be handed to another function like any array-like.
+  CHECK_EQ(num("function f2(a) { return a.length; } function f() { return f2(arguments); } var v = f(1, 2, 3);"),
+           3.0);
 }
 
 BONK_TEST(js_arrays, eval_runs_in_the_calling_scope) {
