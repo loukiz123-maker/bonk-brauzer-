@@ -231,6 +231,35 @@ BONK_TEST(html, select_parses_ordinary_content) {
                        "<option>b</option></body></html>"));
 }
 
+BONK_TEST(html, select_is_a_scope_boundary_for_the_adoption_agency) {
+  // `<select>` ends an "in scope" walk, so `</font>` cannot see the <font> that
+  // encloses the select: the tag is ignored instead of pulling the select out.
+  CHECK_EQ(parse_and_serialize("<font><select><option>a</option></font></select>"),
+           std::string("<html><head></head><body><font><select><option>a</option></select></font>"
+                       "</body></html>"));
+}
+
+BONK_TEST(html, noahs_ark_compares_attribute_values) {
+  // Three <font size=4> are already active, so the fourth one is dropped and the
+  // list keeps 4b/4c/<font size=5>/4d — a comparison that only looked at the
+  // number of attributes would drop the size=5 entry as well.
+  CHECK_EQ(parse_and_serialize("<p><font size=4><font size=4><font size=4><font size=5><font size=4><p>X"),
+           std::string("<html><head></head><body>"
+                       "<p><font size=\"4\"><font size=\"4\"><font size=\"4\"><font size=\"5\">"
+                       "<font size=\"4\"></font></font></font></font></font></p>"
+                       "<p><font size=\"4\"><font size=\"4\"><font size=\"5\"><font size=\"4\">X"
+                       "</font></font></font></font></p></body></html>"));
+}
+
+BONK_TEST(html, table_foster_parenting_reconstructs_formatting) {
+  // "Any other start tag" inside "in table" reconstructs the active formatting
+  // elements while foster parenting is still on, so the <font> clone and the <img>
+  // both land in front of the table.
+  CHECK_EQ(parse_and_serialize("<table><center> <font>a</center> <img>"),
+           std::string("<html><head></head><body><center> <font>a</font></center>"
+                       "<font><img></font><table> </table></body></html>"));
+}
+
 // --- <template> and <frameset> ----------------------------------------------
 // `<template>` keeps its children in a separate DocumentFragment ("template
 // contents"); `<frameset>` replaces an empty body instead of becoming a child.
@@ -260,6 +289,36 @@ BONK_TEST(html, template_in_body_and_inside_a_table) {
   // </div> cannot escape the template: it is a scope boundary.
   CHECK_EQ(parse_and_serialize("<div><template></div>Hello"),
            std::string("<html><head></head><body><div><template>Hello</template></div></body></html>"));
+}
+
+BONK_TEST(html, template_adoption_agency_lands_in_the_contents) {
+  // The common ancestor of the formatting element is the <template> itself, so the
+  // furthest block (the <menu>) has to be moved into the template's contents — not
+  // appended to the template element.
+  CHECK_EQ(parse_and_serialize("<template><i><menu>Foo</i>"),
+           std::string("<html><head><template><i></i><menu><i>Foo</i></menu></template></head>"
+                       "<body></body></html>"));
+}
+
+BONK_TEST(html, template_mode_is_decided_by_the_first_content_token) {
+  // A `<div>` switches the template to "in body", so the following `<tr>` is a
+  // table part outside a table and gets dropped ...
+  CHECK_EQ(parse_and_serialize("<template><div>Foo</div><tr></tr>"),
+           std::string("<html><head><template><div>Foo</div></template></head><body></body></html>"));
+  // ... while a `<tr>` first still builds a table inside the contents, and the
+  // head-ish tokens (`<script>`, `<meta>`) leave the template's mode alone.
+  CHECK_EQ(parse_and_serialize("<template><tr></tr>"),
+           std::string("<html><head><template><tr></tr></template></head><body></body></html>"));
+  CHECK_EQ(parse_and_serialize("<template><script>x</script><td></td>"),
+           std::string("<html><head><template><script>x</script><td></td></template></head>"
+                       "<body></body></html>"));
+}
+
+BONK_TEST(html, template_ignores_other_end_tags) {
+  // "In template" only understands `</template>`: a `</div>` there is a no-op even
+  // when a <div> is open inside the contents.
+  CHECK_EQ(parse_and_serialize("<template><div>a</div></div>b"),
+           std::string("<html><head><template><div>a</div>b</template></head><body></body></html>"));
 }
 
 BONK_TEST(html, frameset_replaces_an_empty_body) {
@@ -583,6 +642,19 @@ BONK_TEST(html, hidden_input_stays_inside_a_table) {
 BONK_TEST(html, second_form_is_ignored) {
   CHECK_EQ(parse_and_serialize("<form><form><input></form>"),
            std::string("<html><head></head><body><form><input></form></body></html>"));
+}
+
+BONK_TEST(html, form_pointer_outlives_the_stack) {
+  // `<form>` inside `<table>` is inserted and popped right away, but the form
+  // element pointer keeps it open: `</form>` clears the pointer (finding no form
+  // in scope) and a following `<form>` is therefore a *new* form.
+  CHECK_EQ(parse_and_serialize("<form><table></form><form></table></form>"),
+           std::string("<html><head></head><body><form><table><form></form></table></form>"
+                       "</body></html>"));
+  // `</form>` removes the form element from the stack without closing its
+  // children, which is the documented oddity of the pointer-based rule.
+  CHECK_EQ(parse_and_serialize("<form><div></form>x"),
+           std::string("<html><head></head><body><form><div>x</div></form></body></html>"));
 }
 
 BONK_TEST(html, select_in_table_closes_on_table_tokens) {

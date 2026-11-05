@@ -34,3 +34,17 @@
 |       id="x"
 |       <span>
 |         "hi"
+#data
+<p>a</p>
+
+
+#document
+| <html>
+|   <head>
+|   <body>
+|     <p>
+|       "a"
+|     "
+
+"
+

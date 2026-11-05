@@ -148,7 +148,7 @@ class TreeBuilder {
  private:
   /// Insertion modes. Not a closed set of parser states: the mode is derived from
   /// the stack of open elements (see `mode()`), which keeps nested tables honest.
-  enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup };
+  enum class Mode { Body, Table, TableBody, Row, Cell, ColumnGroup, Template };
 
   // --- helpers -----------------------------------------------------------
   [[nodiscard]] dom::NodeId current() const {
@@ -471,6 +471,13 @@ class TreeBuilder {
       foster_insert(node);
       return;
     }
+    if (tag == "template") {  // the children of a template live in its contents
+      const dom::NodeId content = template_content(parent);
+      if (content.valid()) {
+        document_.append_child(content, node);
+        return;
+      }
+    }
     document_.append_child(parent, node);
   }
 
@@ -485,7 +492,22 @@ class TreeBuilder {
   /// Inserts a node just before the innermost open table.
   void foster_insert(dom::NodeId child) {
     const dom::NodeId table = nearest_table();
-    const dom::NodeId parent = table.valid() ? document_.parent(table) : current();
+    if (!table.valid()) {
+      // A table mode can be reached through a <template> only (`<template><tr><div>`
+      // or `<template><tbody><select>`); there is no table to foster relative to,
+      // so the node simply joins the template's contents after what is already
+      // there — html5lib's corpus has no table-less foster parent at all.
+      for (std::size_t i = stack_.size(); i > 0; --i) {
+        if (tag_of(stack_[i - 1]) == "template") {
+          const dom::NodeId content = template_content(stack_[i - 1]);
+          document_.append_child(content.valid() ? content : stack_[i - 1], child);
+          return;
+        }
+      }
+      document_.append_child(current(), child);
+      return;
+    }
+    const dom::NodeId parent = document_.parent(table);
     if (!parent.valid()) {
       document_.append_child(current(), child);
       return;
@@ -545,9 +567,14 @@ class TreeBuilder {
     return -1;
   }
 
+  /// Attribute-list equality for the "Noah's Ark" clause. `attributes()` hands
+  /// out a span over one shared staging buffer, so the first list is copied out
+  /// before the second one is queried (otherwise both spans alias the buffer and
+  /// every comparison trivially succeeds).
   [[nodiscard]] bool same_attributes(dom::NodeId a, dom::NodeId b) const {
-    const auto left = document_.attributes(a);
-    const auto right = document_.attributes(b);
+    const std::span<const dom::Attribute> span = document_.attributes(a);
+    const std::vector<dom::Attribute> left(span.begin(), span.end());
+    const std::span<const dom::Attribute> right = document_.attributes(b);
     if (left.size() != right.size()) return false;
     for (const dom::Attribute& attribute : left) {
       if (document_.attribute(b, attribute.name) != attribute.value) return false;
@@ -775,15 +802,21 @@ class TreeBuilder {
     return false;
   }
 
+  /// The element types that end a plain "in scope" walk. `<select>` is one of
+  /// them since the customizable-`<select>` rules replaced the old "in select"
+  /// insertion mode: it keeps `</font>` from reaching a formatting element that
+  /// sits outside the select (`<font><select><option>a</option></font>`).
+  [[nodiscard]] static bool is_default_scope_boundary(std::string_view tag) {
+    return tag == "applet" || tag == "caption" || tag == "html" || tag == "table" || tag == "td" ||
+           tag == "th" || tag == "marquee" || tag == "object" || tag == "select" || tag == "template";
+  }
+
   /// True when `tag` is open above the nearest scope boundary.
   [[nodiscard]] bool tag_in_scope(std::string_view tag, bool list_scope = false) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       const std::string_view top = tag_of(stack_[i - 1]);
       if (top == tag) return true;
-      if (top == "applet" || top == "caption" || top == "html" || top == "table" || top == "td" ||
-          top == "th" || top == "marquee" || top == "object" || top == "template") {
-        return false;
-      }
+      if (is_default_scope_boundary(top)) return false;
       if (list_scope && (top == "ol" || top == "ul" || top == "dl")) return false;
     }
     return false;
@@ -793,11 +826,7 @@ class TreeBuilder {
   [[nodiscard]] bool in_scope(dom::NodeId node) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
       if (stack_[i - 1] == node) return true;
-      const std::string_view tag = document_.tag_name(stack_[i - 1]);
-      if (tag == "applet" || tag == "caption" || tag == "html" || tag == "table" || tag == "td" ||
-          tag == "th" || tag == "marquee" || tag == "object" || tag == "template") {
-        return false;
-      }
+      if (is_default_scope_boundary(document_.tag_name(stack_[i - 1]))) return false;
     }
     return false;
   }
@@ -1003,6 +1032,10 @@ class TreeBuilder {
       return true;
     }
     implied_end_tags(name);
+    // "Any other start tag" reconstructs the active formatting elements; with
+    // foster parenting still on, those clones land in front of the table
+    // (`<table><center><font>a</center> <img>` keeps the <font> alive).
+    if (!contains(kNoReconstruct, name)) reconstruct_formatting();
     const dom::NodeId element = make_element(token);
     insert_node(element);
     if (!contains(kVoid, name)) stack_.push_back(element);
@@ -1610,7 +1643,7 @@ class TreeBuilder {
       if (temporary_head) remove_from_stack(index_in_stack(head_));
       if (name == "template") {  // a template opened in "in head"/"after head"
         push_marker();
-        template_modes_.push_back(Mode::Body);
+        template_modes_.push_back(Mode::Template);  // the "in template" mode
       }
       return;
     }
@@ -1695,31 +1728,44 @@ class TreeBuilder {
       }
     }
 
-    // --- "in template": table-ish tags switch the template insertion mode ---
-    if (!stack_.empty() && tag_of(stack_.back()) == "template" && !template_modes_.empty() &&
-        template_modes_.back() == Mode::Body) {  // only from "in template" itself
+    // --- "in caption": a table part closes the caption and is reprocessed ------
+    // Otherwise `<table><caption><td>` would drop the cell: the caption is "in
+    // body" for ordinary content, but a table token has to pop it first.
+    if (is_table_part(name) && in_table_scope("caption")) {
+      report("html.caption_closed_by_table_part",
+             "<" + std::string(name) + "> closes the surrounding <caption>");
+      generate_implied_end_tags();
+      pop_through("caption");
+      clear_to_last_marker();
+      handle_start_tag(token);
+      return;
+    }
+
+    // --- "in template": the first content token picks the template's mode ------
+    // A freshly opened <template> is "in template": table-ish tokens switch to the
+    // matching table mode, everything else switches to "in body". The choice is
+    // remembered per template (that is what `mode()` reports while the template is
+    // the current node), so content *after* that first token is no longer
+    // table-ish: `<template><div>x</div><tr>` drops the row, it does not grow a
+    // table, and `<template><tr>` still builds one inside the contents. The
+    // head-ish tokens (`<script>`, `<meta>`, `<template>`, …) are handed to the
+    // "in head" rules below and leave the template's mode untouched.
+    if (mode() == Mode::Template && !(name != "noscript" && contains(kHeadElements, name))) {
       Mode& current = template_modes_.back();
       const std::string_view t = name;
       if (t == "caption" || t == "colgroup" || t == "tbody" || t == "tfoot" || t == "thead") {
         current = Mode::Table;
-        handle_start_tag(token);
-        return;
-      }
-      if (t == "col") {
+      } else if (t == "col") {
         current = Mode::ColumnGroup;
-        handle_start_tag(token);
-        return;
-      }
-      if (t == "tr") {
+      } else if (t == "tr") {
         current = Mode::TableBody;
-        handle_start_tag(token);
-        return;
-      }
-      if (t == "td" || t == "th") {
+      } else if (t == "td" || t == "th") {
         current = Mode::Row;
-        handle_start_tag(token);
-        return;
+      } else {
+        current = Mode::Body;
       }
+      handle_start_tag(token);
+      return;
     }
 
     // --- insertion modes --------------------------------------------------
@@ -1742,6 +1788,7 @@ class TreeBuilder {
         if (column_group_start(token)) return;
         break;
       case Mode::Body:
+      case Mode::Template:  // unreachable: "in template" is handled above
         break;
     }
 
@@ -1768,7 +1815,7 @@ class TreeBuilder {
     if (name == "td" || name == "th" || name == "caption" || name == "applet" || name == "object" ||
         name == "marquee" || name == "template") {
       push_marker();
-      if (name == "template") template_modes_.push_back(Mode::Body);
+      if (name == "template") template_modes_.push_back(Mode::Template);
     }
   }
 
@@ -1834,6 +1881,13 @@ class TreeBuilder {
         break;
       case Mode::ColumnGroup:
         if (column_group_end(name)) return;
+        break;
+      case Mode::Template:
+        // "In template" ignores every end tag but `</template>` itself.
+        if (name != "template") {
+          report("html.ignored_in_template", "</" + std::string(name) + "> ignored in <template>");
+          return;
+        }
         break;
       case Mode::Body:
         break;
@@ -1985,6 +2039,31 @@ class TreeBuilder {
       report("html.stray_end_tag", "</template> without an open <template>");
       return;
     }
+    if (name == "form") {
+      // "</form>" is driven by the form element pointer, not by the stack: inside a
+      // table the form element is popped as soon as it is inserted, so the token
+      // has to reach it through the pointer and drop it from the stack only when
+      // it is still open (`</form>` inside `<table>` clears the pointer and
+      // leaves the table alone).
+      if (!has_open("template")) {
+        const dom::NodeId node = form_;
+        form_ = dom::NodeId{};
+        if (!node.valid() || !in_scope(node)) {
+          report("html.ignored_end_tag", "</form> without an open form");
+          return;
+        }
+        generate_implied_end_tags();
+        remove_from_stack(index_in_stack(node));  // random access: not the current node
+        return;
+      }
+      if (!tag_in_scope("form")) {
+        report("html.ignored_end_tag", "</form> ignored: no form in scope");
+        return;
+      }
+      generate_implied_end_tags();
+      pop_through("form");
+      return;
+    }
     if (is_formatting(name)) {
       adoption_agency(name);
       return;
@@ -1998,6 +2077,76 @@ class TreeBuilder {
       if (!head_created()) ensure_head();
     }
     stack_.clear();
+    update_selected_content();
+  }
+
+  /// Collects the descendants of `node` whose tag is `tag`, in tree order.
+  void collect_descendants(dom::NodeId node, std::string_view tag, std::vector<dom::NodeId>& out) const {
+    for (const dom::NodeId child : document_.children(node)) {
+      if (document_.type(child) == dom::NodeType::Element && document_.tag_name(child) == tag) {
+        out.push_back(child);
+      }
+      collect_descendants(child, tag, out);  // also walks into <template> contents
+    }
+  }
+
+  /// Deep-copies the children of `source` under `target` (elements with their
+  /// attributes, text and comments — the nodes a <selectedcontent> can hold).
+  void clone_children(dom::NodeId source, dom::NodeId target) {
+    for (const dom::NodeId child : document_.children(source)) {
+      switch (document_.type(child)) {
+        case dom::NodeType::Element: {
+          const dom::NodeId copy = document_.create_element(document_.tag_name(child));
+          for (const dom::Attribute& attribute : document_.attributes(child)) {
+            document_.set_attribute(copy, attribute.name, attribute.value);
+          }
+          document_.append_child(target, copy);
+          clone_children(child, copy);
+          break;
+        }
+        case dom::NodeType::Text:
+          document_.append_child(target, document_.create_text(document_.text_data(child)));
+          break;
+        case dom::NodeType::Comment:
+          document_.append_child(target, document_.create_comment(document_.text_data(child)));
+          break;
+        default:
+          break;
+      }
+    }
+  }
+
+  /// "Update a select's descendant selectedcontent element" (customizable
+  /// <select>): the contents of the selected <option> are mirrored into the
+  /// <selectedcontent> the parser puts inside the select's <button>, so the tree
+  /// already shows what a UA would display.
+  void update_selected_content() {
+    std::vector<dom::NodeId> selects;
+    collect_descendants(document_.root(), "select", selects);
+    for (const dom::NodeId select : selects) {
+      std::vector<dom::NodeId> options;
+      collect_descendants(select, "option", options);
+      if (options.empty()) continue;
+      std::vector<dom::NodeId> contents;
+      collect_descendants(select, "selectedcontent", contents);
+      if (contents.empty()) continue;
+      // The selected option: the last one carrying a `selected` attribute, or the
+      // first option otherwise.
+      dom::NodeId chosen = options.front();
+      for (const dom::NodeId option : options) {
+        for (const dom::Attribute& attribute : document_.attributes(option)) {
+          if (attribute.name == "selected") {
+            chosen = option;
+            break;
+          }
+        }
+      }
+      const dom::NodeId content = contents.front();
+      while (document_.first_child(content).valid()) {
+        document_.remove_child(content, document_.first_child(content));
+      }
+      clone_children(chosen, content);
+    }
   }
 
   dom::Document& document_;

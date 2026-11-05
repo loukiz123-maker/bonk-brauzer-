@@ -48,9 +48,13 @@ BONK_TEST(conformance, tokenizer_corpus_missing_directory_is_not_an_error) {
 }
 
 BONK_TEST(conformance, tree_corpus_matches_the_expected_outlines) {
+  // The last fixture is the interesting one: a blank line *inside* a `#document`
+  // section is the continuation line of a text node that holds a newline, so
+  // `"\n\n"` and `"\n\n\n"` do not look the same. Only the blank lines that
+  // separate the section from the next `#...` header are dropped.
   const SuiteReport report = run_tree_corpus("tests/conformance/data/tree");
-  CHECK_EQ(report.total, static_cast<std::size_t>(3));
-  CHECK_EQ(report.passed, static_cast<std::size_t>(3));
+  CHECK_EQ(report.total, static_cast<std::size_t>(4));
+  CHECK_EQ(report.passed, static_cast<std::size_t>(4));
   CHECK_EQ(report.failed(), static_cast<std::size_t>(0));
 }
 

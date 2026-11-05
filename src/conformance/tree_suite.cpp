@@ -65,11 +65,35 @@ struct Case {
   bool in_data = false;
   bool in_document = false;
   bool in_errors = false;
+  // Blank lines *inside* a `#document` section are the continuation lines of a text
+  // node that holds a newline, so they carry meaning (`"\n\n"` and `"\n\n\n"`
+  // print differently). Only the blank lines that separate the section from the next
+  // `#...` header are dropped — hence the trim on every section change.
+  const auto trim_trailing = [&current] {
+    while (!current.expected.empty() && current.expected.back().empty()) current.expected.pop_back();
+  };
+  const auto flush = [&cases, &current, &trim_trailing] {
+    trim_trailing();
+    if (!current.expected.empty() || !current.data.empty()) cases.push_back(current);
+    current = Case{};
+  };
+  const auto is_header = [](const std::string& line) {
+    return line == "#data" || line == "#errors" || line == "#new-errors" || line == "#document" ||
+           line == "#document-fragment" || line == "#script-on" || line == "#script-off";
+  };
   for (const std::string& line : lines) {
+    if (in_document && !is_header(line)) {
+      // Indentation matters: html5lib prints the continuation lines of a text node
+      // that contains a newline verbatim, leading spaces and all. Only a CR from a
+      // CRLF checkout is stripped.
+      std::string_view kept = line;
+      while (!kept.empty() && kept.back() == '\r') kept.remove_suffix(1);
+      current.expected.emplace_back(kept);
+      continue;
+    }
     if (line == "#data") {
       if (!current.expected.empty()) {  // previous case without a #document section
-        cases.push_back(current);
-        current = Case{};
+        flush();
       }
       in_data = true;
       in_document = false;
@@ -77,18 +101,21 @@ struct Case {
       continue;
     }
     if (line == "#document") {
+      trim_trailing();
       in_data = false;
       in_document = true;
       in_errors = false;
       continue;
     }
     if (line == "#errors" || line == "#new-errors") {
+      trim_trailing();
       in_data = false;
       in_document = false;
       in_errors = true;
       continue;
     }
     if (line == "#document-fragment") {
+      trim_trailing();
       current.fragment_context = "?";  // marker: the next line holds the tag name
       in_data = false;
       in_document = false;
@@ -97,8 +124,7 @@ struct Case {
     }
     if (line == "#script-on" || line == "#script-off") {
       if (!current.expected.empty()) {
-        cases.push_back(current);
-        current = Case{};
+        flush();
       }
       current.scripting = line == "#script-on";
       in_data = false;
@@ -115,19 +141,9 @@ struct Case {
       current.fragment_context = trim_copy(line);  // the context element's tag name
       continue;
     }
-    if (in_document) {
-      if (line.empty()) continue;
-      // Indentation matters: html5lib prints the continuation lines of a text node
-      // that contains a newline verbatim, leading spaces and all. Only a CR from a
-      // CRLF checkout is stripped.
-      std::string_view kept = line;
-      while (!kept.empty() && kept.back() == '\r') kept.remove_suffix(1);
-      current.expected.push_back(std::string(kept));
-      continue;
-    }
     (void)in_errors;
   }
-  if (!current.expected.empty() || !current.data.empty()) cases.push_back(current);
+  flush();
   return cases;
 }
 
