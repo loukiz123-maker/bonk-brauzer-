@@ -36,6 +36,7 @@ struct Case {
   std::string data;
   std::vector<std::string> expected;  // lines of the "#document" section
   std::string fragment_context;       // non-empty: the "#document-fragment" tag name
+  bool scripting = false;             // "#script-on" cases need the scripting flag
 };
 
 [[nodiscard]] std::string trim_copy(std::string_view text) {
@@ -99,6 +100,7 @@ struct Case {
         cases.push_back(current);
         current = Case{};
       }
+      current.scripting = line == "#script-on";
       in_data = false;
       in_document = false;
       in_errors = false;
@@ -233,6 +235,7 @@ SuiteReport run_tree_corpus(std::string_view directory, const SuiteOptions& opti
 
       dom::Document document;
       html::ParseOptions parse_options;
+      parse_options.scripting_enabled = test.scripting;
       std::vector<std::string> actual;
       const bool fragment = !test.fragment_context.empty() && test.fragment_context != "?";
       if (fragment) {

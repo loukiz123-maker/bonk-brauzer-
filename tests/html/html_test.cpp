@@ -470,3 +470,73 @@ BONK_TEST(html, comment_after_html_end_tag_stays_on_the_html_element) {
   CHECK_EQ(parse_and_serialize("</html><!--x-->"),
            std::string("<html><head></head><body></body><!--x--></html>"));
 }
+
+BONK_TEST(html, frameset_ok_ignores_ordinary_blocks) {
+  CHECK_EQ(parse_and_serialize("<div><frameset><frame></frameset>"),
+           std::string("<html><head></head><frameset><frame></frameset></html>"));
+}
+
+BONK_TEST(html, body_content_blocks_a_frameset) {
+  // <pre>/<li>/<br>/… set the frameset-ok flag to "not ok", so the frameset is
+  // dropped and the body survives.
+  CHECK_EQ(parse_and_serialize("<pre><frameset></frameset>"),
+           std::string("<html><head></head><body><pre></pre></body></html>"));
+  CHECK_EQ(parse_and_serialize("<br><frameset></frameset>"),
+           std::string("<html><head></head><body><br></body></html>"));
+  // Ordinary block content does not touch the flag.
+  CHECK_EQ(parse_and_serialize("<div><frameset></frameset>"),
+           std::string("<html><head></head><frameset></frameset></html>"));
+}
+
+BONK_TEST(html, image_is_renamed_to_img) {
+  CHECK_EQ(parse_and_serialize("<image src=x>"),
+           std::string("<html><head></head><body><img src=\"x\"></body></html>"));
+}
+
+BONK_TEST(html, pre_swallows_one_newline) {
+  CHECK_EQ(parse_and_serialize("<pre>\n\ntext</pre>"),
+           std::string("<html><head></head><body><pre>\ntext</pre></body></html>"));
+  CHECK_EQ(parse_and_serialize("<listing>\ntext</listing>"),
+           std::string("<html><head></head><body><listing>text</listing></body></html>"));
+}
+
+BONK_TEST(html, noscript_in_head_keeps_only_head_elements) {
+  // Scripting is off, so `<noscript>` in <head> is a container: <basefont> and
+  // comments stay inside it, while a <p> closes it and lands in the body.
+  CHECK_EQ(parse_and_serialize("<head><noscript><basefont><!--x--></noscript>"),
+           std::string("<html><head><noscript><basefont><!--x--></noscript></head><body></body></html>"));
+  CHECK_EQ(parse_and_serialize("<head><noscript><p>x"),
+           std::string("<html><head><noscript></noscript></head><body><p>x</p></body></html>"));
+}
+
+BONK_TEST(html, noscript_is_raw_text_with_scripting) {
+  ParseOptions options;
+  options.scripting_enabled = true;
+  dom::Document document;
+  CHECK(parse_html("<head><noscript><p>x</noscript>", document, nullptr, options).is_ok());
+  CHECK_EQ(document.to_html(document.root()),
+           std::string("<html><head><noscript>&lt;p&gt;x</noscript></head><body></body></html>"));
+}
+
+BONK_TEST(html, plaintext_inside_a_table_is_fostered_and_swallows_the_rest) {
+  // `to_html` escapes text everywhere, so the swallowed markup shows up escaped.
+  CHECK_EQ(parse_and_serialize("<table><plaintext>a</table>b"),
+           std::string("<html><head></head><body><plaintext>a&lt;/table&gt;b</plaintext><table></table></body></html>"));
+}
+
+BONK_TEST(html, hidden_input_stays_inside_a_table) {
+  // `type=hidDEN` is a case-insensitive match for "hidden": no foster parenting.
+  CHECK_EQ(parse_and_serialize("<table><input type=hidDEN></table>"),
+           std::string("<html><head></head><body><table><input type=\"hidDEN\"></table></body></html>"));
+}
+
+BONK_TEST(html, second_form_is_ignored) {
+  CHECK_EQ(parse_and_serialize("<form><form><input></form>"),
+           std::string("<html><head></head><body><form><input></form></body></html>"));
+}
+
+BONK_TEST(html, select_in_table_closes_on_table_tokens) {
+  CHECK_EQ(parse_and_serialize("<table><select><option>A<tr><td>B</td></tr></table>"),
+           std::string("<html><head></head><body><select><option>A</option></select><table><tbody><tr><td>B</td>"
+                       "</tr></tbody></table></body></html>"));
+}

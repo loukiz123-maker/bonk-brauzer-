@@ -254,6 +254,29 @@ reftests — 7/7, юнит-тестов 353. Открыто: `template`/`framese
 SVG/MathML, рендеринг frameset'ов.
 
 
+## Этап 14 — frameset, `noscript` со scripting и правила head
+
+Флаг `frameset-ok` переписан как список тегов, которые его **сбрасывают**
+(`pre`, `br`, `table`, `input` без `type=hidden`, …), поэтому `<div><frameset>`
+даёт frameset-документ, а `<br><frameset>` — `<body>`. `<noscript>` стал двумя
+элементами: RAWTEXT при включённом scripting и контейнер с режимом «in head
+noscript» при выключенном (раннер теперь читает `#script-on`/`#script-off`).
+Добавлены отбрасывание первого LF в `pre`/`listing`/`textarea`, `<image>` → `<img>`,
+регистронезависимый `type=hidden`, указатель на открытый `<form>`, `plaintext`
+в любом режиме, «in select in table», `</p>` по button scope и режимы
+«after body»/«after frameset» для комментариев. Подробности:
+[`docs/STAGE-14.md`](STAGE-14.md), решение —
+[`docs/adr/0016-frameset-ok-and-noscript.md`](adr/0016-frameset-ok-and-noscript.md).
+
+**Критерий выхода**: решения о типе документа совпадают со стандартом,
+`noscript`/`pre` ведут себя как в браузере, регрессий нет. Сейчас: tree
+construction — 1 446/1 535 (94.2 %, было 87.3 %), токенайзер — 6 281/6 820
+(92.1 %), test262 — 2 673/13 254 (20.2 %), reftests — 7/7, юнит-тестов 379.
+Открыто: adoption agency (furthest block, `<marquee>`/`<nobr>`), `template`/
+`frameset`, caption-режим, внешний контент SVG/MathML, DOCTYPE-идентификаторы,
+рендеринг frameset'ов.
+
+
 ---
 
 ## Риски и как их снимаем
