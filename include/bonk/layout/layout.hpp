@@ -3,13 +3,16 @@
 // Implemented: block formatting context (with vertical margin collapsing), inline
 // formatting context (line boxes, word wrapping, text-align), box model with
 // em/rem/%/auto resolution, list markers, inline-block images and canvases as
-// atomic inlines, and (stage 5) flexbox + grid containers.
+// atomic inlines, (stage 5) flexbox + grid containers and (stage 20) positioning:
+// `position: relative | absolute | fixed` with `top/right/bottom/left`, containing
+// block resolution and `z-index` paint order.
 //
 // Flexbox: row/column and their reverse, nowrap/wrap, justify-content, align-items,
 // gap, flex-grow/shrink/basis. Grid: explicit `grid-template-columns/rows` with
 // px/%/fr/auto and `repeat()`, auto-placement row by row, row/column gaps.
-// Not implemented yet: floats, absolute/fixed positioning, tables, bidi text,
-// grid areas / explicit placement (grid-column/grid-row).
+// Not implemented yet: floats, `position: sticky`, overflow clipping, tables in the
+// HTML sense (only the `display: table*` boxes exist), bidi text, grid areas /
+// explicit placement (grid-column/grid-row).
 #pragma once
 
 #include <string>
@@ -61,7 +64,15 @@ struct Box {
   float marker_x = 0.0f;     // bullet position (left of the content box)
   const image::Image* image = nullptr;  // Image boxes: decoded bitmap, may be null
 
-  std::vector<Box> children;
+  /// Out-of-flow (`absolute`/`fixed`) box: it is not part of the normal flow, so its
+  /// siblings ignore it. Painted with `positioned`, never with `children`.
+  bool out_of_flow = false;
+  /// Anchored to the viewport: painting ignores the scroll offset.
+  bool fixed = false;
+  int z_index = 0;  // effective z-index (0 unless `position` is not static and it is set)
+
+  std::vector<Box> children;      // in-flow children, in document/paint order
+  std::vector<Box> positioned;    // out-of-flow children; painted above `children`
 
   [[nodiscard]] float content_width() const noexcept { return content_box.width; }
   [[nodiscard]] float content_height() const noexcept { return content_box.height; }
@@ -96,7 +107,9 @@ struct LayoutResult {
                                            const image::ImageStore* images = nullptr);
 
 /// Finds the deepest box containing a point (hit testing for links/clicks, used
-/// by the shell in stage 3 and by `--hit-test` in the CLI).
-[[nodiscard]] const Box* hit_test(const Box& root, float x, float y);
+/// by the shell in stage 3 and by `--hit-test` in the CLI). `x`/`y` are document
+/// coordinates: pass the current `scroll_y` so that `position: fixed` boxes — which
+/// are laid out in viewport space — are tested against the right point.
+[[nodiscard]] const Box* hit_test(const Box& root, float x, float y, float scroll_y = 0.0f);
 
 }  // namespace bonk::layout

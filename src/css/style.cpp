@@ -284,6 +284,45 @@ class StyleComputer {
       style.display = detail::display_from_keyword(value);
       return;
     }
+    if (property == "position") {
+      if (detail::equals_keyword(value, "static")) {
+        style.position = Position::Static;
+      } else if (detail::equals_keyword(value, "relative")) {
+        style.position = Position::Relative;
+      } else if (detail::equals_keyword(value, "absolute")) {
+        style.position = Position::Absolute;
+      } else if (detail::equals_keyword(value, "fixed")) {
+        style.position = Position::Fixed;
+      }
+      // `sticky` and unknown keywords keep the previous value: no silent downgrade of
+      // an author's `relative` when a later rule says `sticky`.
+      return;
+    }
+    if (property == "top" || property == "right" || property == "bottom" || property == "left") {
+      const int index = property == "top" ? 0 : property == "right" ? 1 : property == "bottom" ? 2 : 3;
+      if (detail::equals_keyword(value, "auto")) {
+        style.inset[index] = Length::auto_value();
+        return;
+      }
+      Length length;
+      if (detail::parse_length_value(value, length)) {
+        style.inset[index] = resolve_box_length(length, style.font_size, root_font_size_);
+      }
+      return;
+    }
+    if (property == "z-index") {
+      if (detail::equals_keyword(value, "auto")) {
+        style.has_z_index = false;
+        style.z_index = 0;
+        return;
+      }
+      float number = 0.0f;
+      if (parse_number(value, number)) {
+        style.z_index = static_cast<int>(number);
+        style.has_z_index = true;
+      }
+      return;
+    }
     if (property == "color") {
       Color color;
       if (parse_color(value, color)) style.color = color;

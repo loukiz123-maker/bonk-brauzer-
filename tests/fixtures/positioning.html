@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>positioning</title>
+  <style>
+    body { margin: 0; background: #f4f4f6; font-family: sans-serif }
+    header { position: fixed; left: 0; top: 0; width: 760px; height: 44px; background: #1f2933 }
+    header h1 { color: #ffffff; font-size: 18px; margin: 12px 0 0 16px; padding: 0 }
+    .content { position: relative; margin: 44px 0 0 0; padding: 24px }
+    .card { position: relative; width: 420px; height: 160px; background: #ffffff; border: 1px solid #c8ccd4 }
+    .card h2 { margin: 16px 0 0 16px; font-size: 16px; color: #1f2933 }
+    .card p { margin: 8px 16px 0 16px; font-size: 13px; color: #52606d }
+    .badge { position: absolute; right: 12px; top: 12px; width: 52px; height: 20px; background: #2f9e44 }
+    .badge span { color: #ffffff; font-size: 12px; margin: 3px 0 0 8px }
+    .pinned { position: absolute; left: 24px; top: 240px; width: 420px; height: 40px; background: #e8eefc }
+    .pinned p { margin: 12px 0 0 12px; font-size: 13px; color: #2b4b8f }
+    .moved { position: relative; left: 40px; top: 8px; width: 220px; height: 30px; background: #ffe8cc }
+    .moved p { margin: 7px 0 0 8px; font-size: 13px; color: #8a4b00 }
+    .filler { height: 260px }
+  </style>
+</head>
+<body>
+  <header><h1>Fixed header (position: fixed)</h1></header>
+  <div class="content">
+    <div class="card">
+      <h2>Card with a positioned badge</h2>
+      <p>The badge sits in the card's corner because the card is the containing block.</p>
+      <div class="badge"><span>new</span></div>
+    </div>
+    <div class="pinned"><p>Absolutely positioned banner: 24px from the content box, 240px from its top.</p></div>
+    <div class="moved"><p>Relative box: shifted 40px right, 8px down, siblings untouched.</p></div>
+    <div class="filler"></div>
+  </div>
+</body>
+</html>

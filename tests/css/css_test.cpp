@@ -228,3 +228,46 @@ BONK_TEST(css, foreign_type_selectors_keep_their_case) {
   CHECK_EQ(static_cast<int>(page.styles.get(page.document, foreign_object).color.r), 0x22);
   CHECK_EQ(static_cast<int>(page.styles.get(page.document, span).color.r), 0x33);
 }
+
+BONK_TEST(css, position_insets_and_z_index_are_parsed) {
+  StyledPage page("<body><div id=a></div><div id=b></div></body>",
+                  "#a { position: absolute; top: 10px; right: 5%; bottom: auto; left: -4px; z-index: 3 }"
+                  "#b { position: relative }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  const dom::NodeId b = page.document.query_selector(page.document.root(), "#b");
+  REQUIRE(a.valid() && b.valid());
+  const css::ComputedStyle& style = page.styles.get(page.document, a);
+  CHECK(style.position == css::Position::Absolute);
+  CHECK(style.is_positioned());
+  CHECK(style.is_out_of_flow());
+  CHECK_EQ(static_cast<int>(style.inset[0].value), 10);  // top
+  CHECK_EQ(static_cast<int>(style.inset[1].value), 5);   // right, percent
+  CHECK(style.inset[1].unit == css::Length::Unit::Percent);
+  CHECK(style.inset[2].is_auto());  // bottom: auto
+  CHECK_EQ(static_cast<int>(style.inset[3].value), -4);  // left
+  CHECK(style.has_z_index);
+  CHECK_EQ(style.z_index, 3);
+
+  const css::ComputedStyle& relative = page.styles.get(page.document, b);
+  CHECK(relative.position == css::Position::Relative);
+  CHECK(!relative.is_out_of_flow());
+  CHECK(!relative.has_z_index);
+  CHECK(relative.inset[0].is_auto());  // initial value of an inset is `auto`, not 0
+}
+
+BONK_TEST(css, unsupported_position_keyword_keeps_the_previous_value) {
+  // `sticky` is not modelled; a later `position: sticky` must not silently turn a
+  // positioned element back into a static one.
+  StyledPage page("<body><div id=a></div></body>", "#a { position: relative } #a { position: sticky }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  REQUIRE(a.valid());
+  CHECK(page.styles.get(page.document, a).position == css::Position::Relative);
+}
+
+BONK_TEST(css, z_index_auto_resets_a_previous_value) {
+  StyledPage page("<body><div id=a></div></body>", "#a { position: absolute; z-index: 7 } #a { z-index: auto }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  REQUIRE(a.valid());
+  CHECK(!page.styles.get(page.document, a).has_z_index);
+  CHECK_EQ(page.styles.get(page.document, a).z_index, 0);
+}

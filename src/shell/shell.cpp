@@ -594,7 +594,7 @@ ClickOutcome Session::click(float x, float y) {
   ClickOutcome outcome;
   if (layout_ == nullptr || document_ == nullptr) return outcome;
 
-  const layout::Box* hit = layout::hit_test(layout_->root, x, y + tab_.scroll_y);
+  const layout::Box* hit = layout::hit_test(layout_->root, x, y + tab_.scroll_y, tab_.scroll_y);
   if (hit == nullptr) return outcome;
 
   dom::NodeId node = hit->node;

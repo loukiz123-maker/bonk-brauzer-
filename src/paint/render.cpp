@@ -1,6 +1,7 @@
 #include "bonk/paint/render.hpp"
 
 #include <algorithm>
+#include <vector>
 
 namespace bonk::paint {
 namespace {
@@ -37,8 +38,16 @@ void paint_border(Canvas& canvas, const layout::Box& box, const Offset& offset) 
   }
 }
 
+/// Paints a box's out-of-flow children in z-index order. Positioned boxes always go
+/// above the in-flow content of the box that contains them.
+void paint_positioned(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
+                      const Offset& offset);
+
 void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
-               const Offset& offset) {
+               const Offset& offset_in) {
+  // `position: fixed` is anchored to the viewport, so the scroll offset must not
+  // move it (the whole subtree is painted with a zero offset).
+  const Offset offset = box.fixed ? Offset{0.0f, 0.0f} : offset_in;
   switch (box.kind) {
     case layout::BoxKind::Block: {
       if (box.style != nullptr) {
@@ -52,6 +61,7 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
         }
       }
       for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
+      paint_positioned(canvas, box, font, options, offset);
       return;
     }
     case layout::BoxKind::Text: {
@@ -98,9 +108,23 @@ void paint_box(Canvas& canvas, const layout::Box& box, const text::Font& font, c
         canvas.fill_rect(to_paint_rect(box.border_box, offset), box.style->background_color);
       }
       for (const layout::Box& child : box.children) paint_box(canvas, child, font, options, offset);
+      paint_positioned(canvas, box, font, options, offset);
       return;
     }
   }
+}
+
+void paint_positioned(Canvas& canvas, const layout::Box& box, const text::Font& font, const RenderOptions& options,
+                      const Offset& offset) {
+  if (box.positioned.empty()) return;
+  std::vector<const layout::Box*> stacked;
+  stacked.reserve(box.positioned.size());
+  for (const layout::Box& child : box.positioned) stacked.push_back(&child);
+  // Stable: equal z-index keeps document order, which is what authors expect for
+  // ordinary pages that never touch z-index at all.
+  std::stable_sort(stacked.begin(), stacked.end(),
+                   [](const layout::Box* a, const layout::Box* b) { return a->z_index < b->z_index; });
+  for (const layout::Box* child : stacked) paint_box(canvas, *child, font, options, offset);
 }
 
 }  // namespace

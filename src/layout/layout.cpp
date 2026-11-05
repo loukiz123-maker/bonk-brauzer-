@@ -40,6 +40,14 @@ struct InlineItem {
   bool is_space = false;  // collapses/breaks lines
 };
 
+/// Where an out-of-flow box would have been placed had it stayed in the flow. Only
+/// recorded for block-level children; elsewhere the containing block origin is used.
+struct StaticPosition {
+  dom::NodeId node;
+  float x = 0.0f;
+  float y = 0.0f;
+};
+
 class LayoutEngine {
  public:
   LayoutEngine(const dom::Document& document, const css::StyleMap& styles, const text::Font& font,
@@ -65,6 +73,15 @@ class LayoutEngine {
     float height = layout_block_children(root, 0.0f, 0.0f, viewport_.width);
     root.content_box.height = height;
     root.border_box.height = height;
+
+    // Positioning is a second pass: insets are resolved against a containing block,
+    // which only has final coordinates once the whole normal flow is laid out.
+    apply_relative_offsets(root);
+    place_positioned(root, true);
+    height = std::max(height, positioned_bottom(root));
+    root.content_box.height = height;
+    root.border_box.height = height;
+
     result.root = std::move(root);
     result.document_height = height;
     result.content_width = viewport_.width;
@@ -145,6 +162,7 @@ class LayoutEngine {
 
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
+      if (style.is_out_of_flow()) continue;
 
       if (document_.tag_name(child) == "br") {
         // <br> is a hard line break, exactly like "\n" inside <pre>.
@@ -461,6 +479,7 @@ class LayoutEngine {
       if (type != dom::NodeType::Element) continue;
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
+      if (style.is_out_of_flow()) continue;
       float outer = 0.0f;
       if (document_.tag_name(child) == "br") continue;  // zero-width in a max-content measure
 
@@ -550,6 +569,7 @@ class LayoutEngine {
       if (document_.type(child) != dom::NodeType::Element) continue;
       const css::ComputedStyle& child_style = styles_.get(document_, child);
       if (child_style.display == css::Display::None) continue;
+      if (child_style.is_out_of_flow()) continue;
       FlexItem item;
       item.node = child;
       item.style = &child_style;
@@ -789,6 +809,7 @@ class LayoutEngine {
       if (document_.type(child) != dom::NodeType::Element) continue;
       const css::ComputedStyle& child_style = styles_.get(document_, child);
       if (child_style.display == css::Display::None) continue;
+      if (child_style.is_out_of_flow()) continue;
       cells.push_back(child);
       if (child_style.width.is_auto()) {
         ++automatic;
@@ -854,6 +875,7 @@ class LayoutEngine {
     for (const dom::NodeId child : document_.children(container.node)) {
       if (document_.type(child) != dom::NodeType::Element) continue;
       if (styles_.get(document_, child).display == css::Display::None) continue;
+      if (styles_.get(document_, child).is_out_of_flow()) continue;
       cells.push_back(child);
     }
     if (cells.empty()) return 0.0f;
@@ -971,6 +993,213 @@ class LayoutEngine {
     return std::max(0.0f, y - container.content_box.y - (row_count > 0 ? row_gap : 0.0f));
   }
 
+  // --- positioning (stage 20) --------------------------------------------
+
+  /// Shifts a laid-out subtree. Boxes are laid out at absolute coordinates, so a
+  /// single delta covers the whole subtree (children included).
+  static void translate(Box& box, float dx, float dy) {
+    if (dx == 0.0f && dy == 0.0f) return;
+    box.border_box.x += dx;
+    box.border_box.y += dy;
+    box.content_box.x += dx;
+    box.content_box.y += dy;
+    box.marker_x += dx;
+    for (Box& child : box.children) translate(child, dx, dy);
+    for (Box& child : box.positioned) translate(child, dx, dy);
+  }
+
+  [[nodiscard]] static Rect padding_box(const Box& box) {
+    return Rect{box.content_box.x - box.padding[3], box.content_box.y - box.padding[0],
+                box.content_box.width + box.padding[1] + box.padding[3],
+                box.content_box.height + box.padding[0] + box.padding[2]};
+  }
+
+  /// `position: fixed` is always anchored to the viewport, everything else to the
+  /// nearest positioned ancestor; with none, to the initial containing block.
+  [[nodiscard]] bool is_containing_block(dom::NodeId node, dom::NodeId candidate, bool candidate_is_root) const {
+    for (dom::NodeId parent = document_.parent(node); parent.valid(); parent = document_.parent(parent)) {
+      if (styles_.get(document_, parent).is_positioned()) return parent == candidate;
+    }
+    return candidate_is_root;
+  }
+
+  /// Collects the out-of-flow descendants whose containing block is `candidate`.
+  /// The walk stops at any positioned element: it establishes its own containing
+  /// block, and its descendants are placed in its own pass.
+  void collect_out_of_flow(dom::NodeId parent, dom::NodeId candidate, bool candidate_is_root,
+                           std::vector<dom::NodeId>& out) const {
+    for (const dom::NodeId child : document_.children(parent)) {
+      if (document_.type(child) != dom::NodeType::Element) continue;
+      const css::ComputedStyle& style = styles_.get(document_, child);
+      if (style.display == css::Display::None) continue;
+      if (style.position == css::Position::Fixed) {
+        if (candidate_is_root) out.push_back(child);  // the viewport is its containing block
+        continue;
+      }
+      if (style.is_out_of_flow()) {
+        if (is_containing_block(child, candidate, candidate_is_root)) out.push_back(child);
+        continue;
+      }
+      if (style.is_positioned()) continue;
+      collect_out_of_flow(child, candidate, candidate_is_root, out);
+    }
+  }
+
+  [[nodiscard]] bool recorded_static_position(dom::NodeId node, float& x, float& y) const {
+    for (const StaticPosition& position : static_positions_) {
+      if (position.node == node) {
+        x = position.x;
+        y = position.y;
+        return true;
+      }
+    }
+    return false;
+  }
+
+  /// Lays out one absolutely positioned box inside `cb` (its containing block).
+  /// `box.content_box.y` starts at 0 and is translated into place at the end: the
+  /// `bottom` inset depends on the box's own height, which is only known after the
+  /// content is laid out.
+  Box layout_positioned_box(dom::NodeId node, const Rect& cb) {
+    const css::ComputedStyle& style = styles_.get(document_, node);
+    Box box;
+    box.kind = BoxKind::Block;
+    box.node = node;
+    box.style = &style;
+    box.out_of_flow = true;
+    box.fixed = style.position == css::Position::Fixed;
+    box.z_index = style.has_z_index ? style.z_index : 0;
+    compute_edges(box, style, cb.width);
+
+    const float horizontal = box.border[1] + box.border[3] + box.padding[1] + box.padding[3];
+    const float left = style.inset[3].is_auto() ? -1.0f : resolve(style.inset[3], style.font_size, cb.width);
+    const float right = style.inset[1].is_auto() ? -1.0f : resolve(style.inset[1], style.font_size, cb.width);
+
+    float content_width = 0.0f;
+    if (!style.width.is_auto()) {
+      content_width = resolve(style.width, style.font_size, cb.width);
+    } else if (left >= 0.0f && right >= 0.0f) {
+      // Both insets are given: the box is stretched to whatever is left between them.
+      content_width = cb.width - left - right - box.margin[1] - box.margin[3] - horizontal;
+    } else {
+      // Shrink-to-fit: as wide as the content wants, but never wider than the space
+      // between the used inset and the far edge of the containing block.
+      const float used_left = left >= 0.0f ? left : 0.0f;
+      const float used_right = right >= 0.0f ? right : 0.0f;
+      const float available =
+          cb.width - used_left - used_right - box.margin[1] - box.margin[3] - horizontal;
+      content_width = std::min(intrinsic_width(node) + horizontal, available) - horizontal;
+    }
+    if (style.min_width > 0.0f) content_width = std::max(content_width, style.min_width);
+    if (style.max_width > 0.0f) content_width = std::min(content_width, style.max_width);
+    content_width = std::max(0.0f, content_width);
+
+    const float border_width = content_width + horizontal;
+    float static_x = cb.x;
+    float static_y = cb.y;
+    if (!recorded_static_position(node, static_x, static_y)) {
+      static_x = cb.x;  // not a block-level child: fall back to the containing block origin
+      static_y = cb.y;
+    }
+
+    float x = static_x;
+    if (left >= 0.0f) {
+      x = cb.x + left + box.margin[3];
+    } else if (right >= 0.0f) {
+      x = cb.right() - right - box.margin[1] - border_width;
+    }
+
+    box.border_box = Rect{x, 0.0f, border_width, 0.0f};
+    box.content_box =
+        Rect{x + box.border[3] + box.padding[3], box.border[0] + box.padding[0], content_width, 0.0f};
+    const float content_height = layout_content(box, content_width);
+
+    const float explicit_height =
+        style.height.is_auto() ? -1.0f : resolve(style.height, style.font_size, cb.height);
+    float total_height = explicit_height >= 0.0f ? explicit_height : content_height;
+    total_height = std::max(total_height, style.min_height);
+    box.content_box.height = total_height;
+    box.border_box.height = total_height + box.padding[0] + box.padding[2] + box.border[0] + box.border[2];
+
+    const float top = style.inset[0].is_auto() ? -1.0f : resolve(style.inset[0], style.font_size, cb.height);
+    const float bottom = style.inset[2].is_auto() ? -1.0f : resolve(style.inset[2], style.font_size, cb.height);
+    float y = static_y;
+    if (top >= 0.0f) {
+      y = cb.y + top + box.margin[0];
+    } else if (bottom >= 0.0f) {
+      y = cb.bottom() - bottom - box.margin[2] - box.border_box.height;
+    }
+    translate(box, 0.0f, y);
+    return box;
+  }
+
+  /// `position: relative` keeps the box in the flow but shifts it (and its subtree)
+  /// by the insets; siblings stay where they were.
+  void apply_relative_offsets(Box& box) {
+    for (Box& child : box.children) {
+      if (child.style != nullptr && child.style->position == css::Position::Relative) {
+        const css::ComputedStyle& style = *child.style;
+        float dx = 0.0f;
+        float dy = 0.0f;
+        // Percentages resolve against the containing block: the parent's content box.
+        if (!style.inset[3].is_auto()) {
+          dx = resolve(style.inset[3], style.font_size, box.content_box.width);
+        } else if (!style.inset[1].is_auto()) {
+          dx = -resolve(style.inset[1], style.font_size, box.content_box.width);
+        }
+        if (!style.inset[0].is_auto()) {
+          dy = resolve(style.inset[0], style.font_size, box.content_box.height);
+        } else if (!style.inset[2].is_auto()) {
+          dy = -resolve(style.inset[2], style.font_size, box.content_box.height);
+        }
+        translate(child, dx, dy);
+      }
+      apply_relative_offsets(child);
+    }
+    for (Box& child : box.positioned) apply_relative_offsets(child);
+  }
+
+  /// Places every out-of-flow box whose containing block is `box`, then hands the
+  /// subtree to `descend_positioned()`: containing blocks further down get their own
+  /// pass (the nearest positioned ancestor owns an out-of-flow box, not the root).
+  void place_positioned(Box& box, bool is_root) {
+    std::vector<dom::NodeId> out_of_flow;
+    collect_out_of_flow(box.node, box.node, is_root, out_of_flow);
+    if (!out_of_flow.empty()) {
+      const Rect cb = is_root ? Rect{0.0f, 0.0f, viewport_.width, viewport_.height} : padding_box(box);
+      for (const dom::NodeId node : out_of_flow) {
+        Box child = layout_positioned_box(node, cb);
+        place_positioned(child, false);  // it is a containing block for its descendants
+        box.positioned.push_back(std::move(child));
+      }
+    }
+    for (Box& child : box.children) descend_positioned(child);
+  }
+
+  /// Walks the in-flow tree until it reaches a box that establishes a containing
+  /// block; that box places its own out-of-flow descendants.
+  void descend_positioned(Box& box) {
+    if (box.style != nullptr && box.style->is_positioned()) {
+      place_positioned(box, false);
+      return;
+    }
+    for (Box& child : box.children) descend_positioned(child);
+    // A box that is not positioned has no `positioned` children of its own.
+  }
+
+  /// Absolute boxes below the flow still make the page scrollable; `fixed` ones do
+  /// not (they are anchored to the viewport).
+  [[nodiscard]] float positioned_bottom(const Box& box) const {
+    float bottom = 0.0f;
+    for (const Box& child : box.positioned) {
+      if (child.fixed) continue;
+      bottom = std::max(bottom, child.border_box.bottom());
+      bottom = std::max(bottom, positioned_bottom(child));
+    }
+    for (const Box& child : box.children) bottom = std::max(bottom, positioned_bottom(child));
+    return bottom;
+  }
+
   // --- block content -----------------------------------------------------
   float layout_block_children(Box& box, float content_x, float start_y, float content_width) {
     float y = start_y;
@@ -1002,6 +1231,11 @@ class LayoutEngine {
 
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
+      // Out of flow: remembered for the positioning pass, skipped by the flow.
+      if (style.is_out_of_flow()) {
+        static_positions_.push_back(StaticPosition{child, content_x, y});
+        continue;
+      }
 
       if (is_block_level(style) && style.display != css::Display::InlineBlock) {
         flush_inline_run();
@@ -1084,6 +1318,8 @@ class LayoutEngine {
       if (document_.type(child) != dom::NodeType::Element) continue;
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
+      // Out-of-flow children are not part of the flow: they cannot be "block children".
+      if (style.is_out_of_flow()) continue;
       if (is_block_level(style) && style.display != css::Display::InlineBlock) return true;
     }
     return false;
@@ -1094,19 +1330,45 @@ class LayoutEngine {
   const text::Font& font_;
   LayoutViewport viewport_;
   const image::ImageStore* images_ = nullptr;
+  std::vector<StaticPosition> static_positions_;
 };
 
 }  // namespace
 
-const Box* hit_test(const Box& root, float x, float y) {
-  for (const Box& child : root.children) {
-    if (child.kind == BoxKind::Block && child.border_box.contains(x, y)) {
-      if (const Box* deeper = hit_test(child, x, y); deeper != nullptr) return deeper;
+namespace {
+
+/// `fixed` boxes are laid out in viewport space; everything else in document space.
+const Box* hit_test_box(const Box& box, float x, float y, float scroll_y, bool in_fixed) {
+  const bool is_fixed = in_fixed || box.fixed;
+  const float point_y = is_fixed ? y - scroll_y : y;
+  // Positioned boxes paint above the flow, so they are hit first — from the highest
+  // z-index down, which is the reverse of the paint order.
+  if (!box.positioned.empty()) {
+    std::vector<const Box*> stacked;
+    stacked.reserve(box.positioned.size());
+    for (const Box& child : box.positioned) stacked.push_back(&child);
+    std::stable_sort(stacked.begin(), stacked.end(),
+                     [](const Box* a, const Box* b) { return a->z_index < b->z_index; });
+    for (auto it = stacked.rbegin(); it != stacked.rend(); ++it) {
+      if (!(*it)->border_box.contains(x, point_y)) continue;
+      if (const Box* deeper = hit_test_box(**it, x, y, scroll_y, is_fixed)) return deeper;
+      return *it;
+    }
+  }
+  for (const Box& child : box.children) {
+    if (child.kind == BoxKind::Block && child.border_box.contains(x, point_y)) {
+      if (const Box* deeper = hit_test_box(child, x, y, scroll_y, is_fixed)) return deeper;
       return &child;
     }
-    if (child.border_box.contains(x, y)) return &child;
+    if (child.border_box.contains(x, point_y)) return &child;
   }
-  return root.border_box.contains(x, y) ? &root : nullptr;
+  return box.border_box.contains(x, point_y) ? &box : nullptr;
+}
+
+}  // namespace
+
+const Box* hit_test(const Box& root, float x, float y, float scroll_y) {
+  return hit_test_box(root, x, y, scroll_y, false);
 }
 
 LayoutResult layout_document(const dom::Document& document, const css::StyleMap& styles, const text::Font& font,

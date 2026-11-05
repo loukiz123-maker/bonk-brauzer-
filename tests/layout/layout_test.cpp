@@ -36,6 +36,10 @@ struct LayoutFixture {
     for (const layout::Box& child : box.children) {
       if (const layout::Box* found = find_by_node(child, node); found != nullptr) return found;
     }
+    // Out-of-flow boxes hang off their containing block, not off their DOM parent.
+    for (const layout::Box& child : box.positioned) {
+      if (const layout::Box* found = find_by_node(child, node); found != nullptr) return found;
+    }
     return nullptr;
   }
 
@@ -183,4 +187,182 @@ BONK_TEST(layout, inline_elements_inherit_style_and_stay_on_line) {
   float last_x = -1.0f;
   for (const layout::Box* line : lines) last_x = std::max(last_x, line->border_box.right());
   CHECK(last_x > 30.0f);
+}
+
+// --- positioning (stage 20) ---------------------------------------------------
+
+BONK_TEST(layout, absolute_insets_place_the_box_inside_a_relative_parent) {
+  LayoutFixture fixture(
+      "<div id=\"parent\"><div id=\"abs\">x</div></div><div id=\"after\">after</div>",
+      "#parent { position: relative; width: 200px; height: 100px; padding: 10px; border: 5px solid #000 }"
+      "#abs { position: absolute; left: 20px; top: 30px; width: 50px; height: 40px }");
+  const layout::Box* parent = fixture.find_block("#parent");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(parent != nullptr);
+  REQUIRE(abs != nullptr);
+  // The containing block is the parent's *padding* box: its content origin is
+  // (border 5 + padding 10) = 15, and the padding box starts at the border edge 5.
+  const float padding_x = parent->content_box.x - parent->padding[3];
+  const float padding_y = parent->content_box.y - parent->padding[0];
+  CHECK_EQ(abs->border_box.x, padding_x + 20.0f);
+  CHECK_EQ(abs->border_box.y, padding_y + 30.0f);
+  CHECK_EQ(abs->border_box.width, 50.0f);
+  CHECK_EQ(abs->border_box.height, 40.0f);
+  CHECK(abs->out_of_flow);
+  CHECK(!abs->fixed);
+}
+
+BONK_TEST(layout, absolute_box_leaves_the_flow) {
+  LayoutFixture fixture("<div id=\"a\">a</div><div id=\"abs\">x</div><div id=\"b\">b</div>",
+                              "div { display: block; height: 20px }"
+                              "#abs { position: absolute; top: 300px; left: 0 }");
+  // The absolutely positioned div keeps its place in the box tree, but takes no room
+  // in the flow: #b stays right below #a.
+  const layout::Box* a = fixture.find_block("#a");
+  const layout::Box* b = fixture.find_block("#b");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(a != nullptr);
+  REQUIRE(b != nullptr);
+  REQUIRE(abs != nullptr);
+  CHECK_EQ(a->border_box.y, 0.0f);
+  CHECK_EQ(b->border_box.y, 20.0f);
+  CHECK_EQ(abs->border_box.y, 300.0f);
+  // ... and the document is tall enough to scroll to it.
+  CHECK(fixture.result.document_height >= 320.0f);
+}
+
+BONK_TEST(layout, absolute_stretches_between_left_and_right) {
+  LayoutFixture fixture("<div id=\"parent\"><div id=\"abs\">x</div></div>",
+                        "#parent { position: relative; width: 300px; height: 50px }"
+                        "#abs { position: absolute; left: 20px; right: 40px; top: 0 }");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(abs != nullptr);
+  CHECK_EQ(abs->border_box.x, 20.0f);
+  CHECK_EQ(abs->border_box.width, 240.0f);  // 300 - 20 - 40
+}
+
+BONK_TEST(layout, absolute_shrinks_to_fit_and_stays_inside) {
+  LayoutFixture tight("<div id=\"parent\"><div id=\"abs\">x</div></div>",
+                            "#parent { position: relative; width: 100px; height: 50px }"
+                            "#abs { position: absolute; left: 60px }");
+  const layout::Box* abs = tight.find_block("#abs");
+  REQUIRE(abs != nullptr);
+  CHECK(abs->border_box.width <= 40.0f);  // shrink-to-fit, clamped by what is left
+  CHECK(abs->border_box.width > 0.0f);
+
+  LayoutFixture loose("<div id=\"parent\"><div id=\"abs\">hello world</div></div>",
+                            "#parent { position: relative; width: 500px; height: 50px }"
+                            "#abs { position: absolute; left: 0 }");
+  const layout::Box* fitted = loose.find_block("#abs");
+  REQUIRE(fitted != nullptr);
+  CHECK(fitted->border_box.width > 0.0f);
+  CHECK(fitted->border_box.width < 500.0f);  // as wide as the content, not the parent
+}
+
+BONK_TEST(layout, fixed_is_anchored_to_the_viewport) {
+  LayoutFixture fixture(
+      "<div style=\"margin-left:100px;margin-top:50px\"><div style=\"margin-left:100px\">"
+      "<div id=\"fixed\">bar</div></div></div>",
+      "#fixed { position: fixed; left: 0; top: 0; width: 80px; height: 20px }");
+  const layout::Box* fixed = fixture.find_block("#fixed");
+  REQUIRE(fixed != nullptr);
+  CHECK_EQ(fixed->border_box.x, 0.0f);
+  CHECK_EQ(fixed->border_box.y, 0.0f);
+  CHECK(fixed->fixed);
+  // A fixed box does not make the document taller.
+  CHECK(fixture.result.document_height < 100.0f);
+}
+
+BONK_TEST(layout, fixed_bottom_right_uses_the_viewport_size) {
+  LayoutFixture fixture("<div id=\"fixed\">x</div>",
+                              "#fixed { position: fixed; right: 10px; bottom: 20px; width: 100px; height: 30px }");
+  const layout::Box* fixed = fixture.find_block("#fixed");
+  REQUIRE(fixed != nullptr);
+  CHECK_EQ(fixed->border_box.x, 600.0f - 10.0f - 100.0f);
+  CHECK_EQ(fixed->border_box.y, 400.0f - 20.0f - 30.0f);
+}
+
+BONK_TEST(layout, relative_offsets_move_the_box_but_not_its_siblings) {
+  LayoutFixture fixture("<div id=\"a\">a</div><div id=\"rel\">r</div><div id=\"b\">b</div>",
+                              "div { display: block; height: 20px }"
+                              "#rel { position: relative; left: 15px; top: 5px }");
+  const layout::Box* a = fixture.find_block("#a");
+  const layout::Box* rel = fixture.find_block("#rel");
+  const layout::Box* b = fixture.find_block("#b");
+  REQUIRE(a != nullptr);
+  REQUIRE(rel != nullptr);
+  REQUIRE(b != nullptr);
+  CHECK_EQ(a->border_box.y, 0.0f);
+  CHECK_EQ(rel->border_box.y, 25.0f);  // 20 + 5
+  CHECK_EQ(rel->border_box.x, 15.0f);
+  CHECK_EQ(b->border_box.y, 40.0f);  // the sibling does not move
+}
+
+BONK_TEST(layout, relative_negative_offset_uses_the_opposite_inset) {
+  LayoutFixture fixture("<div id=\"rel\">r</div>",
+                              "#rel { display: block; position: relative; right: 10px; bottom: 4px }");
+  const layout::Box* rel = fixture.find_block("#rel");
+  REQUIRE(rel != nullptr);
+  CHECK_EQ(rel->border_box.x, -10.0f);
+  CHECK_EQ(rel->border_box.y, -4.0f);
+}
+
+BONK_TEST(layout, containing_block_is_the_nearest_positioned_ancestor) {
+  LayoutFixture fixture(
+      "<div id=\"outer\"><div id=\"inner\"><div id=\"abs\">x</div></div></div>",
+      "#outer { position: relative; margin-left: 40px; width: 300px; height: 100px; padding: 10px }"
+      "#inner { margin-left: 25px; height: 50px }"
+      "#abs { position: absolute; left: 5px; top: 6px; width: 10px; height: 10px }");
+  const layout::Box* outer = fixture.find_block("#outer");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(outer != nullptr);
+  REQUIRE(abs != nullptr);
+  // #inner is static, so the offset is measured from #outer's padding box (its
+  // border edge: no border here) and the intermediate margin does not count.
+  const float padding_x = outer->content_box.x - outer->padding[3];
+  const float padding_y = outer->content_box.y - outer->padding[0];
+  CHECK_EQ(abs->border_box.x, padding_x + 5.0f);
+  CHECK_EQ(abs->border_box.y, padding_y + 6.0f);
+}
+
+BONK_TEST(layout, z_index_is_recorded_for_positioned_boxes_only) {
+  LayoutFixture fixture("<div id=\"parent\"><div id=\"low\"></div><div id=\"high\"></div></div>",
+                              "#parent { position: relative; width: 100px; height: 100px }"
+                              "#low { position: absolute; z-index: 2; width: 10px; height: 10px }"
+                              "#high { position: absolute; z-index: 9; width: 10px; height: 10px }"
+                              "div#parent div { display: block }");
+  const layout::Box* low = fixture.find_block("#low");
+  const layout::Box* high = fixture.find_block("#high");
+  REQUIRE(low != nullptr);
+  REQUIRE(high != nullptr);
+  CHECK_EQ(low->z_index, 2);
+  CHECK_EQ(high->z_index, 9);
+}
+
+BONK_TEST(layout, hit_test_prefers_positioned_boxes) {
+  LayoutFixture fixture("<div id=\"under\">u</div><div id=\"over\">o</div>",
+                              "div { display: block; height: 50px }"
+                              "#over { position: absolute; top: 0; left: 0; width: 50px; height: 50px }");
+  const dom::NodeId over = fixture.document.query_selector(fixture.document.root(), "#over");
+  const dom::NodeId under = fixture.document.query_selector(fixture.document.root(), "#under");
+  REQUIRE(over.valid());
+  REQUIRE(under.valid());
+  // Both boxes cover (10, 10); the positioned one paints on top, so it wins the click.
+  const layout::Box* hit = layout::hit_test(fixture.result.root, 10.0f, 10.0f);
+  REQUIRE(hit != nullptr);
+  CHECK(hit->node == over);
+  // Somewhere the positioned box does not cover, the flow box is found.
+  const layout::Box* below = layout::hit_test(fixture.result.root, 400.0f, 10.0f);
+  REQUIRE(below != nullptr);
+  CHECK(below->node == under);
+}
+
+BONK_TEST(layout, absolute_inside_inline_block_parent) {
+  LayoutFixture fixture("<div id=\"ib\"><span id=\"abs\">x</span></div>",
+                              "#ib { display: inline-block; position: relative; width: 100px; height: 40px }"
+                              "#abs { position: absolute; left: 10px; top: 10px; width: 20px; height: 20px }");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(abs != nullptr);
+  CHECK_EQ(abs->border_box.x, 10.0f);
+  CHECK_EQ(abs->border_box.y, 10.0f);
 }

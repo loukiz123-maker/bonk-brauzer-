@@ -66,6 +66,9 @@ struct GridTrack {
   Unit unit = Unit::Auto;
   float value = 0.0f;
 };
+/// CSS `position`. `Sticky` is not modelled (it needs scroll-driven layout).
+enum class Position { Static, Relative, Absolute, Fixed };
+
 enum class TextAlign { Left, Right, Center, Justify };
 enum class TextDecoration { None, Underline };
 
@@ -98,6 +101,13 @@ struct ComputedStyle {
   bool list_item = false;
   float opacity = 1.0f;
 
+  // Positioning. `inset` is top/right/bottom/left; the CSS initial value is `auto`,
+  // so "not specified" is distinguishable from an explicit `0`.
+  Position position = Position::Static;
+  Length inset[4] = {Length::auto_value(), Length::auto_value(), Length::auto_value(), Length::auto_value()};
+  int z_index = 0;
+  bool has_z_index = false;
+
   // Flexbox container / item properties.
   FlexDirection flex_direction = FlexDirection::Row;
   FlexWrap flex_wrap = FlexWrap::NoWrap;
@@ -114,6 +124,14 @@ struct ComputedStyle {
   std::vector<GridTrack> grid_rows;
   float row_gap = 0.0f;
   float column_gap = 0.0f;
+
+  /// Any `position` other than `static` makes the box a containing block for
+  /// absolutely positioned descendants and enables `z-index`.
+  [[nodiscard]] bool is_positioned() const noexcept { return position != Position::Static; }
+  /// `absolute`/`fixed` boxes leave the normal flow entirely.
+  [[nodiscard]] bool is_out_of_flow() const noexcept {
+    return position == Position::Absolute || position == Position::Fixed;
+  }
 
   [[nodiscard]] bool is_flex_container() const noexcept { return display == Display::Flex; }
   [[nodiscard]] bool is_grid_container() const noexcept { return display == Display::Grid; }
