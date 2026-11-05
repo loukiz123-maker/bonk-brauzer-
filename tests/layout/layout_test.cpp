@@ -366,3 +366,144 @@ BONK_TEST(layout, absolute_inside_inline_block_parent) {
   CHECK_EQ(abs->border_box.x, 10.0f);
   CHECK_EQ(abs->border_box.y, 10.0f);
 }
+
+// --- floats (stage 21) --------------------------------------------------------
+
+BONK_TEST(layout, float_leaves_the_flow_and_text_wraps_around_it) {
+  LayoutFixture fixture(
+      "<div id=\"f\"></div><div id=\"p\">aaaaa bbbbb ccccc ddddd eeeee fffff ggggg hhhhh</div>",
+      "div { display: block }"
+      "#f { float: left; width: 80px; height: 40px; background: #336 }"
+      "#p { width: 200px }");
+  const layout::Box* f = fixture.find_block("#f");
+  const layout::Box* p = fixture.find_block("#p");
+  REQUIRE(f != nullptr);
+  REQUIRE(p != nullptr);
+  CHECK_EQ(f->border_box.x, 0.0f);
+  CHECK_EQ(f->border_box.y, 0.0f);
+  // The paragraph's own box still spans the full width (block boxes overlap floats) ...
+  CHECK_EQ(p->border_box.x, 0.0f);
+  CHECK_EQ(p->border_box.y, 0.0f);
+  CHECK_EQ(p->border_box.width, 200.0f);
+  // ... but its first line starts to the right of the float.
+  const std::vector<const layout::Box*> texts = LayoutFixture::text_boxes(*p);
+  REQUIRE(texts.size() > 1);
+  CHECK_EQ(texts.front()->border_box.x, 80.0f);
+  CHECK_EQ(texts.front()->border_box.y, 0.0f);
+  // A line below the float gets the full width back.
+  bool wrapped_back = false;
+  for (const layout::Box* text : texts) {
+    if (text->border_box.y >= 40.0f) {
+      wrapped_back = text->border_box.x < 80.0f;
+      break;
+    }
+  }
+  CHECK(wrapped_back);
+}
+
+BONK_TEST(layout, float_right_sits_on_the_right_edge) {
+  LayoutFixture fixture("<div id=\"f\">x</div>", "#f { float: right; width: 90px; height: 20px }");
+  const layout::Box* f = fixture.find_block("#f");
+  REQUIRE(f != nullptr);
+  CHECK_EQ(f->border_box.x, 600.0f - 90.0f);
+  CHECK_EQ(f->border_box.y, 0.0f);
+}
+
+BONK_TEST(layout, floats_share_a_line_until_they_no_longer_fit) {
+  LayoutFixture fixture(
+      "<div id=\"wrap\"><div id=\"a\"></div><div id=\"b\"></div><div id=\"c\"></div></div>",
+      "#wrap { width: 220px }"
+      "div div { float: left; width: 100px; height: 20px }");
+  const layout::Box* a = fixture.find_block("#a");
+  const layout::Box* b = fixture.find_block("#b");
+  const layout::Box* c = fixture.find_block("#c");
+  REQUIRE(a != nullptr);
+  REQUIRE(b != nullptr);
+  REQUIRE(c != nullptr);
+  CHECK_EQ(a->border_box.x, 0.0f);
+  CHECK_EQ(b->border_box.x, 100.0f);
+  // Only 20px are left on that line: the third float drops below the first.
+  CHECK_EQ(c->border_box.x, 0.0f);
+  CHECK_EQ(c->border_box.y, 20.0f);
+}
+
+BONK_TEST(layout, clear_pushes_a_block_below_the_floats) {
+  LayoutFixture fixture(
+      "<div id=\"f\"></div><div id=\"mid\">mid</div><div id=\"after\">after</div>",
+      "div { display: block }"
+      "#f { float: left; width: 50px; height: 45px }"
+      "#mid { height: 10px }"
+      "#after { clear: left; height: 12px }");
+  const layout::Box* f = fixture.find_block("#f");
+  const layout::Box* mid = fixture.find_block("#mid");
+  const layout::Box* after = fixture.find_block("#after");
+  REQUIRE(f != nullptr);
+  REQUIRE(mid != nullptr);
+  REQUIRE(after != nullptr);
+  CHECK_EQ(mid->border_box.y, 0.0f);  // a block does not move out of a float's way
+  CHECK_EQ(after->border_box.y, 45.0f);  // `clear: left` does
+}
+
+BONK_TEST(layout, float_shrinks_to_fit_its_content) {
+  LayoutFixture fixture("<div id=\"f\">a short sentence</div>",
+                        "#f { float: left; padding: 4px }");
+  const layout::Box* f = fixture.find_block("#f");
+  REQUIRE(f != nullptr);
+  CHECK(f->border_box.width > 8.0f);   // content + padding
+  CHECK(f->border_box.width < 200.0f);  // far narrower than the page
+  CHECK_EQ(f->border_box.width, f->content_box.width + 8.0f);
+}
+
+BONK_TEST(layout, floats_extend_the_document_but_not_their_parent) {
+  LayoutFixture fixture("<div id=\"wrap\"><div id=\"f\"></div></div>",
+                        "#f { float: left; width: 60px; height: 300px }"
+                        "#wrap { width: 200px }");
+  const layout::Box* wrap = fixture.find_block("#wrap");
+  REQUIRE(wrap != nullptr);
+  // `overflow: visible` does not contain floats: this is the classic reason the
+  // clearfix exists, and browsers behave the same way.
+  CHECK_EQ(wrap->border_box.height, 0.0f);
+  // The page itself still has to be scrollable to the bottom of the float.
+  CHECK(fixture.result.document_height >= 300.0f);
+}
+
+BONK_TEST(layout, absolutely_positioned_box_ignores_outer_floats) {
+  LayoutFixture fixture("<div id=\"f\"></div><div id=\"abs\">abs</div>",
+                        "div { display: block }"
+                        "#f { float: left; width: 120px; height: 120px }"
+                        "#abs { position: absolute; left: 0; top: 0; width: 30px; height: 30px }");
+  const layout::Box* abs = fixture.find_block("#abs");
+  REQUIRE(abs != nullptr);
+  CHECK_EQ(abs->border_box.x, 0.0f);  // a float does not shift positioned boxes
+  CHECK_EQ(abs->border_box.width, 30.0f);
+}
+
+BONK_TEST(layout, floated_image_inside_a_paragraph_wraps_the_text) {
+  LayoutFixture fixture(
+      "<p id=\"p\"><img src=\"x.png\" width=\"100\" height=\"50\" style=\"float:left\">"
+      "aaaa bbbb cccc dddd eeee ffff gggg hhhh iiii jjjj kkkk llll mmmm nnnn oooo pppp"
+      " qqqq rrrr ssss tttt</p>",
+      "p { margin: 0; width: 300px }");
+  const layout::Box* p = fixture.find_block("#p");
+  REQUIRE(p != nullptr);
+  // The floated image sits at the top-left corner of the paragraph and is sized from
+  // its width/height attributes, not from measuring its (empty) content.
+  const dom::NodeId image = fixture.document.query_selector(fixture.document.root(), "img");
+  REQUIRE(image.valid());
+  const layout::Box* float_box = LayoutFixture::find_by_node(*p, image);
+  REQUIRE(float_box != nullptr);
+  CHECK_EQ(float_box->border_box.width, 100.0f);
+  CHECK_EQ(float_box->border_box.height, 50.0f);
+  // Text starts to the right of it, and returns to the left edge below it.
+  const std::vector<const layout::Box*> texts = LayoutFixture::text_boxes(*p);
+  REQUIRE(!texts.empty());
+  CHECK_EQ(texts.front()->border_box.x, 100.0f);
+  bool wrapped_back = false;
+  for (const layout::Box* text : texts) {
+    if (text->border_box.y >= 50.0f && text->border_box.x < 100.0f) {
+      wrapped_back = true;
+      break;
+    }
+  }
+  CHECK(wrapped_back);
+}

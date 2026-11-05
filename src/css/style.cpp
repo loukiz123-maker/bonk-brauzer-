@@ -298,6 +298,28 @@ class StyleComputer {
       // an author's `relative` when a later rule says `sticky`.
       return;
     }
+    if (property == "float") {
+      if (detail::equals_keyword(value, "left") || detail::equals_keyword(value, "inline-start")) {
+        style.float_side = FloatSide::Left;
+      } else if (detail::equals_keyword(value, "right") || detail::equals_keyword(value, "inline-end")) {
+        style.float_side = FloatSide::Right;
+      } else if (detail::equals_keyword(value, "none")) {
+        style.float_side = FloatSide::None;
+      }
+      return;
+    }
+    if (property == "clear") {
+      if (detail::equals_keyword(value, "left")) {
+        style.clear = ClearSide::Left;
+      } else if (detail::equals_keyword(value, "right")) {
+        style.clear = ClearSide::Right;
+      } else if (detail::equals_keyword(value, "both")) {
+        style.clear = ClearSide::Both;
+      } else if (detail::equals_keyword(value, "none")) {
+        style.clear = ClearSide::None;
+      }
+      return;
+    }
     if (property == "top" || property == "right" || property == "bottom" || property == "left") {
       const int index = property == "top" ? 0 : property == "right" ? 1 : property == "bottom" ? 2 : 3;
       if (detail::equals_keyword(value, "auto")) {

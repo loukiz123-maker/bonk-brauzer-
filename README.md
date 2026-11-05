@@ -8,8 +8,8 @@ Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 зависимостей — включая тест-фреймворк, inflate/PNG-кодек, парсер шрифтов, оконный backend
 (протокол X11 реализован напрямую, вместо SDL2/Xlib), **TLS 1.3 с собственной криптографией**
 (SHA-256, HMAC, HKDF, ChaCha20-Poly1305, X25519) и **JavaScript-движок со своим парсером
-и интерпретатором**, flexbox, grid и позиционирование (`relative`/`absolute`/`fixed`
-с `z-index`), Canvas 2D, формы с отправкой GET/POST,
+и интерпретатором**, flexbox, grid, позиционирование (`relative`/`absolute`/`fixed`
+с `z-index`) и floats с `clear`, Canvas 2D, формы с отправкой GET/POST,
 cookies и `localStorage`, Same-Origin Policy с CORS и CSP, процесс на вкладку
 через `fork()`+pipe, собственные devtools и прогон по внешним наборам тестов
 (html5lib-tests, test262, reftests).
@@ -57,7 +57,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 424 юнит-теста
+$ make test               # 434 юнит-теста
 $ make conformance        # прогон по html5lib-tests/test262/reftests -> docs/conformance.md
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j

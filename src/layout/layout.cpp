@@ -38,6 +38,14 @@ struct InlineItem {
   const image::Image* image = nullptr;  // Atomic items: picture to blit (may be null)
   bool inline_block = false;            // Atomic item with its own content (input, button, …)
   bool is_space = false;  // collapses/breaks lines
+  bool is_float = false;  // marker: place a float here, no width of its own
+};
+
+/// One float currently visible to line boxes of the current block formatting
+/// context. `rect` is the border box in absolute coordinates.
+struct FloatRect {
+  Rect rect;
+  css::FloatSide side = css::FloatSide::None;
 };
 
 /// Where an out-of-flow box would have been placed had it stayed in the flow. Only
@@ -78,6 +86,7 @@ class LayoutEngine {
     // which only has final coordinates once the whole normal flow is laid out.
     apply_relative_offsets(root);
     place_positioned(root, true);
+    height = std::max(height, floats_bottom());
     height = std::max(height, positioned_bottom(root));
     root.content_box.height = height;
     root.border_box.height = height;
@@ -163,6 +172,17 @@ class LayoutEngine {
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
       if (style.is_out_of_flow()) continue;
+      if (style.is_floating()) {
+        // A float inside an inline run (`<p><img style="float:left">text</p>`) is
+        // placed by the run itself, at the line where it appears; the lines that
+        // follow wrap around it.
+        InlineItem item;
+        item.node = child;
+        item.style = &style;
+        item.is_float = true;
+        items.push_back(std::move(item));
+        continue;
+      }
 
       if (document_.tag_name(child) == "br") {
         // <br> is a hard line break, exactly like "\n" inside <pre>.
@@ -328,7 +348,23 @@ class LayoutEngine {
                             const std::vector<InlineItem>& items) {
     float y = start_y;
     std::size_t index = 0;
+
+    // Floats shorten the line boxes they cross. A nominal line height is used to pick
+    // the span: it is the tallest item of this run, which is what lines will be in the
+    // overwhelming majority of cases.
+    float nominal_height = 0.0f;
+    for (const InlineItem& item : items) nominal_height = std::max(nominal_height, item.height);
+    if (nominal_height <= 0.0f) nominal_height = box.style->effective_line_height();
+
     while (index < items.size()) {
+      // Floats that start the line are placed before its span is computed, so the
+      // very first line already wraps around them.
+      while (index < items.size() && items[index].is_float) {
+        const InlineItem& float_item = items[index++];
+        box.children.push_back(place_float(float_item.node, *float_item.style, content_x, y, content_width));
+      }
+      if (index >= items.size()) break;
+
       // Gather one line.
       std::vector<const InlineItem*> line;
       float line_width = 0.0f;
@@ -336,13 +372,32 @@ class LayoutEngine {
       float line_ascent = 0.0f;
       std::size_t last_break = items.size();  // index of the last breakable space
 
+      float span_left = content_x;
+      float span_right = content_x + content_width;
+      for (int attempt = 0; attempt < 8; ++attempt) {
+        span_at(content_x, content_width, y, nominal_height, span_left, span_right);
+        if (span_right - span_left > 1.0f) break;
+        // The floats cover this line entirely: move below the lowest of them.
+        const float next = next_float_bottom(y);
+        if (next <= y + 0.01f) break;
+        y = next;
+      }
+      const float line_available = std::max(0.0f, span_right - span_left);
+
       while (index < items.size()) {
         const InlineItem& item = items[index];
+        if (item.is_float) {
+          // A float in the middle of a line: place it, keep this line, let the next one
+          // wrap. (Full CSS would only restart the line if it no longer fits.)
+          box.children.push_back(place_float(item.node, *item.style, content_x, y, content_width));
+          ++index;
+          continue;
+        }
         if (item.kind == InlineItem::Kind::Text && item.text == "\n") {  // <pre> hard break
           ++index;
           break;
         }
-        const bool fits = line_width + item.width <= content_width + 0.01f;
+        const bool fits = line_width + item.width <= line_available + 0.01f;
         if (!fits && !line.empty() && !(line.size() == 1 && line.back()->is_space)) break;
         line.push_back(&item);
         line_width += item.width;
@@ -371,7 +426,7 @@ class LayoutEngine {
       }
 
       // Drop trailing spaces from the visible line and wrap at the last space if needed.
-      if (line_width > content_width && last_break < line.size()) {
+      if (line_width > line_available && last_break < line.size()) {
         index = index - (line.size() - last_break - 1);
         line.resize(last_break);
         line_width = 0.0f;
@@ -391,9 +446,9 @@ class LayoutEngine {
       }
       if (line_height <= 0.0f) line_height = box.style->effective_line_height();
 
-      // Horizontal alignment.
-      float x = content_x;
-      const float free_space = std::max(0.0f, content_width - line_width);
+      // Horizontal alignment inside the span the floats left free.
+      float x = span_left;
+      const float free_space = std::max(0.0f, line_available - line_width);
       switch (box.style->text_align) {
         case css::TextAlign::Center:
           x += free_space / 2.0f;
@@ -422,7 +477,10 @@ class LayoutEngine {
                                    std::max(0.0f, item->height - (child.border[0] + child.padding[0] +
                                                                   child.border[2] + child.padding[2]))};
           child.font_size = item->style->font_size;
-          (void)layout_content(child, child.content_box.width);
+          {
+            FloatGuard guard(floats_);  // an inline-block establishes a formatting context
+            (void)layout_content(child, child.content_box.width);
+          }
           box.children.push_back(std::move(child));
         } else if (item->kind == InlineItem::Kind::Atomic) {
           Box child;
@@ -480,6 +538,7 @@ class LayoutEngine {
       const css::ComputedStyle& style = styles_.get(document_, child);
       if (style.display == css::Display::None) continue;
       if (style.is_out_of_flow()) continue;
+      if (style.is_floating()) continue;
       float outer = 0.0f;
       if (document_.tag_name(child) == "br") continue;  // zero-width in a max-content measure
 
@@ -515,6 +574,41 @@ class LayoutEngine {
       }
     }
     return nullptr;
+  }
+
+  /// Intrinsic size of a replaced element (`<img>`, `<canvas>`): width/height
+  /// attributes first, then the bitmap, then the placeholder defaults.
+  void replaced_intrinsic_size(dom::NodeId node, float& width, float& height) const {
+    width = 0.0f;
+    height = 0.0f;
+    unsigned long long attribute_width = 0;
+    unsigned long long attribute_height = 0;
+    if (parse_u64(document_.attribute(node, "width"), attribute_width)) {
+      width = static_cast<float>(attribute_width);
+    }
+    if (parse_u64(document_.attribute(node, "height"), attribute_height)) {
+      height = static_cast<float>(attribute_height);
+    }
+    const bool is_canvas = document_.tag_name(node) == "canvas";
+    const image::Image* bitmap =
+        is_canvas ? replaced_image(node)
+                  : (images_ == nullptr ? nullptr : images_->find(document_.attribute(node, "src")));
+    if (bitmap != nullptr) {
+      if (width <= 0.0f) width = static_cast<float>(bitmap->width);
+      if (height <= 0.0f) height = static_cast<float>(bitmap->height);
+    }
+    if (is_canvas) {
+      if (width <= 0.0f) width = 300.0f;  // HTML default canvas size
+      if (height <= 0.0f) height = 150.0f;
+    } else {
+      if (width <= 0.0f) width = std::min(120.0f, viewport_.width / 2.0f);
+      if (height <= 0.0f) height = width * 0.6f;
+    }
+  }
+
+  [[nodiscard]] bool is_replaced(dom::NodeId node) const {
+    const std::string_view tag = document_.tag_name(node);
+    return tag == "img" || tag == "canvas";
   }
 
   void init_child_box(Box& box, dom::NodeId node, const css::ComputedStyle& style, float x, float y,
@@ -993,6 +1087,134 @@ class LayoutEngine {
     return std::max(0.0f, y - container.content_box.y - (row_count > 0 ? row_gap : 0.0f));
   }
 
+  // --- floats (stage 21) -------------------------------------------------
+
+  /// An inline-block, an absolutely positioned box or a flex container starts a new
+  /// block formatting context: floats from the outside do not reach its contents.
+  class FloatGuard {
+   public:
+    explicit FloatGuard(std::vector<FloatRect>& floats) : floats_(floats), saved_(std::move(floats)) {
+      floats_.clear();
+    }
+    ~FloatGuard() { floats_ = std::move(saved_); }
+    FloatGuard(const FloatGuard&) = delete;
+    FloatGuard& operator=(const FloatGuard&) = delete;
+
+   private:
+    std::vector<FloatRect>& floats_;
+    std::vector<FloatRect> saved_;
+  };
+
+  /// Horizontal span left for a line box or a float at [y, y + height).
+  void span_at(float content_x, float content_width, float y, float height, float& left, float& right) const {
+    left = content_x;
+    right = content_x + content_width;
+    for (const FloatRect& float_box : floats_) {
+      if (float_box.rect.bottom() <= y + 0.01f || float_box.rect.y >= y + height - 0.01f) continue;
+      if (float_box.side == css::FloatSide::Left) {
+        left = std::max(left, float_box.rect.right());
+      } else {
+        right = std::min(right, float_box.rect.x);
+      }
+    }
+    if (right < left) right = left;
+  }
+
+  /// Smallest bottom edge of a float that still crosses `y` — where a line box (or a
+  /// float that does not fit) has to move to.
+  [[nodiscard]] float next_float_bottom(float y) const {
+    float best = std::numeric_limits<float>::max();
+    for (const FloatRect& float_box : floats_) {
+      if (float_box.rect.bottom() > y + 0.01f) best = std::min(best, float_box.rect.bottom());
+    }
+    return best == std::numeric_limits<float>::max() ? y : best;
+  }
+
+  /// `clear` pushes a box below the floats on the given side(s).
+  [[nodiscard]] float clearance(css::ClearSide clear, float y) const {
+    if (clear == css::ClearSide::None) return y;
+    float bottom = y;
+    for (const FloatRect& float_box : floats_) {
+      if (clear == css::ClearSide::Left && float_box.side != css::FloatSide::Left) continue;
+      if (clear == css::ClearSide::Right && float_box.side != css::FloatSide::Right) continue;
+      bottom = std::max(bottom, float_box.rect.bottom());
+    }
+    return bottom;
+  }
+
+  /// Lays out one float: shrink-to-fit width against the space that is actually free
+  /// at `y`, moved down while it does not fit. Its bottom does not advance the flow —
+  /// that is the whole point of floating — but it is recorded for the line boxes and
+  /// for `clear`.
+  Box place_float(dom::NodeId node, const css::ComputedStyle& style, float content_x, float y,
+                  float content_width) {
+    Box box;
+    box.kind = BoxKind::Block;
+    box.node = node;
+    box.style = &style;
+    compute_edges(box, style, content_width);
+    const float horizontal = box.border[1] + box.border[3] + box.padding[1] + box.padding[3];
+
+    // A floated `<img>`/`<canvas>` is sized by its intrinsic box, not by measuring text.
+    float replaced_width = 0.0f;
+    float replaced_height = 0.0f;
+    const bool replaced = is_replaced(node);
+    if (replaced) replaced_intrinsic_size(node, replaced_width, replaced_height);
+
+    float left = content_x;
+    float right = content_x + content_width;
+    float content_used = 0.0f;
+    for (int attempt = 0; attempt < 8; ++attempt) {
+      span_at(content_x, content_width, y, 0.5f, left, right);
+      const float available = right - left;
+      float wanted = 0.0f;
+      if (!style.width.is_auto()) {
+        wanted = resolve(style.width, style.font_size, content_width);
+      } else if (replaced) {
+        wanted = std::min(replaced_width, std::max(0.0f, available - horizontal));
+      } else {
+        wanted = std::min(intrinsic_width(node), std::max(0.0f, available - horizontal));
+      }
+      if (style.min_width > 0.0f) wanted = std::max(wanted, style.min_width);
+      if (style.max_width > 0.0f) wanted = std::min(wanted, style.max_width);
+      content_used = std::max(0.0f, wanted);
+      if (content_used + horizontal <= available + 0.01f) break;
+      const float next = next_float_bottom(y);
+      if (next <= y + 0.01f) break;  // nothing below to make room: keep the width we have
+      y = next;
+    }
+
+    const float border_width = content_used + horizontal;
+    const float x = style.float_side == css::FloatSide::Right ? std::max(left, right - border_width)
+                                                              : left;
+    box.border_box = Rect{x, y, border_width, 0.0f};
+    box.content_box =
+        Rect{x + box.border[3] + box.padding[3], y + box.border[0] + box.padding[0], content_used, 0.0f};
+
+    // The float's own content starts a fresh formatting context: outer floats do not
+    // reach into it (and the guard must be gone before the float registers itself).
+    const float content_height = [&] {
+      FloatGuard guard(floats_);
+      return replaced ? replaced_height : layout_content(box, content_used);
+    }();
+    const float explicit_height = style.height.is_auto() ? -1.0f : resolve(style.height, style.font_size, content_width);
+    float total_height = explicit_height >= 0.0f ? explicit_height : content_height;
+    total_height = std::max(total_height, style.min_height);
+    box.content_box.height = total_height;
+    box.border_box.height = total_height + box.padding[0] + box.padding[2] + box.border[0] + box.border[2];
+
+    floats_.push_back(FloatRect{box.border_box, style.float_side});
+    return box;
+  }
+
+  /// Bottom edge of every float of the current formatting context (the root element
+  /// contains its floats even when they overflow their parent).
+  [[nodiscard]] float floats_bottom() const {
+    float bottom = 0.0f;
+    for (const FloatRect& float_box : floats_) bottom = std::max(bottom, float_box.rect.bottom());
+    return bottom;
+  }
+
   // --- positioning (stage 20) --------------------------------------------
 
   /// Shifts a laid-out subtree. Boxes are laid out at absolute coordinates, so a
@@ -1112,6 +1334,7 @@ class LayoutEngine {
     box.border_box = Rect{x, 0.0f, border_width, 0.0f};
     box.content_box =
         Rect{x + box.border[3] + box.padding[3], box.border[0] + box.padding[0], content_width, 0.0f};
+    FloatGuard guard(floats_);  // an absolutely positioned box is a formatting context
     const float content_height = layout_content(box, content_width);
 
     const float explicit_height =
@@ -1237,8 +1460,21 @@ class LayoutEngine {
         continue;
       }
 
+      if (style.is_floating() && is_block_level(style)) {
+        // A float leaves the flow: the following line boxes wrap around it instead of
+        // being pushed down.
+        flush_inline_run();
+        y = std::max(y, clearance(style.clear, y));
+        box.children.push_back(place_float(child, style, content_x, y, content_width));
+        previous_was_block = true;
+        previous_margin_bottom = 0.0f;
+        continue;
+      }
+
       if (is_block_level(style) && style.display != css::Display::InlineBlock) {
         flush_inline_run();
+        // `clear` pushes the block below the floats on that side.
+        y = std::max(y, clearance(style.clear, y));
         Box child_box;
         child_box.kind = BoxKind::Block;
         child_box.node = child;
@@ -1331,6 +1567,8 @@ class LayoutEngine {
   LayoutViewport viewport_;
   const image::ImageStore* images_ = nullptr;
   std::vector<StaticPosition> static_positions_;
+  /// Floats of the current block formatting context (see `FloatGuard`).
+  std::vector<FloatRect> floats_;
 };
 
 }  // namespace

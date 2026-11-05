@@ -69,6 +69,10 @@ struct GridTrack {
 /// CSS `position`. `Sticky` is not modelled (it needs scroll-driven layout).
 enum class Position { Static, Relative, Absolute, Fixed };
 
+/// `float`. `InlineStart`/`InlineEnd` from the modern spec collapse onto left/right.
+enum class FloatSide { None, Left, Right };
+enum class ClearSide { None, Left, Right, Both };
+
 enum class TextAlign { Left, Right, Center, Justify };
 enum class TextDecoration { None, Underline };
 
@@ -108,6 +112,10 @@ struct ComputedStyle {
   int z_index = 0;
   bool has_z_index = false;
 
+  // Floats: outside the normal flow, but line boxes wrap around them.
+  FloatSide float_side = FloatSide::None;
+  ClearSide clear = ClearSide::None;
+
   // Flexbox container / item properties.
   FlexDirection flex_direction = FlexDirection::Row;
   FlexWrap flex_wrap = FlexWrap::NoWrap;
@@ -133,6 +141,7 @@ struct ComputedStyle {
     return position == Position::Absolute || position == Position::Fixed;
   }
 
+  [[nodiscard]] bool is_floating() const noexcept { return float_side != FloatSide::None; }
   [[nodiscard]] bool is_flex_container() const noexcept { return display == Display::Flex; }
   [[nodiscard]] bool is_grid_container() const noexcept { return display == Display::Grid; }
 

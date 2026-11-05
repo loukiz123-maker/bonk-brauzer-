@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>floats</title>
+  <style>
+    body { margin: 0; background: #f7f7f9; font-family: sans-serif }
+    .header { height: 40px; background: #1f2933 }
+    .header h1 { color: #ffffff; font-size: 17px; margin: 11px 0 0 16px }
+    .page { width: 720px; padding: 16px }
+    .nav { float: left; width: 150px; height: 150px; background: #ffffff; border: 1px solid #ccd2d9 }
+    .nav p { margin: 10px 0 0 10px; font-size: 13px; color: #33475b }
+    .aside { float: right; width: 160px; height: 110px; background: #e8eefc; border: 1px solid #c3d0ee }
+    .aside p { margin: 10px 0 0 10px; font-size: 13px; color: #2b4b8f }
+    .main p { margin: 0 0 0 0; font-size: 14px; color: #333c4d }
+    .badge { float: left; width: 60px; height: 60px; background: #2f9e44 }
+    .footer { clear: both; height: 34px; background: #1f2933 }
+    .footer p { color: #ffffff; font-size: 13px; margin: 9px 0 0 16px }
+  </style>
+</head>
+<body>
+  <div class="header"><h1>Floats: nav on the left, aside on the right, text wrapping in between</h1></div>
+  <div class="page">
+    <div class="nav"><p>Left float: 150px</p></div>
+    <div class="aside"><p>Right float: 160px</p></div>
+    <div class="main">
+      <div class="badge"></div>
+      <p>The paragraph inside the flow wraps around both floats: its line boxes are shortened on the left by the navigation column and on the right by the aside, and get their full width back below them.</p>
+      <p>Floats leave the normal flow, so the surrounding blocks overlap them while only the line boxes move aside. The footer clears both, which is the classic way to end a float layout.</p>
+    </div>
+    <div class="footer"><p>Footer with clear: both</p></div>
+  </div>
+</body>
+</html>

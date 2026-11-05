@@ -271,3 +271,26 @@ BONK_TEST(css, z_index_auto_resets_a_previous_value) {
   CHECK(!page.styles.get(page.document, a).has_z_index);
   CHECK_EQ(page.styles.get(page.document, a).z_index, 0);
 }
+
+BONK_TEST(css, float_and_clear_are_parsed) {
+  StyledPage page("<body><div id=a></div><div id=b></div><div id=c></div></body>",
+                  "#a { float: left } #b { float: right } #c { clear: both }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  const dom::NodeId b = page.document.query_selector(page.document.root(), "#b");
+  const dom::NodeId c = page.document.query_selector(page.document.root(), "#c");
+  REQUIRE(a.valid() && b.valid() && c.valid());
+  CHECK(page.styles.get(page.document, a).float_side == css::FloatSide::Left);
+  CHECK(page.styles.get(page.document, a).is_floating());
+  CHECK(page.styles.get(page.document, b).float_side == css::FloatSide::Right);
+  CHECK(page.styles.get(page.document, c).clear == css::ClearSide::Both);
+  CHECK(!page.styles.get(page.document, c).is_floating());
+  // `float: none` is the initial value and undoes an earlier declaration.
+  CHECK(page.styles.get(page.document, c).float_side == css::FloatSide::None);
+}
+
+BONK_TEST(css, float_accepts_the_logical_keywords) {
+  StyledPage page("<body><div id=a></div></body>", "#a { float: inline-start }");
+  const dom::NodeId a = page.document.query_selector(page.document.root(), "#a");
+  REQUIRE(a.valid());
+  CHECK(page.styles.get(page.document, a).float_side == css::FloatSide::Left);
+}
