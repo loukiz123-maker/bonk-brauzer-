@@ -76,6 +76,15 @@ const std::unordered_set<std::string>& supported_builtins() {
   return kBuiltins;
 }
 
+/// Harness files whose behaviour the preamble above reproduces. Everything else
+/// (`compareIterator.js`, `temporalHelpers.js`, …) keeps its tests out of the run.
+const std::unordered_set<std::string>& supported_includes() {
+  static const std::unordered_set<std::string> kIncludes = {
+      "assert.js", "sta.js", "propertyHelper.js", "compareArray.js", "isConstructor.js",
+  };
+  return kIncludes;
+}
+
 /// True when the file is inside the part of the suite we claim to implement.
 [[nodiscard]] bool in_envelope(const std::string& relative) {
   const std::string relative_path = "/" + relative;  // makes every check prefix-uniform
@@ -170,30 +179,159 @@ struct Metadata {
 }
 
 // The part of test262's harness we can express in our own JS subset.
+//
+// This is the *measurement instrument*, so it has to be honest: an assertion either
+// checks what test262 checks, or the test is skipped (see supported_includes()).
+// Historically `assert.throws` here was a stub that always threw, which turned every
+// negative test into a failure; the version below matches the real `assert.js`.
 constexpr char kPreamble[] = R"JS(
-var $ERROR = function (m) { throw new Error(m); };
-var $DONOTEVALUATE = function () { throw new Error("Test262: This statement should not be evaluated."); };
+var Test262Error = function (message) {
+  var error = new Error(message === undefined ? "" : message);
+  error.name = "Test262Error";
+  return error;
+};
+var $ERROR = function (m) { throw new Test262Error(m); };
+var $DONOTEVALUATE = function () { throw new Test262Error("This statement should not be evaluated."); };
 var $262 = { global: this, detachArrayBuffer: function () {} };
 var print = function () {};
+
+// SameValue, spelled out: NaN equals NaN, +0 and -0 differ.
+var $sameValue = function (a, b) {
+  if (a === b) { return a !== 0 || 1 / a === 1 / b; }
+  return a !== a && b !== b;
+};
+// Which constructor (if any) a value is an instance of, by the standard's hierarchy.
+var $isErrorClass = function (value, expected) {
+  if (expected === undefined) return true;
+  if (typeof expected === "function") return value instanceof expected;
+  return false;
+};
+
 var assert = {};
 assert.sameValue = function (actual, expected, message) {
-  if (actual !== expected) { throw new Error("sameValue: " + actual + " !== " + expected); }
-  if (actual === 0 && 1 / actual !== 1 / expected) { throw new Error("sameValue: +0 vs -0"); }
+  if (!$sameValue(actual, expected)) {
+    throw new Test262Error("Expected SameValue(«" + actual + "», «" + expected + "») to be true" +
+                           (message === undefined ? "" : ": " + message));
+  }
 };
 assert.notSameValue = function (actual, expected, message) {
-  if (actual === expected) { throw new Error("notSameValue: " + actual + " === " + expected); }
+  if ($sameValue(actual, expected)) {
+    throw new Test262Error("Expected SameValue(«" + actual + "», «" + expected + "») to be false" +
+                           (message === undefined ? "" : ": " + message));
+  }
 };
-assert.sameValue.negate = false;
-assert.true = function (actual, message) { if (actual !== true) { throw new Error("expected true"); } };
-assert.false = function (actual, message) { if (actual !== false) { throw new Error("expected false"); } };
-assert.sameValue = assert.sameValue;
-assert.throws = function (expected, fn) { fn(); throw new Error("expected a throw"); };
-assert.compareArray = function (a, b, message) {
-  if (a.length !== b.length) { throw new Error("compareArray: length"); }
+assert.true = function (actual, message) {
+  if (actual !== true) { throw new Test262Error("Expected true" + (message === undefined ? "" : ": " + message)); }
+};
+assert.false = function (actual, message) {
+  if (actual !== false) { throw new Test262Error("Expected false" + (message === undefined ? "" : ": " + message)); }
+};
+assert.fail = function (message) {
+  throw new Test262Error(message === undefined ? "assert.fail" : message);
+};
+assert.throws = function (expected, fn, message) {
+  var threw = false;
+  var error = undefined;
+  try {
+    fn();
+  } catch (caught) {
+    threw = true;
+    error = caught;
+  }
+  var suffix = message === undefined ? "" : ": " + message;
+  if (!threw) { throw new Test262Error("Expected a throw, but nothing was thrown" + suffix); }
+  if (expected === undefined) return;
+  if (typeof expected === "function") {
+    if (!(error instanceof expected)) {
+      throw new Test262Error("Expected a " + expected.name + ", got " + error + suffix);
+    }
+    return;
+  }
+  if (expected !== null && typeof expected === "object") {
+    if (expected.name !== undefined && String(error.name) !== String(expected.name)) {
+      throw new Test262Error("Expected error name " + expected.name + ", got " + error.name + suffix);
+    }
+    if (expected.message !== undefined && String(error.message) !== String(expected.message)) {
+      throw new Test262Error("Expected message " + expected.message + ", got " + error.message + suffix);
+    }
+    return;
+  }
+  throw new Test262Error("assert.throws: unsupported expectation" + suffix);
+};
+assert.compareArray = function (actual, expected, message) {
+  var suffix = message === undefined ? "" : ": " + message;
+  if (actual === null || expected === null || typeof actual !== "object" || typeof expected !== "object") {
+    throw new Test262Error("compareArray needs two arrays" + suffix);
+  }
+  if (actual.length === undefined || expected.length === undefined) {
+    throw new Test262Error("compareArray needs array-likes" + suffix);
+  }
+  if (actual.length !== expected.length) {
+    throw new Test262Error("compareArray: lengths differ: " + actual.length + " vs " + expected.length + suffix);
+  }
   var i = 0;
-  while (i < a.length) { if (a[i] !== b[i]) { throw new Error("compareArray at " + i); } i = i + 1; }
+  while (i < actual.length) {
+    if (!$sameValue(actual[i], expected[i])) {
+      throw new Test262Error("compareArray: differs at " + i + suffix);
+    }
+    i = i + 1;
+  }
 };
-var verifyProperty = function () {};
+assert.defineProperty = function (obj, name, desc) {
+  Object.defineProperty(obj, name, desc);
+};
+assert.objKeys = function (value) {
+  var out = [];
+  var keys = Object.keys(value);
+  var i = 0;
+  while (i < keys.length) { out.push(keys[i]); i = i + 1; }
+  return out;
+};
+
+// propertyHelper.js: the descriptor check almost every property test relies on.
+var verifyProperty = function (obj, name, desc, options) {
+  var strict = options === undefined || options.restore === undefined || options.restore !== false;
+  var actual = Object.getOwnPropertyDescriptor(obj, name);
+  if (actual === undefined) {
+    throw new Test262Error("Expected an own property descriptor for " + String(name));
+  }
+  if (desc.value !== undefined && !$sameValue(actual.value, desc.value)) {
+    throw new Test262Error("verifyProperty: wrong value for " + String(name) +
+                           ": " + actual.value + " vs " + desc.value);
+  }
+  if (desc.writable !== undefined && actual.writable !== desc.writable) {
+    throw new Test262Error("verifyProperty: wrong writable for " + String(name));
+  }
+  if (desc.enumerable !== undefined && actual.enumerable !== desc.enumerable) {
+    throw new Test262Error("verifyProperty: wrong enumerable for " + String(name));
+  }
+  if (desc.configurable !== undefined && actual.configurable !== desc.configurable) {
+    throw new Test262Error("verifyProperty: wrong configurable for " + String(name));
+  }
+  if (desc.get !== undefined && actual.get !== desc.get) {
+    throw new Test262Error("verifyProperty: wrong getter for " + String(name));
+  }
+  if (desc.set !== undefined && actual.set !== desc.set) {
+    throw new Test262Error("verifyProperty: wrong setter for " + String(name));
+  }
+  return actual;
+};
+var comparePropertyDescriptor = function (a, b) {
+  if (a.value !== b.value) return false;
+  if (a.writable !== b.writable) return false;
+  if (a.enumerable !== b.enumerable) return false;
+  if (a.configurable !== b.configurable) return false;
+  return true;
+};
+var isConstructor = function (value) {
+  if (typeof value !== "function") return false;
+  try {
+    // A proxy-free approximation: a constructor has a prototype object.
+    return value.prototype !== undefined;
+  } catch (e) {
+    return false;
+  }
+};
 )JS";
 
 struct SandboxOutcome {
@@ -389,10 +527,15 @@ SuiteReport run_test262_corpus(std::string_view directory, const SuiteOptions& o
         }
       }
     }
-    if (!skip && !metadata.includes.empty()) {
-      // Any extra harness file (propertyHelper.js, compareArray.js, …) is out of scope.
-      skip = true;
-      ++skipped_includes;
+    if (!skip) {
+      for (const std::string& include : metadata.includes) {
+        if (supported_includes().count(include) != 0) continue;
+        // A harness file we do not model stays out of the runnable set: guessing at its
+        // assertions would turn "not measured" into a fake failure (or a fake pass).
+        skip = true;
+        ++skipped_includes;
+        break;
+      }
     }
     if (skip) continue;
 

@@ -4,6 +4,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <string>
 #include <unordered_map>
 #include <utility>
@@ -330,6 +331,8 @@ struct RuntimeState {
   std::unordered_map<std::string, std::function<Value(const std::vector<Value>&)>> host_callbacks;
   std::vector<Value> timer_queue;
   std::string origin;
+  /// The one Object.prototype every plain object inherits from (stage 23).
+  std::shared_ptr<Object> object_prototype;
 
   void log(ConsoleEntry::Level level, const std::string& message) {
     console.push_back(ConsoleEntry{level, message});
@@ -346,6 +349,266 @@ bool is_array_index(const std::string& key, std::size_t& index) {
   }
   index = value;
   return true;
+}
+
+// ------------------------------------------------------ own properties ----
+
+Value call_function(const Value& callee, const Value& this_value, std::vector<Value> arguments);
+
+/// The property bag of an object *or function* value: functions are objects and
+/// carry their own properties in `Function::statics` (stage 23).
+std::shared_ptr<Object> property_bag(const Value& value) {
+  if (value.type == ValueType::Object) return value.object;
+  if (value.type == ValueType::Function && value.function != nullptr) {
+    if (value.function->statics == nullptr) value.function->statics = std::make_shared<Object>();
+    return value.function->statics;
+  }
+  return nullptr;
+}
+
+/// True when `object` has an accessor (get/set) property named `key`.
+bool has_accessor(const Object& object, const std::string& key) {
+  return object.getters.count(key) != 0 || object.setters.count(key) != 0 ||
+         object.receiver_getters.count(key) != 0 || object.receiver_setters.count(key) != 0;
+}
+
+/// Own property keys. Array indices come first in ascending numeric order, then
+/// the remaining string keys sorted: `std::unordered_map` has no insertion
+/// order, so we sort instead of pretending to preserve it (see ADR 0025).
+std::vector<std::string> own_property_keys(const Object& object, bool enumerable_only) {
+  std::vector<std::string> indices;
+  std::vector<std::string> names;
+  auto classify = [&](const std::string& key, bool enumerable) {
+    if (enumerable_only && !enumerable) return;
+    std::size_t index = 0;
+    (is_array_index(key, index) ? indices : names).push_back(key);
+  };
+  for (const auto& entry : object.properties) classify(entry.first, entry.second.enumerable);
+  auto classify_accessors = [&](const auto& map) {
+    for (const auto& entry : map) {
+      const auto property = object.properties.find(entry.first);
+      const bool enumerable = property == object.properties.end() || property->second.enumerable;
+      classify(entry.first, enumerable || !enumerable_only);
+    }
+  };
+  classify_accessors(object.getters);
+  classify_accessors(object.setters);
+  classify_accessors(object.receiver_getters);
+  classify_accessors(object.receiver_setters);
+  if (object.is_array()) {
+    for (std::size_t i = 0; i < object.elements.size(); ++i) indices.push_back(std::to_string(i));
+  }
+  auto numeric_less = [](const std::string& a, const std::string& b) {
+    if (a.size() != b.size()) return a.size() < b.size();
+    return a < b;
+  };
+  std::sort(indices.begin(), indices.end(), numeric_less);
+  std::sort(names.begin(), names.end());
+  indices.insert(indices.end(), names.begin(), names.end());
+  return indices;
+}
+
+/// Property lookup that follows the whole prototype chain.
+bool lookup_property(const std::shared_ptr<Object>& start, const std::string& key, Value& out) {
+  for (std::shared_ptr<Object> ancestor = start; ancestor != nullptr; ancestor = ancestor->prototype) {
+    const auto receiver_getter = ancestor->receiver_getters.find(key);
+    if (receiver_getter != ancestor->receiver_getters.end()) {
+      out = receiver_getter->second(Value::object_of(ancestor));
+      return true;
+    }
+    const auto getter = ancestor->getters.find(key);
+    if (getter != ancestor->getters.end()) {
+      out = getter->second();
+      return true;
+    }
+    const auto found = ancestor->properties.find(key);
+    if (found != ancestor->properties.end()) {
+      out = found->second.value;
+      return true;
+    }
+    if (ancestor->is_array()) {
+      std::size_t index = 0;
+      if (is_array_index(key, index) && index < ancestor->elements.size()) {
+        out = ancestor->elements[index];
+        return true;
+      }
+    }
+    if (key == "constructor") {
+      if (const std::shared_ptr<Function> owner = ancestor->owner_function.lock()) {
+        out = Value::function_of(owner);
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// [[DefineOwnProperty]] for data/accessor descriptors, with the spec's
+/// non-configurable checks (ES2015 9.1.6.3, the parts tests actually probe).
+void define_own_property(const std::shared_ptr<Object>& object, const std::string& key,
+                         const std::optional<Value>& data_value, const std::optional<Value>& getter,
+                         const std::optional<Value>& setter, std::optional<bool> writable,
+                         std::optional<bool> enumerable, std::optional<bool> configurable) {
+  const auto existing = object->properties.find(key);
+  const bool is_accessor = has_accessor(*object, key);
+  if (existing != object->properties.end()) {
+    const Property& property = existing->second;
+    if (!property.configurable) {
+      if (configurable.value_or(false)) throw thrown(type_error("cannot redefine property: " + key));
+      if (enumerable.has_value() && *enumerable != property.enumerable) {
+        throw thrown(type_error("cannot redefine property: " + key));
+      }
+      const bool wants_accessor = getter.has_value() || setter.has_value();
+      if (wants_accessor != is_accessor) throw thrown(type_error("cannot redefine property: " + key));
+      if (!is_accessor && !property.writable) {
+        if (writable.value_or(false)) throw thrown(type_error("cannot redefine property: " + key));
+        if (data_value.has_value() && !strict_equals(*data_value, property.value)) {
+          throw thrown(type_error("cannot redefine property: " + key));
+        }
+      }
+    }
+  } else {
+    if (!object->extensible) throw thrown(type_error("object is not extensible"));
+    object->properties[key] = Property{Value::undefined(), true, true, true};
+  }
+
+  Property& property = object->properties[key];
+  if (enumerable.has_value()) property.enumerable = *enumerable;
+  if (configurable.has_value()) property.configurable = *configurable;
+  if (getter.has_value()) {
+    object->getters.erase(key);
+    if (getter->is_undefined()) {
+      object->receiver_getters.erase(key);
+    } else {
+      const Value captured = *getter;
+      if (captured.type != ValueType::Function) throw thrown(type_error("getter must be a function"));
+      object->receiver_getters[key] = [captured](const Value& self) {
+        return call_function(captured, self, {});
+      };
+    }
+  }
+  if (setter.has_value()) {
+    object->setters.erase(key);
+    if (setter->is_undefined()) {
+      object->receiver_setters.erase(key);
+    } else {
+      const Value captured = *setter;
+      if (captured.type != ValueType::Function) throw thrown(type_error("setter must be a function"));
+      object->receiver_setters[key] = [captured](const Value& self, const Value& value) {
+        call_function(captured, self, {value});
+      };
+    }
+  }
+  if (!is_accessor && data_value.has_value()) property.value = *data_value;
+  if (writable.has_value()) property.writable = *writable;
+}
+
+/// Does `object` own a property (data, accessor or array element)?
+bool has_own_property(const Object& object, const std::string& key) {
+  if (key == "constructor" && !object.owner_function.expired()) return true;
+  if (has_accessor(object, key)) return true;
+  if (object.properties.count(key) != 0) return true;
+  std::size_t index = 0;
+  return object.is_array() && is_array_index(key, index) && index < object.elements.size();
+}
+
+/// The descriptor object `Object.getOwnPropertyDescriptor` hands back.
+Value property_descriptor(const Object& object, const std::string& key) {
+  if (!has_own_property(object, key)) return Value::undefined();
+  auto descriptor = std::make_shared<Object>();
+  auto put = [&descriptor](const char* name, Value value, bool enumerable) {
+    Property property{std::move(value)};
+    property.enumerable = enumerable;
+    descriptor->properties[name] = property;
+  };
+  const auto stored = object.properties.find(key);
+  const bool enumerable = stored == object.properties.end() || stored->second.enumerable;
+  const bool configurable = stored == object.properties.end() || stored->second.configurable;
+  const bool accessor = has_accessor(object, key);
+  if (accessor) {
+    const auto getter = object.getters.find(key);
+    const auto setter = object.setters.find(key);
+    const auto receiver_getter = object.receiver_getters.find(key);
+    const auto receiver_setter = object.receiver_setters.find(key);
+    // Accessors are stored as C++ callbacks, so the get/set fields are wrappers
+    // rather than the original function objects (see ADR 0025).
+    Value exposed_getter = Value::undefined();
+    if (getter != object.getters.end()) {
+      exposed_getter = native_value("get", [callback = getter->second](const std::vector<Value>&, Value) {
+        return callback();
+      });
+    } else if (receiver_getter != object.receiver_getters.end()) {
+      exposed_getter = native_value("get", [callback = receiver_getter->second](const std::vector<Value>&,
+                                                                              Value self) {
+        return callback(self);
+      });
+    }
+    Value exposed_setter = Value::undefined();
+    if (setter != object.setters.end()) {
+      exposed_setter = native_value("set", [callback = setter->second](const std::vector<Value>& arguments, Value) {
+        callback(arguments.empty() ? Value::undefined() : arguments[0]);
+        return Value::undefined();
+      });
+    } else if (receiver_setter != object.receiver_setters.end()) {
+      exposed_setter = native_value("set", [callback = receiver_setter->second](const std::vector<Value>& arguments,
+                                                                              Value self) {
+        callback(self, arguments.empty() ? Value::undefined() : arguments[0]);
+        return Value::undefined();
+      });
+    }
+    put("get", exposed_getter, true);
+    put("set", exposed_setter, true);
+  } else {
+    Value value = Value::undefined();
+    if (stored != object.properties.end()) {
+      value = stored->second.value;
+    } else {
+      std::size_t index = 0;
+      if (object.is_array() && is_array_index(key, index) && index < object.elements.size()) {
+        value = object.elements[index];
+      }
+    }
+    put("value", value, true);
+    put("writable", Value::boolean_of(stored == object.properties.end() || stored->second.writable), true);
+  }
+  put("enumerable", Value::boolean_of(enumerable), true);
+  put("configurable", Value::boolean_of(configurable), true);
+  return Value::object_of(std::move(descriptor));
+}
+
+/// Own enumerable keys, as an array (`Object.keys`/`values`/`entries`).
+Value own_keys_array(const Object& object) {
+  std::vector<Value> keys;
+  for (const std::string& key : own_property_keys(object, true)) keys.push_back(Value::string_of(key));
+  return Value::object_of(make_array(std::move(keys)));
+}
+
+/// Reads a descriptor object (`{value: 1, writable: false}`) into the shape
+/// [[DefineOwnProperty]] wants.
+struct DescriptorInput {
+  std::optional<Value> value;
+  std::optional<Value> getter;
+  std::optional<Value> setter;
+  std::optional<bool> writable;
+  std::optional<bool> enumerable;
+  std::optional<bool> configurable;
+};
+
+void read_descriptor(const Value& descriptor, DescriptorInput& out) {
+  if (!descriptor.is_object() || descriptor.object == nullptr) {
+    throw thrown(type_error("property descriptor must be an object"));
+  }
+  auto read = [&](const std::string& name) -> std::optional<Value> {
+    const auto found = descriptor.object->properties.find(name);
+    if (found == descriptor.object->properties.end()) return std::nullopt;
+    return found->second.value;
+  };
+  out.value = read("value");
+  out.getter = read("get");
+  out.setter = read("set");
+  if (const auto attribute = read("writable")) out.writable = to_boolean(*attribute);
+  if (const auto attribute = read("enumerable")) out.enumerable = to_boolean(*attribute);
+  if (const auto attribute = read("configurable")) out.configurable = to_boolean(*attribute);
 }
 
 // ------------------------------------------------------------ interpreter ----
@@ -413,8 +676,19 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
     if (key == "name") return Value::string_of(function->name);
     if (key == "length") return Value::number_of(static_cast<double>(function->parameter_count));
     if (key == "prototype") {
-      if (!function->prototype_object) function->prototype_object = std::make_shared<Object>();
+      if (!function->prototype_object) {
+        function->prototype_object = std::make_shared<Object>();
+        function->prototype_object->owner_function = function;
+      }
       return Value::object_of(function->prototype_object);
+    }
+    if (function->statics != nullptr) {
+      Value found;
+      if (lookup_property(function->statics, key, found)) return found;
+    }
+    Value inherited;
+    if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, inherited)) {
+      return inherited;
     }
     return Value::undefined();
   }
@@ -640,24 +914,30 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
       });
     }
     std::size_t index = 0;
-    if (is_array_index(key, index)) {
-      if (index < target->elements.size()) return target->elements[index];
-      return Value::undefined();
-    }
+    if (is_array_index(key, index) && index < target->elements.size()) return target->elements[index];
   }
 
-  const auto found = target->properties.find(key);
-  if (found != target->properties.end()) return found->second.value;
-  const auto getter = target->getters.find(key);
-  if (getter != target->getters.end()) return getter->second();
-  if (target->prototype != nullptr) {
-    const auto inherited = target->prototype->properties.find(key);
-    if (inherited != target->prototype->properties.end()) return inherited->second.value;
+  Value found;
+  if (lookup_property(target, key, found)) return found;
+  if (!target->prototype_is_null && runtime_.object_prototype != nullptr && target != runtime_.object_prototype &&
+      lookup_property(runtime_.object_prototype, key, found)) {
+    return found;
   }
   return Value::undefined();
 }
 
 void Interpreter::set_member(const Value& object, const std::string& key, const Value& value) {
+  if (object.type == ValueType::Function && object.object == nullptr) {
+    const std::shared_ptr<Object> bag = property_bag(object);
+    const auto existing = bag->properties.find(key);
+    if (existing != bag->properties.end()) {
+      if (existing->second.writable) existing->second.value = value;
+      return;
+    }
+    if (!bag->extensible) return;
+    bag->properties[key] = Property{value};
+    return;
+  }
   if (!object.is_object() || object.object == nullptr) {
     throw thrown(type_error("cannot set property '" + key + "' of " + typeof_string(object)));
   }
@@ -679,6 +959,30 @@ void Interpreter::set_member(const Value& object, const std::string& key, const 
     setter->second(value);
     return;
   }
+  for (std::shared_ptr<Object> ancestor = target; ancestor != nullptr; ancestor = ancestor->prototype) {
+    const auto receiver_setter = ancestor->receiver_setters.find(key);
+    if (receiver_setter != ancestor->receiver_setters.end()) {
+      receiver_setter->second(Value::object_of(target), value);
+      return;
+    }
+  }
+  for (std::shared_ptr<Object> ancestor = target; ancestor != nullptr; ancestor = ancestor->prototype) {
+    const auto inherited_setter = ancestor->setters.find(key);
+    if (inherited_setter != ancestor->setters.end()) {
+      inherited_setter->second(value);
+      return;
+    }
+  }
+  const auto existing = target->properties.find(key);
+  if (existing != target->properties.end()) {
+    if (!existing->second.writable) {
+      // Sloppy mode ignores the write; strict mode throws (tracked in ADR 0025).
+      return;
+    }
+    existing->second.value = value;
+    return;
+  }
+  if (!target->extensible) return;
   target->properties[key] = Property{value};
 }
 
@@ -731,6 +1035,7 @@ Value Interpreter::make_function(const ast::FunctionPtr& node, const ScopePtr& s
   function->parameter_count = node->parameters.size();
   if (!node->is_arrow) {
     function->prototype_object = std::make_shared<Object>();
+    function->prototype_object->owner_function = function;
     function->prototype_value = Value::object_of(function->prototype_object);
   }
   return Value::function_of(std::move(function));
@@ -839,14 +1144,8 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
         std::vector<Value> items;
         if (statement->kind == ast::StmtKind::ForIn) {
           if (iterable.is_object() && iterable.object != nullptr) {
-            std::vector<std::string> keys;
-            for (const auto& entry : iterable.object->properties) keys.push_back(entry.first);
-            std::sort(keys.begin(), keys.end());
-            for (const std::string& entry : keys) items.push_back(Value::string_of(entry));
-            if (iterable.object->is_array()) {
-              for (std::size_t i = 0; i < iterable.object->elements.size(); ++i) {
-                items.push_back(Value::string_of(std::to_string(i)));
-              }
+            for (const std::string& key : own_property_keys(*iterable.object, true)) {
+              items.push_back(Value::string_of(key));
             }
           }
         } else if (iterable.is_string()) {
@@ -988,7 +1287,21 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::ObjectLiteral: {
       auto object = std::make_shared<Object>();
       for (const ast::PropertyDef& property : expression->properties) {
-        object->properties[property.key] = Property{eval(property.value, scope)};
+        const Value value = eval(property.value, scope);
+        if (property.kind == ast::PropertyDef::Kind::Data) {
+          object->properties[property.key] = Property{value};
+          continue;
+        }
+        if (property.kind == ast::PropertyDef::Kind::Get) {
+          object->receiver_getters[property.key] = [value](const Value& self) {
+            return call_function(value, self, {});
+          };
+        } else {
+          object->receiver_setters[property.key] = [value](const Value& self, const Value& argument) {
+            call_function(value, self, {argument});
+          };
+        }
+        object->properties[property.key] = Property{Value::undefined(), true, true, true};
       }
       return Value::object_of(std::move(object));
     }
@@ -1017,7 +1330,22 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         if (target->kind == ast::ExprKind::Member) {
           const Value object = eval(target->children[0], scope);
           const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
-          if (object.is_object() && object.object != nullptr) object.object->properties.erase(key);
+          const std::shared_ptr<Object> bag = property_bag(object);
+          if (bag != nullptr) {
+            const auto found = bag->properties.find(key);
+            // `delete` only removes configurable properties (sloppy mode reports
+            // false rather than throwing — strict mode is ADR 0025's open item).
+            if (found != bag->properties.end() && !found->second.configurable) return Value::boolean_of(false);
+            bag->properties.erase(key);
+            bag->getters.erase(key);
+            bag->setters.erase(key);
+            bag->receiver_getters.erase(key);
+            bag->receiver_setters.erase(key);
+            std::size_t index = 0;
+            if (bag->is_array() && is_array_index(key, index)) {
+              if (index < bag->elements.size()) bag->elements[index] = Value::undefined();
+            }
+          }
         }
         return Value::boolean_of(true);
       }
@@ -1318,13 +1646,334 @@ void install_builtins(RuntimeState& runtime) {
   global->variables["Boolean"] = native_value("Boolean", [](const std::vector<Value>& arguments, Value) {
     return Value::boolean_of(!arguments.empty() && to_boolean(arguments[0]));
   });
-  global->variables["Array"] = native_value("Array", [](const std::vector<Value>& arguments, Value) {
+  const Value array_constructor = native_value("Array", [](const std::vector<Value>& arguments, Value) {
+    if (arguments.size() == 1 && arguments[0].is_number()) {
+      return Value::object_of(make_array(std::vector<Value>(static_cast<std::size_t>(to_number(arguments[0])))));
+    }
     return Value::object_of(make_array(arguments));
   });
-  global->variables["Object"] = native_value("Object", [](const std::vector<Value>& arguments, Value) {
+  array_constructor.function->prototype_object = std::make_shared<Object>();
+  array_constructor.function->prototype_object->owner_function = array_constructor.function;
+  array_constructor.function->statics = std::make_shared<Object>();
+  array_constructor.function->statics->properties["isArray"] = Property{native_value(
+      "isArray", [](const std::vector<Value>& arguments, Value) {
+        if (arguments.empty()) return Value::boolean_of(false);
+        return Value::boolean_of(arguments[0].is_object() && arguments[0].object != nullptr &&
+                                 arguments[0].object->is_array());
+      })};
+  global->variables["Array"] = array_constructor;
+
+  // Object.prototype: the one object every plain object inherits from, so
+  // `({}).hasOwnProperty('x')` and `Object.prototype.hasOwnProperty.call(…)` work.
+  runtime.object_prototype = std::make_shared<Object>();
+  const std::shared_ptr<Object> object_prototype = runtime.object_prototype;
+  auto add_proto_method = [&](const char* name, Function::Native native) {
+    object_prototype->properties[name] = Property{native_value(name, std::move(native))};
+  };
+  add_proto_method("hasOwnProperty", [](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> bag = property_bag(this_value);
+    if (bag == nullptr) {
+      throw thrown(type_error("hasOwnProperty called on " + typeof_string(this_value)));
+    }
+    const std::string key = arguments.empty() ? std::string() : to_string(arguments[0]);
+    return Value::boolean_of(has_own_property(*bag, key));
+  });
+  add_proto_method("propertyIsEnumerable", [](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> bag = property_bag(this_value);
+    if (bag == nullptr) {
+      throw thrown(type_error("propertyIsEnumerable called on " + typeof_string(this_value)));
+    }
+    const std::string key = arguments.empty() ? std::string() : to_string(arguments[0]);
+    if (!has_own_property(*bag, key)) return Value::boolean_of(false);
+    const auto found = bag->properties.find(key);
+    return Value::boolean_of(found == bag->properties.end() || found->second.enumerable);
+  });
+  add_proto_method("isPrototypeOf", [](const std::vector<Value>& arguments, Value this_value) {
+    const std::shared_ptr<Object> bag = property_bag(this_value);
+    if (bag == nullptr) return Value::boolean_of(false);
+    const std::shared_ptr<Object> other = property_bag(arguments.empty() ? Value::undefined() : arguments[0]);
+    if (other == nullptr) return Value::boolean_of(false);
+    for (std::shared_ptr<Object> ancestor = other->prototype; ancestor != nullptr; ancestor = ancestor->prototype) {
+      if (ancestor == bag) return Value::boolean_of(true);
+    }
+    return Value::boolean_of(false);
+  });
+  add_proto_method("toString", [](const std::vector<Value>&, Value this_value) {
+    if (this_value.is_undefined()) return Value::string_of("[object Undefined]");
+    if (this_value.is_null()) return Value::string_of("[object Null]");
+    std::string tag = "Object";
+    switch (this_value.type) {
+      case ValueType::Boolean: tag = "Boolean"; break;
+      case ValueType::Number: tag = "Number"; break;
+      case ValueType::String: tag = "String"; break;
+      case ValueType::Function: tag = "Function"; break;
+      default: break;
+    }
+    if (this_value.type == ValueType::Function) {
+      tag = "Function";
+    } else if (this_value.is_object() && this_value.object != nullptr) {
+      if (this_value.object->is_array()) {
+        tag = "Array";
+      } else if (this_value.object->kind == Object::Kind::Error) {
+        tag = "Error";
+      }
+    }
+    return Value::string_of("[object " + tag + "]");
+  });
+  add_proto_method("valueOf", [](const std::vector<Value>&, Value this_value) { return this_value; });
+  add_proto_method("toLocaleString", [](const std::vector<Value>&, Value this_value) {
+    return Value::string_of(to_string(this_value));
+  });
+
+  const Value object_constructor = native_value("Object", [](const std::vector<Value>& arguments, Value) {
     if (!arguments.empty() && arguments[0].is_object()) return arguments[0];
+    if (!arguments.empty() && arguments[0].is_nullish()) return Value::object_of(std::make_shared<Object>());
+    if (!arguments.empty()) {
+      const Value primitives = arguments[0];
+      auto wrapper = std::make_shared<Object>();
+      wrapper->properties["value"] = Property{primitives};
+      return Value::object_of(std::move(wrapper));
+    }
     return Value::object_of(std::make_shared<Object>());
   });
+  object_constructor.function->prototype_object = object_prototype;
+  object_prototype->owner_function = object_constructor.function;
+  object_constructor.function->statics = std::make_shared<Object>();
+  auto add_object_static = [&](const char* name, Function::Native native) {
+    object_constructor.function->statics->properties[name] = Property{native_value(name, std::move(native))};
+  };
+  // Object statics take an argument that is coerced with ToObject; primitives
+  // have no own properties in this engine except string indices.
+  auto object_argument = [](const std::vector<Value>& arguments, const std::string& method) {
+    if (arguments.empty() || arguments[0].is_nullish()) {
+      throw thrown(type_error("Object." + method + " called on " + (arguments.empty() ? "undefined" : to_string(arguments[0]))));
+    }
+    return arguments[0];
+  };
+  auto object_bag = [](const Value& value, const std::string& method) {
+    const std::shared_ptr<Object> bag = property_bag(value);
+    if (bag == nullptr) throw thrown(type_error("Object." + method + " called on non-object"));
+    return bag;
+  };
+  add_object_static("keys", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "keys");
+    if (target.type == ValueType::String) {
+      std::vector<Value> keys;
+      for (std::size_t i = 0; i < target.text.size(); ++i) keys.push_back(Value::string_of(std::to_string(i)));
+      return Value::object_of(make_array(std::move(keys)));
+    }
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag == nullptr) return Value::object_of(make_array({}));
+    if (bag->is_array()) {
+      std::vector<Value> keys;
+      for (const std::string& key : own_property_keys(*bag, true)) keys.push_back(Value::string_of(key));
+      return Value::object_of(make_array(std::move(keys)));
+    }
+    return own_keys_array(*bag);
+  });
+  add_object_static("values", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "values");
+    std::vector<Value> values;
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag != nullptr) {
+      for (const std::string& key : own_property_keys(*bag, true)) {
+        Value value;
+        if (lookup_property(bag, key, value)) values.push_back(value);
+      }
+    }
+    return Value::object_of(make_array(std::move(values)));
+  });
+  add_object_static("entries", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "entries");
+    std::vector<Value> entries;
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag != nullptr) {
+      for (const std::string& key : own_property_keys(*bag, true)) {
+        Value value;
+        if (!lookup_property(bag, key, value)) continue;
+        entries.push_back(Value::object_of(make_array({Value::string_of(key), value})));
+      }
+    }
+    return Value::object_of(make_array(std::move(entries)));
+  });
+  add_object_static("getOwnPropertyNames", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "getOwnPropertyNames");
+    std::vector<Value> keys;
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag != nullptr) {
+      for (const std::string& key : own_property_keys(*bag, false)) keys.push_back(Value::string_of(key));
+      if (bag->is_array()) keys.push_back(Value::string_of("length"));
+    }
+    return Value::object_of(make_array(std::move(keys)));
+  });
+  add_object_static("getOwnPropertyDescriptor", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "getOwnPropertyDescriptor");
+    if (arguments.size() < 2) return Value::undefined();
+    const std::string key = to_string(arguments[1]);
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag == nullptr) return Value::undefined();
+    return property_descriptor(*bag, key);
+  });
+  add_object_static("defineProperty", [object_argument, object_bag](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "defineProperty");
+    const std::shared_ptr<Object> bag = object_bag(target, "defineProperty");
+    if (arguments.size() < 2) throw thrown(type_error("Object.defineProperty needs a property key"));
+    DescriptorInput input;
+    if (arguments.size() > 2) read_descriptor(arguments[2], input);
+    define_own_property(bag, to_string(arguments[1]), input.value, input.getter, input.setter,
+                        input.writable, input.enumerable, input.configurable);
+    return target;
+  });
+  add_object_static("defineProperties", [object_argument, object_bag](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "defineProperties");
+    const std::shared_ptr<Object> bag = object_bag(target, "defineProperties");
+    if (arguments.size() > 1 && arguments[1].is_object() && arguments[1].object != nullptr) {
+      for (const std::string& key : own_property_keys(*arguments[1].object, true)) {
+        Value descriptor;
+        if (!lookup_property(arguments[1].object, key, descriptor)) continue;
+        DescriptorInput input;
+        read_descriptor(descriptor, input);
+        define_own_property(bag, key, input.value, input.getter, input.setter, input.writable, input.enumerable,
+                            input.configurable);
+      }
+    }
+    return target;
+  });
+  add_object_static("create", [object_prototype](const std::vector<Value>& arguments, Value) {
+    auto created = std::make_shared<Object>();
+    if (!arguments.empty() && arguments[0].is_null()) {
+      created->prototype = nullptr;
+      created->prototype_is_null = true;
+    } else if (!arguments.empty() && arguments[0].is_object()) {
+      created->prototype = arguments[0].object;
+    } else if (!arguments.empty()) {
+      throw thrown(type_error("Object prototype may only be an Object or null"));
+    } else {
+      created->prototype = object_prototype;
+    }
+    if (arguments.size() > 1 && arguments[1].is_object() && arguments[1].object != nullptr) {
+      for (const std::string& key : own_property_keys(*arguments[1].object, true)) {
+        Value descriptor;
+        if (!lookup_property(arguments[1].object, key, descriptor)) continue;
+        DescriptorInput input;
+        read_descriptor(descriptor, input);
+        define_own_property(created, key, input.value, input.getter, input.setter, input.writable, input.enumerable,
+                            input.configurable);
+      }
+    }
+    return Value::object_of(std::move(created));
+  });
+  add_object_static("getPrototypeOf", [object_argument, object_prototype](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "getPrototypeOf");
+    if (target.type != ValueType::Object || target.object == nullptr) {
+      return Value::object_of(object_prototype);
+    }
+    if (target.object->prototype == nullptr) {
+      // Plain objects have no explicit link; they inherit from Object.prototype.
+      if (target.object == object_prototype) return Value::null();
+      return Value::object_of(object_prototype);
+    }
+    return Value::object_of(target.object->prototype);
+  });
+  add_object_static("setPrototypeOf", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "setPrototypeOf");
+    if (target.type != ValueType::Object || target.object == nullptr) return target;
+    if (arguments.size() > 1 && arguments[1].is_object()) {
+      target.object->prototype = arguments[1].object;
+      target.object->prototype_is_null = false;
+    } else if (arguments.size() > 1 && arguments[1].is_null()) {
+      target.object->prototype = nullptr;
+      target.object->prototype_is_null = true;
+    } else if (arguments.size() > 1) {
+      target.object->prototype_is_null = false;
+    }
+    return target;
+  });
+  add_object_static("freeze", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "freeze");
+    if (target.type != ValueType::Object || target.object == nullptr) return target;
+    for (const std::string& key : own_property_keys(*target.object, false)) {
+      auto found = target.object->properties.find(key);
+      if (found == target.object->properties.end()) {
+        target.object->properties[key] = Property{Value::undefined(), false, true, false};
+      } else {
+        found->second.writable = false;
+        found->second.configurable = false;
+      }
+    }
+    target.object->extensible = false;
+    return target;
+  });
+  add_object_static("seal", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "seal");
+    if (target.type != ValueType::Object || target.object == nullptr) return target;
+    for (const std::string& key : own_property_keys(*target.object, false)) {
+      auto found = target.object->properties.find(key);
+      if (found != target.object->properties.end()) found->second.configurable = false;
+    }
+    target.object->extensible = false;
+    return target;
+  });
+  add_object_static("preventExtensions", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "preventExtensions");
+    if (target.type == ValueType::Object && target.object != nullptr) target.object->extensible = false;
+    return target;
+  });
+  add_object_static("isExtensible", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "isExtensible");
+    if (target.type != ValueType::Object || target.object == nullptr) return Value::boolean_of(false);
+    return Value::boolean_of(target.object->extensible);
+  });
+  add_object_static("isFrozen", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "isFrozen");
+    if (target.type != ValueType::Object || target.object == nullptr) return Value::boolean_of(true);
+    if (target.object->extensible) return Value::boolean_of(false);
+    for (const std::string& key : own_property_keys(*target.object, false)) {
+      const auto found = target.object->properties.find(key);
+      if (found == target.object->properties.end()) continue;
+      if (found->second.configurable) return Value::boolean_of(false);
+      if (found->second.writable && !has_accessor(*target.object, key)) return Value::boolean_of(false);
+    }
+    return Value::boolean_of(true);
+  });
+  add_object_static("isSealed", [object_argument](const std::vector<Value>& arguments, Value) {
+    const Value target = object_argument(arguments, "isSealed");
+    if (target.type != ValueType::Object || target.object == nullptr) return Value::boolean_of(true);
+    if (target.object->extensible) return Value::boolean_of(false);
+    for (const std::string& key : own_property_keys(*target.object, false)) {
+      const auto found = target.object->properties.find(key);
+      if (found != target.object->properties.end() && found->second.configurable) return Value::boolean_of(false);
+    }
+    return Value::boolean_of(true);
+  });
+  add_object_static("is", [](const std::vector<Value>& arguments, Value) {
+    const Value first = arguments.empty() ? Value::undefined() : arguments[0];
+    const Value second = arguments.size() < 2 ? Value::undefined() : arguments[1];
+    if (first.is_number() && second.is_number()) {
+      const double a = first.number;
+      const double b = second.number;
+      if (std::isnan(a) && std::isnan(b)) return Value::boolean_of(true);
+      if (a == 0.0 && b == 0.0) return Value::boolean_of(std::signbit(a) == std::signbit(b));
+    }
+    return Value::boolean_of(strict_equals(first, second));
+  });
+  add_object_static("assign", [](const std::vector<Value>& arguments, Value) {
+    if (arguments.empty() || !arguments[0].is_object() || arguments[0].object == nullptr) {
+      throw thrown(type_error("Object.assign target must be an object"));
+    }
+    const std::shared_ptr<Object> target = arguments[0].object;
+    for (std::size_t i = 1; i < arguments.size(); ++i) {
+      if (!arguments[i].is_object() || arguments[i].object == nullptr) continue;
+      const std::shared_ptr<Object> source = arguments[i].object;
+      for (const std::string& key : own_property_keys(*source, true)) {
+        Value value;
+        if (!lookup_property(source, key, value)) continue;
+        target->properties[key] = Property{value};
+      }
+    }
+    return arguments[0];
+  });
+  global->variables["Object"] = object_constructor;
 
   // setTimeout(fn, ms): callbacks run when the host pumps them (0 ms only).
   global->variables["setTimeout"] = native_value("setTimeout", [&runtime](const std::vector<Value>& arguments, Value) {

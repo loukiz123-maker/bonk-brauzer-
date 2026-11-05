@@ -450,6 +450,30 @@ test262 — 2 673/13 254 (20.2 %), юнит-тестов **442**. Открыто
 блока, `sticky`, stacking contexts, рендеринг SVG/MathML, JS-объекты.
 
 
+## Этап 23 — честный test262 и свойства объектов
+
+Сначала раннер перестал врать: вместо заглушек harness-файлов test262
+(`assert.throws`, `verifyProperty`, `sameValue`) преамбула реализует их
+семантику, а правило «есть `includes:` → пропустить» заменено явным списком
+поддерживаемых файлов. Честный счёт оказался ниже (18.2 % вместо 20.2 %), зато
+показал настоящую дыру: `Object` проходил 0.3 %. Второй половиной этапа стали
+дескрипторы свойств (`writable`/`enumerable`/`configurable`, `[[DefineOwnProperty]]`
+с проверками неконфигурируемых свойств), вся статика `Object`
+(`keys`/`values`/`entries`/`getOwnPropertyDescriptor`/`defineProperty`/`create`/
+`freeze`/`is`/`assign`…), единый `Object.prototype` с `hasOwnProperty` и
+`toString`, свойства у функций и accessor-свойства с `this` в литералах и
+`Object.defineProperty`. Подробности: [`docs/STAGE-23.md`](STAGE-23.md), решение —
+[`docs/adr/0025-property-descriptors-and-object-statics.md`](adr/0025-property-descriptors-and-object-statics.md).
+
+**Критерий выхода**: счёт test262 честный (каждый тест либо исполняется, либо
+попадает в отдельный счётчик «почему пропущен»), `Object` перестаёт быть самым
+слабым встроенным объектом. Сейчас: test262 — **3 600/14 759 (24.4 %)**,
+`built-ins/Object` — 18.8 % (было 0.3 %), reftests 13/13, токенайзер
+6 792/6 820 (99.6 %), tree construction 1 792/1 792 (100 %), юнит-тестов
+**453**. Открыто: `Array.prototype`, `arguments`, `class`/деструктуризация/
+spread/`for-of`, strict-режим, порядок ключей как в спецификации.
+
+
 ---
 
 ## Риски и как их снимаем

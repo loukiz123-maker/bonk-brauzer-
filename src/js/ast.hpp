@@ -40,6 +40,8 @@ enum class ExprKind {
 };
 
 struct PropertyDef {
+  /// `{a: 1}` is data; `{get a() {…}}` / `{set a(v) {…}}` are accessors.
+  enum class Kind { Data, Get, Set } kind = Kind::Data;
   std::string key;
   ExprPtr value;
 };

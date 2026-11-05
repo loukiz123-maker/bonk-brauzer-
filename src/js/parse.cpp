@@ -887,13 +887,39 @@ struct Parser {
           auto object = make(ExprKind::ObjectLiteral);
           while (!is("}") && current().type != Token::Type::EndOfFile) {
             ast::PropertyDef property;
+            bool accessor = false;
             if (is_identifier() || current().type == Token::Type::Keyword) {
               property.key = take().text;
+              // `get x() {}` / `set x(v) {}`: a get/set keyword followed by a
+              // property name (not `:` for a data property, not `,`/`}` for shorthand).
+              if ((property.key == "get" || property.key == "set") && !is(":") && !is(",") && !is("}") &&
+                  current().type != Token::Type::EndOfFile) {
+                const bool is_getter = property.key == "get";
+                if (is_identifier() || current().type == Token::Type::Keyword) {
+                  property.key = take().text;
+                } else if (current().type == Token::Type::String) {
+                  property.key = take().text;
+                } else {
+                  if (error.empty()) error = "expected a property name after '" + property.key + "'";
+                  break;
+                }
+                property.kind = is_getter ? ast::PropertyDef::Kind::Get : ast::PropertyDef::Kind::Set;
+                auto expression = make(ExprKind::Function);
+                expression->function = parse_function(false, false);
+                expression->function->name = property.key;
+                property.value = expression;
+                accessor = true;
+              }
             } else if (current().type == Token::Type::String) {
               property.key = take().text;
             } else {
               if (error.empty()) error = "expected a property name";
               break;
+            }
+            if (accessor) {
+              object->properties.push_back(std::move(property));
+              if (!match(",")) break;
+              continue;
             }
             if (match(":")) {
               property.value = parse_assignment();

@@ -83,6 +83,9 @@ struct Function {
   std::size_t parameter_count = 0;
   Value prototype_value;
   std::shared_ptr<Object> prototype_object;  // `new` puts instance.__proto__ here
+  /// Static properties of a builtin constructor (`Object.keys`, `Array.isArray`):
+  /// functions are plain Values, so they carry their own namespace object.
+  std::shared_ptr<Object> statics;
 
   [[nodiscard]] bool is_native() const noexcept { return static_cast<bool>(native); }
 };
@@ -91,6 +94,7 @@ struct Property {
   Value value;
   bool writable = true;
   bool enumerable = true;
+  bool configurable = true;
 };
 
 /// A plain object / array / function object / error object.
@@ -99,16 +103,31 @@ struct Object {
 
   using Getter = std::function<Value()>;
   using Setter = std::function<void(const Value&)>;
+  /// Accessors that need their receiver: `{get x() { return this.y; }}` and
+  /// `Object.defineProperty(o, 'x', {get: …})` (the DOM bindings use the
+  /// receiver-less Getter/Setter above, which need no `this`).
+  using ReceiverGetter = std::function<Value(const Value&)>;
+  using ReceiverSetter = std::function<void(const Value&, const Value&)>;
 
   Kind kind = Kind::Plain;
   std::unordered_map<std::string, Property> properties;
   std::vector<Value> elements;  // only for Kind::Array
   std::shared_ptr<Function> function;
   std::shared_ptr<Object> prototype;
+  /// `Object.create(null)` / `setPrototypeOf(o, null)`: the chain really ends
+  /// here, so the implicit Object.prototype fallback must not apply.
+  bool prototype_is_null = false;
+  /// Set on a function's `prototype` object so `f.prototype.constructor === f`
+  /// without a shared_ptr cycle (the prototype only *observes* the function).
+  std::weak_ptr<Function> owner_function;
+  /// `Object.preventExtensions`/`freeze`: a non-extensible object cannot grow.
+  bool extensible = true;
   /// Accessor properties: how the bindings layer makes `el.textContent = 'x'`
   /// write through to the DOM without a special object kind.
   std::unordered_map<std::string, Getter> getters;
   std::unordered_map<std::string, Setter> setters;
+  std::unordered_map<std::string, ReceiverGetter> receiver_getters;
+  std::unordered_map<std::string, ReceiverSetter> receiver_setters;
 
   [[nodiscard]] bool is_array() const noexcept { return kind == Kind::Array; }
   [[nodiscard]] bool is_function() const noexcept { return kind == Kind::Function; }
