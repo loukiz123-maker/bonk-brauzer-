@@ -225,6 +225,8 @@ void Document::insert_before(NodeId parent_id, NodeId child_id, NodeId reference
   node_ref(reference).prev_sibling = child_id.index;
 }
 
+void Document::unlink(NodeId child_id) { detach(child_id); }
+
 void Document::remove_child(NodeId parent_id, NodeId child_id) {
   Node& child = node_ref(child_id);
   if (child.parent != parent_id.index) return;

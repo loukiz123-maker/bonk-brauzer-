@@ -120,19 +120,8 @@ struct Case {
   return cases;
 }
 
-[[nodiscard]] std::string escape_attribute(std::string_view value) {
-  std::string out;
-  for (const char c : value) {
-    if (c == '"') {
-      out += "&quot;";
-    } else if (c == '&') {
-      out += "&amp;";
-    } else {
-      out.push_back(c);
-    }
-  }
-  return out;
-}
+/// html5lib's expected files print attribute values verbatim (no escaping of `&`
+/// or `"`), so the comparison must do the same.
 
 void serialize(const dom::Document& document, dom::NodeId node, std::size_t depth,
                std::vector<std::string>& out) {
@@ -165,7 +154,7 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
     case dom::NodeType::Element: {
       std::vector<std::string> attributes;
       for (const dom::Attribute& attribute : document.attributes(node)) {
-        attributes.push_back(std::string(attribute.name) + "=\"" + escape_attribute(attribute.value) + "\"");
+        attributes.push_back(std::string(attribute.name) + "=\"" + std::string(attribute.value) + "\"");
       }
       std::sort(attributes.begin(), attributes.end());
       out.push_back(indent + "<" + std::string(document.tag_name(node)) + ">");

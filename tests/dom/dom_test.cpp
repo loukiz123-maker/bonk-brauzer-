@@ -177,3 +177,22 @@ BONK_TEST(selector, ids_and_classes_are_case_sensitive) {
   CHECK(!f.document.query_selector(f.document.root(), "#Main").valid());
   CHECK(f.document.query_selector(f.document.root(), "P").valid());  // type selectors are not
 }
+
+BONK_TEST(dom, unlink_moves_a_subtree_without_killing_it) {
+  dom::Document document;
+  const dom::NodeId parent = document.create_element("div");
+  const dom::NodeId child = document.create_element("span");
+  document.append_child(document.root(), parent);
+  document.append_child(parent, child);
+
+  document.unlink(child);
+  CHECK(document.is_alive(child));
+  CHECK_EQ(document.parent(child), dom::NodeId{});
+  CHECK_EQ(document.children(parent).size(), std::size_t{0});
+
+  document.append_child(document.root(), child);  // and it can be re-attached
+  CHECK_EQ(document.parent(child), document.root());
+
+  document.remove_child(document.root(), child);   // this one does destroy it
+  CHECK(!document.is_alive(child));
+}

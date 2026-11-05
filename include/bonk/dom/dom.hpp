@@ -65,7 +65,11 @@ class Document {
 
   void append_child(NodeId parent, NodeId child);
   void insert_before(NodeId parent, NodeId child, NodeId reference);
-  void remove_child(NodeId parent, NodeId child);
+  void remove_child(NodeId parent, NodeId child);  // unlinks *and* destroys the subtree
+  /// Detaches `child` from its parent but keeps it (and its subtree) alive, so it
+  /// can be re-attached elsewhere. This is what a tree "move" needs; `remove_child`
+  /// on the other hand invalidates every NodeId that pointed at the removed node.
+  void unlink(NodeId child);
   void set_attribute(NodeId element, std::string_view name, std::string_view value);
   void append_text(NodeId parent, std::string_view text);  // merges with a trailing Text node
 

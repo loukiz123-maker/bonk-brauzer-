@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bonk Brauzer — adoption agency</title>
+<style>
+  body { font-family: "DejaVu Sans", sans-serif; margin: 0; padding: 28px; background: #101318; color: #e8eaf0; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  p.lead { color: #9aa4b2; margin: 0 0 22px; font-size: 13px; }
+  .grid { display: flex; gap: 18px; }
+  .card { background: #1a1f27; border: 1px solid #2b3240; border-radius: 8px; padding: 14px 16px; width: 360px; }
+  .card h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .08em; color: #7f8b9c; margin: 0 0 10px; }
+  code { color: #8fd6ff; font-family: "DejaVu Sans Mono", monospace; font-size: 12px; display: block; margin-bottom: 10px; }
+  .out { border-left: 3px solid #3d7ea6; padding-left: 10px; line-height: 1.5; }
+  b { color: #ffd479; }
+  i { color: #8be28b; }
+  table { border-collapse: collapse; margin-top: 8px; font-size: 13px; }
+  td, th { border: 1px solid #2b3240; padding: 3px 8px; }
+  ruby { color: #c9a7ff; }
+  rt { font-size: 10px; color: #8b93a3; }
+</style>
+</head>
+<body>
+  <h1>The adoption agency, visible</h1>
+  <p class="lead">Bonk Brauzer builds the tree the spec asks for: misnested formatting elements are cloned back into place, not dropped.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>misnested &lt;b&gt;, &lt;i&gt;</h2>
+      <code>&lt;p&gt;&lt;b&gt;1&lt;i&gt;2&lt;/b&gt;3&lt;/i&gt;4&lt;/p&gt;</code>
+      <div class="out"><p><b>1<i>2</i></b><i>3</i>4</p></div>
+    </div>
+    <div class="card">
+      <h2>reconstructed after a block</h2>
+      <code>&lt;p&gt;&lt;b&gt;bold&lt;div&gt;still bold&lt;/div&gt;</code>
+      <div class="out"><p><b>bold</b></p><div><b>still bold</b></div></div>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:18px;">
+    <div class="card">
+      <h2>ruby annotations</h2>
+      <code>&lt;ruby&gt;base&lt;rb&gt;base&lt;rt&gt;note&lt;/ruby&gt;</code>
+      <div class="out"><ruby>base<rb>base</rb><rt>note</rt></ruby></div>
+    </div>
+    <div class="card">
+      <h2>table foster parenting</h2>
+      <code>&lt;table&gt;&lt;tr&gt;&lt;td&gt;cell&lt;/table&gt;tail</code>
+      <div class="out"><table><tr><td>cell</td></tr></table>tail</div>
+    </div>
+  </div>
+</body>
+</html>

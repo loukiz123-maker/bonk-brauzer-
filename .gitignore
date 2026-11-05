@@ -24,6 +24,7 @@ Testing/
 
 # Downloaded conformance corpora (html5lib-tests, test262) — see tools/fetch_conformance.sh
 /tests/conformance/corpus/
+/tests/conformance/corpus
 docs/conformance-local.md
 
 # Scratch renders from `bonk render` without -o

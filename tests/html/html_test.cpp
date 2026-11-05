@@ -182,3 +182,47 @@ BONK_TEST(html, parse_document_helper) {
   CHECK_EQ(document.value().text_content(heading), std::string("Hi"));
   CHECK_EQ(document.value().source_url(), std::string("test.html"));
 }
+
+// --- adoption agency, ruby annotations, "in select" --------------------------
+// These four shapes are the canonical misnesting cases from the html5lib tree
+// suite (adoption01/adoption02). Before the adoption agency algorithm they either
+// crashed the builder or produced a <b>/<a> that swallowed the rest of the page.
+
+BONK_TEST(html, adoption_agency_reopens_closed_formatting) {
+  CHECK_EQ(parse_and_serialize("<p><b>1<i>2</b>3</i>4"),
+           std::string("<html><head></head><body><p><b>1<i>2</i></b><i>3</i>4</p></body></html>"));
+}
+
+BONK_TEST(html, adoption_agency_uses_the_furthest_block) {
+  CHECK_EQ(parse_and_serialize("<b><p></b></p>"),
+           std::string("<html><head></head><body><b></b><p><b></b></p></body></html>"));
+}
+
+BONK_TEST(html, adoption_agency_for_anchors) {
+  CHECK_EQ(parse_and_serialize("<a>1<p>2</a>3</p>"),
+           std::string("<html><head></head><body><a>1</a><p><a>2</a>3</p></body></html>"));
+  CHECK_EQ(parse_and_serialize("<a><p></a></p>"),
+           std::string("<html><head></head><body><a></a><p><a></a></p></body></html>"));
+}
+
+BONK_TEST(html, formatting_elements_are_reconstructed_after_a_block) {
+  CHECK_EQ(parse_and_serialize("<p><b>x<div>y"),
+           std::string("<html><head></head><body><p><b>x</b></p><div><b>y</b></div></body></html>"));
+}
+
+BONK_TEST(html, ruby_annotations_become_siblings) {
+  CHECK_EQ(parse_and_serialize("<ruby>a<rb>b<rb>c"),
+           std::string("<html><head></head><body><ruby>a<rb>b</rb><rb>c</rb></ruby></body></html>"));
+  CHECK_EQ(parse_and_serialize("<ruby>a<rtc>b<rt>c"),
+           std::string("<html><head></head><body><ruby>a<rtc>b<rt>c</rt></rtc></ruby></body></html>"));
+}
+
+BONK_TEST(html, select_ignores_foreign_tags) {
+  CHECK_EQ(parse_and_serialize("<select><b><option>x"),
+           std::string("<html><head></head><body><select><option>x</option></select></body></html>"));
+  // A nested <select> closes the outer one and is then dropped, so the second
+  // <option> ends up as a stray child of <body> — which is what html5lib expects.
+  CHECK_EQ(parse_and_serialize("<select><option>a<select><option>b"),
+           std::string("<html><head></head><body><select><option>a</option></select>"
+                       "<option>b</option></body></html>"));
+}

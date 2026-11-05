@@ -137,6 +137,24 @@ Windows-1252, состояния комментария, script data escaped, BO
 внешний контент SVG/MathML, fragment parsing, DOCTYPE-идентификаторы, прототипы
 встроенных объектов JS, сборка мусора.
 
+## Этап 8 — adoption agency
+
+Список активных formatting-элементов и алгоритм adoption agency по WHATWG HTML
+§13.2.6.4.7: misnested `<b>/<i>/<a>/<nobr>` больше не превращают страницу в
+«лестницу». Плюс ruby-аннотации (`rb/rt/rtc/rp` как implied end tags) и режим
+«in select». Подробности: [`docs/STAGE-08.md`](STAGE-08.md),
+решение — [`docs/adr/0010-adoption-agency.md`](adr/0010-adoption-agency.md),
+демо — [`docs/demo/adoption.png`](demo/adoption.png).
+
+**Критерий выхода**: tree construction растёт измеримо и без регрессий в
+остальных наборах; misnested-случаи совпадают с html5lib побайтово; ни одного
+ASan/UBSan отчёта, `-Werror` чист. Сейчас: tree construction — 964/1 380
+(69.9 %, было 63.0 %), токенайзер — 6 281/6 820 (92.1 %), test262 — 2 673/13 254
+(20.2 % в конверте движка), reftests — 7/7, юнит-тестов 333. Открыто:
+`<template>` (contents fragment + режим «in template»), `<frameset>`, `noscript`
+со scripting, внешний контент SVG/MathML, fragment parsing, DOCTYPE-идентификаторы.
+
+
 ---
 
 ## Риски и как их снимаем
