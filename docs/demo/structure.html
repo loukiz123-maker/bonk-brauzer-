@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Bonk Brauzer — template, frameset, nested lists</title>
+<style>
+  body { font-family: "DejaVu Sans", sans-serif; margin: 0; padding: 26px; background: #101318; color: #e8eaf0; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.lead { color: #9aa4b2; margin: 0 0 20px; font-size: 13px; }
+  .grid { display: flex; gap: 18px; }
+  .card { background: #1a1f27; border: 1px solid #2b3240; border-radius: 8px; padding: 14px 16px; width: 360px; }
+  .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: #7f8b9c; margin: 0 0 10px; }
+  code { color: #8fd6ff; font-family: "DejaVu Sans Mono", monospace; font-size: 11.5px; display: block; margin-bottom: 10px; }
+  ul { margin: 0; padding-left: 18px; line-height: 1.5; }
+  li { color: #ffd479; }
+  .ok { color: #8be28b; font-size: 12.5px; }
+  .dim { color: #7f8b9c; font-size: 12.5px; }
+</style>
+</head>
+<body>
+  <h1>Structure the parser had to get right</h1>
+  <p class="lead">Bonk Brauzer, stage 9: template contents, frameset documents and scoped implied end tags.</p>
+
+  <div class="grid">
+    <div class="card">
+      <h2>nested list (li is list-scoped)</h2>
+      <code>&lt;ul&gt;&lt;li&gt;a&lt;ul&gt;&lt;li&gt;b</code>
+      <ul><li>a<ul><li>b</li></ul></li></ul>
+    </div>
+    <div class="card">
+      <h2>template contents are not laid out</h2>
+      <code>&lt;template&gt;&lt;p&gt;hidden&lt;/p&gt;&lt;/template&gt;</code>
+      <template><p>hidden</p></template>
+      <p class="ok">nothing rendered above: the children live in a DocumentFragment</p>
+    </div>
+  </div>
+
+  <div class="grid" style="margin-top:18px;">
+    <div class="card">
+      <h2>frameset document</h2>
+      <code>&lt;p&gt;&lt;frameset&gt;&lt;frame&gt;</code>
+      <p class="dim">A &lt;frameset&gt; replaces the still-empty body, so this document has no &lt;body&gt; at all. The engine parses it; it does not render frames yet.</p>
+    </div>
+    <div class="card">
+      <h2>scope boundaries</h2>
+      <code>&lt;div&gt;&lt;template&gt;&lt;/div&gt;Hello</code>
+      <p class="dim">&lt;/div&gt; is ignored: &lt;template&gt; is a scope boundary, so "Hello" lands inside the template, not after the div.</p>
+    </div>
+  </div>
+</body>
+</html>

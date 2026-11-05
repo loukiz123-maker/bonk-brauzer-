@@ -151,6 +151,11 @@ void serialize(const dom::Document& document, dom::NodeId node, std::size_t dept
       }
       return;
     }
+    case dom::NodeType::Fragment: {  // <template> contents
+      out.push_back(indent + "content");
+      for (const dom::NodeId child : document.children(node)) serialize(document, child, depth + 1, out);
+      return;
+    }
     case dom::NodeType::Element: {
       std::vector<std::string> attributes;
       for (const dom::Attribute& attribute : document.attributes(node)) {

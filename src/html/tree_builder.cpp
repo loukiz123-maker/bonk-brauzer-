@@ -11,7 +11,7 @@ namespace bonk::html {
 namespace {
 
 const char* const kVoid[] = {"area", "base", "br",  "col",   "embed", "hr",   "img",  "input",
-                             "link", "meta", "param", "source", "track", "wbr"};
+                             "link", "meta", "param", "source", "track", "wbr", "frame", "keygen"};
 
 // Start tags that close an open <p> (WHATWG "in body", the "close a p element"
 // clause). Getting this list right is most of what makes real pages lay out the
@@ -23,6 +23,29 @@ const char* const kCloseParagraph[] = {"address", "article", "aside",  "blockquo
                                        "listing", "main",    "menu",   "nav",        "ol",       "p",
                                        "plaintext", "pre",   "section", "summary",   "table",    "ul",
                                        "xmp"};
+
+// Start tags that leave the "frameset-ok" flag alone. The spec clears the flag for
+// characters and for "any other start tag", which is roughly "inline" content: a
+// document that only has blocks so far may still be replaced by a <frameset>.
+const char* const kFramesetOkStart[] = {"html",  "head",   "body",     "frameset", "frame",  "noframes", "base",
+                                        "basefont", "bgsound", "link", "meta",     "title",  "style",    "script",
+                                        "template", "li",   "dd",       "dt",       "form",   "pre",      "listing",
+                                        "button", "plaintext", "p",     "div",      "span",   "section",  "article",
+                                        "aside", "header", "footer",   "nav",      "main",   "h1",       "h2",
+                                        "h3",    "h4",     "h5",       "h6",       "ul",     "ol",       "dl",
+                                        "table", "caption", "colgroup", "tbody",   "td",     "tfoot",    "th",
+                                        "thead", "tr",     "col",      "center",   "dir",    "menu",     "address",
+                                        "blockquote", "details", "dialog", "fieldset", "figcaption", "figure",
+                                        "hgroup", "summary", "search",  "textarea", "select", "option",   "optgroup"};
+
+// End tags with their own "in body" rule: generate implied end tags, then pop.
+// Everything else goes through "any other end tag", which stops at a special
+// element instead of climbing out of it.
+const char* const kBlockEndTags[] = {"address",  "article", "aside",  "blockquote", "button",   "center",
+                                     "details",  "dialog",  "dir",    "div",        "dl",       "fieldset",
+                                     "figcaption", "figure", "footer", "header",    "hgroup",   "listing",
+                                     "main",     "menu",    "nav",    "ol",         "pre",      "section",
+                                     "summary",  "ul"};
 
 // Start tags that may stay inside the table structure instead of being fostered out.
 const char* const kTableAllowed[] = {"caption", "colgroup", "col", "tbody", "tfoot",  "thead", "tr",
@@ -46,8 +69,8 @@ const char* const kSpecial[] = {"address", "applet",  "area",   "article", "asid
                                 "tbody",   "td",       "template", "textarea", "tfoot", "th",      "thead",
                                 "title",   "tr",       "track",  "ul",      "wbr",    "xmp"};
 
-const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link", "meta", "title", "style",
-                                     "script", "noscript"};
+const char* const kHeadElements[] = {"base", "basefont", "bgsound", "link", "meta",     "title",
+                                     "style", "script",   "noscript",  "template"};
 
 const char* const kRawText[] = {"script", "style", "xmp", "iframe", "noembed", "noframes"};
 const char* const kRcData[] = {"title", "textarea"};
@@ -83,6 +106,25 @@ class TreeBuilder {
   // --- helpers -----------------------------------------------------------
   [[nodiscard]] dom::NodeId current() const {
     return stack_.empty() ? document_.root() : stack_.back();
+  }
+
+  /// `<template>` keeps its children in a separate DocumentFragment ("template
+  /// contents"), so the "appropriate place for inserting a node" is that fragment
+  /// rather than the element itself.
+  [[nodiscard]] dom::NodeId template_content(dom::NodeId element) const {
+    for (const dom::NodeId child : document_.children(element)) {
+      if (document_.type(child) == dom::NodeType::Fragment) return child;
+    }
+    return dom::NodeId{};
+  }
+
+  [[nodiscard]] dom::NodeId insertion_parent() const {
+    const dom::NodeId top = current();
+    if (tag_of(top) == "template") {
+      const dom::NodeId content = template_content(top);
+      if (content.valid()) return content;
+    }
+    return top;
   }
 
   [[nodiscard]] bool has_open(std::string_view tag) const {
@@ -196,10 +238,11 @@ class TreeBuilder {
     if (next == "button" && has_open("button")) close_open("button");
 
     if (next == "li") {
-      close_open("li");
+      // Only inside the same list: `<ul><li>a<ul><li>b` must nest, not flatten.
+      if (tag_in_scope("li", true)) close_open("li");
     } else if (next == "dd" || next == "dt") {
-      close_open("dd");
-      close_open("dt");
+      if (tag_in_scope("dd", true)) close_open("dd");
+      if (tag_in_scope("dt", true)) close_open("dt");
     } else if (next == "option") {
       close_open("option");
     } else if (next == "optgroup") {
@@ -226,6 +269,35 @@ class TreeBuilder {
       if (document_.tag_name(stack_[i - 1]) == "table") return stack_[i - 1];
     }
     return dom::NodeId{};
+  }
+
+  [[nodiscard]] bool in_frameset() const { return has_open("frameset"); }
+
+  /// True when the document's content root is a <frameset> instead of a <body>.
+  [[nodiscard]] bool frameset_document() const { return body_.valid() && tag_of(body_) == "frameset"; }
+
+  /// Replaces the (still empty) <body> with a <frameset>, per the "in body" rule
+  /// for a frameset start tag.
+  void enter_frameset(const Token& token) {
+    const dom::NodeId frameset = make_element(token);
+    if (body_.valid() && body_ != head_) document_.unlink(body_);
+    document_.append_child(html_, frameset);
+    stack_.clear();
+    stack_.push_back(html_);
+    stack_.push_back(frameset);
+    body_ = frameset;
+  }
+
+  /// True when a `<template>` sits above the innermost table in the stack: the
+  /// "in template" rules then own the content, so the implicit tbody/tr/colgroup
+  /// fix must not run (a `<td>` inside `<template>` belongs to the template).
+  [[nodiscard]] bool template_above_table() const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view tag = tag_of(stack_[i - 1]);
+      if (tag == "template") return true;
+      if (tag == "table") return false;
+    }
+    return false;
   }
 
   /// True when text or a stray element here must be foster-parented (i.e. moved
@@ -351,7 +423,7 @@ class TreeBuilder {
     }
     for (; index < afe_.size(); ++index) {
       const dom::NodeId clone = clone_element(afe_[index]);
-      document_.append_child(current(), clone);
+      document_.append_child(insertion_parent(), clone);
       stack_.push_back(clone);
       afe_[index] = clone;
     }
@@ -497,6 +569,20 @@ class TreeBuilder {
     }
   }
 
+  /// True when `tag` is open above the nearest scope boundary.
+  [[nodiscard]] bool tag_in_scope(std::string_view tag, bool list_scope = false) const {
+    for (std::size_t i = stack_.size(); i > 0; --i) {
+      const std::string_view top = tag_of(stack_[i - 1]);
+      if (top == tag) return true;
+      if (top == "applet" || top == "caption" || top == "html" || top == "table" || top == "td" ||
+          top == "th" || top == "marquee" || top == "object" || top == "template") {
+        return false;
+      }
+      if (list_scope && (top == "ol" || top == "ul" || top == "dl")) return false;
+    }
+    return false;
+  }
+
   /// Scope check used by the adoption agency: <html>, <table>, <td>, …
   [[nodiscard]] bool in_scope(dom::NodeId node) const {
     for (std::size_t i = stack_.size(); i > 0; --i) {
@@ -510,9 +596,16 @@ class TreeBuilder {
     return false;
   }
 
-  /// "Any other end tag": pop up to and including the matching element.
-  void generic_end_tag(std::string_view name) {
-    const std::string_view top = stack_.empty() ? std::string_view{} : document_.tag_name(stack_.back());
+  /// Block-level end tags: `<div>`, `<ul>`, `<button>`, … The spec pops them after
+  /// generating implied end tags, which is how `</div>` closes a dangling `<p>`.
+  void block_end_tag(std::string_view name) {
+    if (!tag_in_scope(name)) {  // a scope boundary (<template>, <td>, <table>, …) wins
+      report("html.ignored_end_tag", "</" + std::string(name) + "> ignored: <" + std::string(name) +
+                                         "> is not in scope");
+      return;
+    }
+    const std::string_view top = stack_.empty() ? std::string_view{} : tag_of(stack_.back());
+    generate_implied_end_tags(name);
     if (!close_open(name)) {
       report("html.stray_end_tag", "unmatched </" + std::string(name) + ">");
     } else if (top != name) {
@@ -520,10 +613,45 @@ class TreeBuilder {
     }
   }
 
-  void insert_element(const Token& token, bool push) {
+  /// "Any other end tag" (HTML §13.2.6.4.7, "in body"): walk down the stack from
+  /// the current node. A matching element is popped together with everything above
+  /// it; a "special" element — `<p>`, `<table>`, `<template>`, … — stops the search
+  /// and the tag is ignored. Without that rule `</div>` climbs out of a
+  /// `<template>` and `</span>` climbs out of an open `<button>`.
+  void generic_end_tag(std::string_view name) {
+    if (contains(kBlockEndTags, name)) {
+      block_end_tag(name);
+      return;
+    }
+    for (int i = static_cast<int>(stack_.size()) - 1; i >= 0; --i) {
+      const dom::NodeId node = stack_[static_cast<std::size_t>(i)];
+      if (tag_of(node) == name) {
+        generate_implied_end_tags(name);
+        const int index = index_in_stack(node);
+        if (index >= 0) stack_.resize(static_cast<std::size_t>(index));
+        return;
+      }
+      if (is_special(tag_of(node))) {
+        report("html.ignored_end_tag",
+               "</" + std::string(name) + "> ignored: <" + std::string(tag_of(node)) + "> is a boundary");
+        return;
+      }
+    }
+    report("html.stray_end_tag", "unmatched </" + std::string(name) + ">");
+  }
+
+  /// Creates an element with its attributes; `<template>` also gets its contents
+  /// fragment, which is where its children will actually land.
+  [[nodiscard]] dom::NodeId make_element(const Token& token) {
     const dom::NodeId element = document_.create_element(token.name);
-    for (const auto& [name, value] : token.attributes) document_.set_attribute(element, name, value);
-    document_.append_child(current(), element);
+    for (const auto& [key, value] : token.attributes) document_.set_attribute(element, key, value);
+    if (token.name == "template") document_.append_child(element, document_.create_fragment());
+    return element;
+  }
+
+  void insert_element(const Token& token, bool push) {
+    const dom::NodeId element = make_element(token);
+    document_.append_child(insertion_parent(), element);
     if (push) stack_.push_back(element);
   }
 
@@ -533,7 +661,7 @@ class TreeBuilder {
       foster_insert(document_.create_text(text), true);
       return;
     }
-    document_.append_text(current(), text);
+    document_.append_text(insertion_parent(), text);
   }
 
   void report(std::string_view code, std::string_view message) {
@@ -575,9 +703,21 @@ class TreeBuilder {
   }
 
   void handle_characters(std::string_view text) {
+    const std::string_view top = tag_of(current());
+    if (top == "frameset" || top == "frame") {  // only whitespace survives here
+      if (trim(text).empty()) {
+        document_.append_text(current(), text);
+      } else {
+        report("html.ignored_in_frameset", "text ignored inside <frameset>");
+      }
+      return;
+    }
+    // A frameset document has no body: anything after </frameset> is dropped, but
+    // <noframes> and <template> keep real content.
+    if (frameset_document() && !has_open("noframes") && !has_open("template")) return;
     if (!body_created()) {
-      const dom::NodeId top = current();
-      const bool inside_element = html_.valid() && top != html_ && top != head_;
+      const dom::NodeId top_node = current();
+      const bool inside_element = html_.valid() && top_node != html_ && top_node != head_;
       if (inside_element) {  // text inside <title>/<style>/<script> in the head
         append_text(text);
         return;
@@ -586,6 +726,7 @@ class TreeBuilder {
       if (trim(text).empty() && !options_.keep_whitespace_in_head) return;
       ensure_body();
     }
+    if (!trim(text).empty()) frameset_ok_ = false;
     if (!table_context()) reconstruct_formatting();
     append_text(text);
   }
@@ -623,9 +764,44 @@ class TreeBuilder {
       return;
     }
 
+    if (name == "frameset") {
+      if (in_frameset()) {  // a nested frameset is just another child
+        insert_element(token, true);
+        return;
+      }
+      if (body_created() && !frameset_ok_) {
+        report("html.ignored_frameset", "<frameset> ignored: the body already has content");
+        return;
+      }
+      ensure_html();
+      if (!head_created()) {
+        ensure_head();
+        close_head();
+      }
+      enter_frameset(token);
+      return;
+    }
+
+    if (name == "frame" && !in_frameset()) {  // <frame> outside a frameset is dropped
+      report("html.stray_frame", "<frame> outside <frameset> ignored");
+      return;
+    }
+
+    if (in_frameset()) {
+      if (name == "frame") {
+        insert_element(token, false);
+        return;
+      }
+      if (name != "template" && name != "noframes") {
+        report("html.ignored_in_frameset", "<" + std::string(name) + "> ignored inside <frameset>");
+        return;
+      }
+    }
+
     if (!body_created() && contains(kHeadElements, name)) {
       ensure_head();
       insert_element(token, true);
+      if (name == "template") push_marker();
       return;
     }
 
@@ -637,7 +813,11 @@ class TreeBuilder {
       return;
     }
 
-    if (!body_created()) ensure_body();
+    if (!contains(kFramesetOkStart, name) && name != "frameset") frameset_ok_ = false;
+
+    // Content of an open <template> is parsed as if it were in <body>, but it must
+    // stay inside the template instead of creating the document's <body>.
+    if (!body_created() && !has_open("template")) ensure_body();
 
     // --- "in select" insertion mode ---------------------------------------
     // Inside <select> only option/optgroup/script/template survive; the rest is
@@ -672,7 +852,7 @@ class TreeBuilder {
 
     // --- table fixes: implicit <tbody>/<tr>/<colgroup> -------------------
     if ((name == "td" || name == "th" || name == "tr" || name == "col" || name == "colgroup") &&
-        nearest_table().valid()) {
+        nearest_table().valid() && !template_above_table()) {
       // "Clear the stack back to a table context": drop fostered elements that sit
       // above the table, but keep the table/tbody/tr chain that is already there.
       while (!stack_.empty()) {
@@ -724,9 +904,8 @@ class TreeBuilder {
       }
       reconstruct_formatting();
       implied_end_tags(name);
-      const dom::NodeId element = document_.create_element(token.name);
-      for (const auto& [key, value] : token.attributes) document_.set_attribute(element, key, value);
-      document_.append_child(current(), element);
+      const dom::NodeId element = make_element(token);
+      document_.append_child(insertion_parent(), element);
       stack_.push_back(element);
       push_formatting(element);
       return;
@@ -744,6 +923,16 @@ class TreeBuilder {
   void handle_end_tag(const Token& token) {
     const std::string_view name = token.name;
 
+    if (in_frameset()) {
+      if (name == "frameset") {
+        close_open("frameset");  // body_ keeps pointing at it: this is a frameset document
+        return;
+      }
+      if (name != "noframes" && name != "template") {
+        report("html.ignored_in_frameset", "</" + std::string(name) + "> ignored inside <frameset>");
+        return;
+      }
+    }
     if (name == "html" || name == "body") return;  // ignore: the tree is closed at EOF
     if (name == "head") {
       close_head();
@@ -782,6 +971,19 @@ class TreeBuilder {
         return;
       }
     }
+    if (name == "template") {
+      // Pop everything up to and including the template element, then drop the
+      // active-formatting entries that were created inside it (back to the marker).
+      for (std::size_t i = stack_.size(); i > 0; --i) {
+        if (tag_of(stack_[i - 1]) == "template") {
+          stack_.resize(i - 1);
+          clear_to_last_marker();
+          return;
+        }
+      }
+      report("html.stray_end_tag", "</template> without an open <template>");
+      return;
+    }
     if (is_formatting(name)) {
       adoption_agency(name);
       return;
@@ -801,6 +1003,10 @@ class TreeBuilder {
   std::unique_ptr<Tokenizer> tokenizer_;
 
   bool document_element_seen_ = false;
+  /// "frameset-ok": true while the body has no content that a <frameset> could not
+  /// replace. `<p><frameset>` therefore still yields a frameset, `<b><frameset>`
+  /// does not.
+  bool frameset_ok_ = true;
   std::vector<dom::NodeId> stack_;
   std::vector<dom::NodeId> afe_;  // active formatting elements; invalid NodeId = marker
   dom::NodeId html_;

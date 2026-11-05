@@ -196,3 +196,13 @@ BONK_TEST(dom, unlink_moves_a_subtree_without_killing_it) {
   document.remove_child(document.root(), child);   // this one does destroy it
   CHECK(!document.is_alive(child));
 }
+
+BONK_TEST(dom, fragments_hold_children_and_serialise_them) {
+  dom::Document document;
+  const dom::NodeId fragment = document.create_fragment();
+  CHECK_EQ(document.type(fragment), dom::NodeType::Fragment);
+  CHECK_EQ(dom::node_type_name(document.type(fragment)), std::string_view("fragment"));
+  document.append_text(fragment, "hello");
+  CHECK_EQ(document.text_content(fragment), std::string("hello"));
+  CHECK_EQ(document.to_html(fragment), std::string("hello"));
+}

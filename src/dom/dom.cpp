@@ -8,8 +8,9 @@
 namespace bonk::dom {
 namespace {
 
-const char* const kVoidElements[] = {"area", "base",  "br",    "col",   "embed", "hr",   "img", "input",
-                                     "link", "meta",  "param", "source", "track", "wbr"};
+const char* const kVoidElements[] = {"area", "base",  "basefont", "bgsound", "br",   "col",    "embed",
+                                     "frame", "hr",   "img",      "input",   "keygen", "link", "meta",
+                                     "param", "source", "track",   "wbr"};
 
 bool is_void_element(std::string_view tag) noexcept {
   for (const char* name : kVoidElements) {
@@ -89,6 +90,8 @@ std::string_view node_type_name(NodeType type) noexcept {
       return "comment";
     case NodeType::Doctype:
       return "doctype";
+    case NodeType::Fragment:
+      return "fragment";
   }
   return "unknown";
 }
@@ -140,6 +143,15 @@ NodeId Document::create_element(std::string_view name) {
   node.type = NodeType::Element;
   node.generation = 1;
   node.name = intern(name);
+  const auto index = static_cast<std::uint32_t>(nodes_.size());
+  nodes_.push_back(node);
+  return id_for(index);
+}
+
+NodeId Document::create_fragment() {
+  Node node;
+  node.type = NodeType::Fragment;
+  node.generation = 1;
   const auto index = static_cast<std::uint32_t>(nodes_.size());
   nodes_.push_back(node);
   return id_for(index);
@@ -426,6 +438,7 @@ void Document::serialize_into(NodeId id, std::string& out) const {
   const Node& node = node_ref(id);
   switch (node.type) {
     case NodeType::Document:
+    case NodeType::Fragment:  // a fragment serialises as its children
       for (const NodeId kid : children(id)) serialize_into(kid, out);
       return;
     case NodeType::Doctype:
@@ -475,6 +488,9 @@ void Document::debug_into(NodeId id, int depth, std::string& out) const {
   switch (node.type) {
     case NodeType::Document:
       out += "#document";
+      break;
+    case NodeType::Fragment:
+      out += "#fragment";
       break;
     case NodeType::Doctype:
       out += "#doctype \"";

@@ -226,3 +226,51 @@ BONK_TEST(html, select_ignores_foreign_tags) {
            std::string("<html><head></head><body><select><option>a</option></select>"
                        "<option>b</option></body></html>"));
 }
+
+// --- <template> and <frameset> ----------------------------------------------
+// `<template>` keeps its children in a separate DocumentFragment ("template
+// contents"); `<frameset>` replaces an empty body instead of becoming a child.
+
+BONK_TEST(html, template_contents_live_in_a_fragment) {
+  CHECK_EQ(parse_and_serialize("<template><div>x</div></template>"),
+           std::string("<html><head><template><div>x</div></template></head><body></body></html>"));
+
+  dom::Document document;
+  CHECK(parse_html("<template><div>x</div></template>", document, nullptr).is_ok());
+  const dom::NodeId templ = document.query_selector(document.root(), "template");
+  REQUIRE(templ.valid());
+  const std::vector<dom::NodeId> children = document.children(templ);
+  REQUIRE(children.size() == 1);
+  CHECK_EQ(document.type(children[0]), dom::NodeType::Fragment);  // not an element child
+  const std::vector<dom::NodeId> content = document.children(children[0]);
+  REQUIRE(content.size() == 1);
+  CHECK_EQ(document.tag_name(content[0]), std::string("div"));
+}
+
+BONK_TEST(html, template_in_body_and_inside_a_table) {
+  CHECK_EQ(parse_and_serialize("<body><template><p>a</p></template><p>b"),
+           std::string("<html><head></head><body><template><p>a</p></template><p>b</p></body></html>"));
+  // A <td> inside <template> belongs to the template, so no implicit <tbody>/<tr>.
+  CHECK_EQ(parse_and_serialize("<table><template><td>"),
+           std::string("<html><head></head><body><table><template><td></td></template></table></body></html>"));
+  // </div> cannot escape the template: it is a scope boundary.
+  CHECK_EQ(parse_and_serialize("<div><template></div>Hello"),
+           std::string("<html><head></head><body><div><template>Hello</template></div></body></html>"));
+}
+
+BONK_TEST(html, frameset_replaces_an_empty_body) {
+  CHECK_EQ(parse_and_serialize("<p><frameset><frame></frameset>"),
+           std::string("<html><head></head><frameset><frame></frameset></html>"));
+  CHECK_EQ(parse_and_serialize("<frameset><frame src=a><noframes>x</noframes></frameset>"),
+           std::string("<html><head></head><frameset><frame src=\"a\"><noframes>x</noframes></frameset></html>"));
+}
+
+BONK_TEST(html, frameset_is_ignored_once_the_body_has_content) {
+  CHECK_EQ(parse_and_serialize("<b>x<frameset><frame>"),
+           std::string("<html><head></head><body><b>x</b></body></html>"));
+}
+
+BONK_TEST(html, nested_lists_nest) {
+  CHECK_EQ(parse_and_serialize("<ul><li>a<ul><li>b"),
+           std::string("<html><head></head><body><ul><li>a<ul><li>b</li></ul></li></ul></body></html>"));
+}

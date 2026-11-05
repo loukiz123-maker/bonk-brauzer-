@@ -155,6 +155,26 @@ ASan/UBSan отчёта, `-Werror` чист. Сейчас: tree construction —
 со scripting, внешний контент SVG/MathML, fragment parsing, DOCTYPE-идентификаторы.
 
 
+## Этап 9 — `<template>`, `<frameset>`, границы scope
+
+Содержимое `<template>` переехало в настоящий `DocumentFragment`
+(`NodeType::Fragment`), появился упрощённый режим «in template». `<frameset>`
+заменяет ещё пустой `<body>` по флагу frameset-ok, а закрывающие теги больше не
+выходят за scope-границы (`template`, `table`, `td`, список для `li/dd/dt`).
+Подробности: [`docs/STAGE-09.md`](STAGE-09.md),
+решение — [`docs/adr/0011-template-contents-and-frameset.md`](adr/0011-template-contents-and-frameset.md),
+демо — [`docs/demo/structure.png`](demo/structure.png).
+
+**Критерий выхода**: tree construction растёт измеримо, содержимое шаблона не
+попадает в layout, frameset-документы разбираются, регрессий в остальных наборах
+нет. Сейчас: tree construction — 1 092/1 380 (79.1 %, было 69.9 %), токенайзер —
+6 281/6 820 (92.1 %), test262 — 2 673/13 254 (20.2 % в конверте движка),
+reftests — 7/7, юнит-тестов 339. Открыто: полный автомат insertion mode (таблица
+внутри `<template>`), foster parenting в сложных комбинациях, `noscript` со
+scripting, `<menuitem>`, комментарии `--!`, DOCTYPE-идентификаторы, рендеринг
+frameset'ов, внешний контент SVG/MathML, fragment parsing.
+
+
 ---
 
 ## Риски и как их снимаем

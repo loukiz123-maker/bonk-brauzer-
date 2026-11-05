@@ -25,7 +25,16 @@ namespace bonk::dom {
 
 inline constexpr std::uint32_t kNoNode = 0xFFFFFFFFu;
 
-enum class NodeType : std::uint8_t { Document, Element, Text, Comment, Doctype };
+enum class NodeType : std::uint8_t {
+  Document,
+  Element,
+  Text,
+  Comment,
+  Doctype,
+  /// A document fragment. Today only used for `<template>` contents, where the
+  /// spec keeps the parsed children *outside* the element itself.
+  Fragment,
+};
 
 [[nodiscard]] std::string_view node_type_name(NodeType type) noexcept;
 
@@ -62,6 +71,7 @@ class Document {
   [[nodiscard]] NodeId create_text(std::string_view text);
   [[nodiscard]] NodeId create_comment(std::string_view text);
   [[nodiscard]] NodeId create_doctype(std::string_view text);
+  [[nodiscard]] NodeId create_fragment();
 
   void append_child(NodeId parent, NodeId child);
   void insert_before(NodeId parent, NodeId child, NodeId reference);
