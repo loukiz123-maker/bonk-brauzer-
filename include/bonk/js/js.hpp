@@ -25,7 +25,7 @@ namespace bonk::js {
 struct Object;
 struct Function;
 
-enum class ValueType { Undefined, Null, Boolean, Number, String, Object, Function };
+enum class ValueType { Undefined, Null, Boolean, Number, String, Symbol, Object, Function };
 
 struct Value {
   ValueType type = ValueType::Undefined;
@@ -59,6 +59,14 @@ struct Value {
     value.text = std::move(value_in);
     return value;
   }
+  /// `Symbol(description)`: `number` carries the unique id, `text` the description.
+  static Value symbol_of(double id, std::string description) {
+    Value value;
+    value.type = ValueType::Symbol;
+    value.number = id;
+    value.text = std::move(description);
+    return value;
+  }
   static Value object_of(std::shared_ptr<Object> value_in);
   static Value function_of(std::shared_ptr<Function> value_in);
 
@@ -68,6 +76,7 @@ struct Value {
   [[nodiscard]] bool is_number() const noexcept { return type == ValueType::Number; }
   [[nodiscard]] bool is_string() const noexcept { return type == ValueType::String; }
   [[nodiscard]] bool is_boolean() const noexcept { return type == ValueType::Boolean; }
+  [[nodiscard]] bool is_symbol() const noexcept { return type == ValueType::Symbol; }
   [[nodiscard]] bool is_object() const noexcept { return type == ValueType::Object || type == ValueType::Function; }
 };
 

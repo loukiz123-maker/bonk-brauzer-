@@ -39,7 +39,7 @@ namespace {
 const std::unordered_set<std::string>& unsupported_features() {
   static const std::unordered_set<std::string> kFeatures = {
       "Proxy",          "Reflect",         "Reflect.construct", "Reflect.defineProperty",
-      "Symbol",         "Symbol.iterator", "Symbol.toStringTag", "Symbol.asyncIterator",
+      "Symbol.asyncIterator",
       "BigInt",         "class",           "class-fields-public", "class-fields-private",
       "class-methods-private", "class-static-methods-private", "class-static-fields-public",
       "generators",     "async-functions", "async-iteration",  "Promise",
@@ -47,7 +47,7 @@ const std::unordered_set<std::string>& unsupported_features() {
       "TypedArray",     "ArrayBuffer",     "DataView",          "SharedArrayBuffer",
       "Atomics",        "regexp",          "regexp-unicode-property-escapes",
       "regexp-lookbehind", "regexp-named-groups", "Temporal",   "Intl",
-      "Intl.Era-monthcode", "computed-property-names", "for-of",
+      "Intl.Era-monthcode",
       "dynamic-import", "modules",         "explicit-resource-management",
       "iterator-helpers", "decorators",    "deferred-import-evaluation",
       "hashbang",       "source-phase-imports", "import-attributes",
@@ -68,7 +68,8 @@ const std::unordered_set<std::string>& unsupported_features() {
 const std::unordered_set<std::string>& supported_builtins() {
   static const std::unordered_set<std::string> kBuiltins = {
       "Object", "Array",  "String", "Number", "Boolean", "Math",    "JSON",   "Error",
-      "Function", "parseInt", "parseFloat", "isNaN", "global", "Array.prototype", "Object.prototype",
+      "Function", "Symbol", "parseInt", "parseFloat", "isNaN", "global", "Array.prototype",
+      "Object.prototype", "String.prototype",
   };
   return kBuiltins;
 }

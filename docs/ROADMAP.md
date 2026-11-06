@@ -685,6 +685,40 @@ tree construction 1 792/1 792 (100 %), юнит-тестов **567**. Откры
 валидация дескрипторов в `defineProperty`.
 
 
+## Этап 33 — `Symbol` и протокол итерации
+
+`ValueType::Symbol`: значение символа — уникальный `id` плюс описание, поэтому
+`Symbol('a') === Symbol('a')` ложно, а `Symbol.for('k')` из реестра — истинно.
+Глобальный `Symbol` с `Symbol.for`/`Symbol.keyFor`, `Symbol.prototype`
+(`toString`, `valueOf`, `@@toPrimitive`, геттер `description`,
+`@@toStringTag`), 12 хорошо известных символов (не записываемых) и тег
+`@@toStringTag` у `Symbol.prototype`/`Math`/`JSON`. Символьные ключи свойств
+хранятся в той же таблице, что и строковые: ключ кодируется байтом `0xFF` плюс
+`id` (`to_property_key`/`is_symbol_key`), поэтому `Object.keys`/`for-in`/
+`JSON.stringify` символов не видят, а `Object.getOwnPropertySymbols`,
+`Object.hasOwn`, `delete` и `Object.assign` — видят. Протокол итерации:
+`get_iterator`/`iterator_next`/`iterator_close`, ленивый `for-of` с закрытием
+итератора на `break`/`return`/`throw`, spread и `Array.from` через
+`@@iterator`, `Array.prototype.values/keys/entries` с самоподобным итератором,
+`String.prototype[Symbol.iterator]` по код-пойнтам UTF-8, `@@iterator` у
+`arguments`, `for (… of null)` как `TypeError`, `Object(primitive)` как
+настоящая обёртка.
+
+Подробности: [`docs/STAGE-33.md`](STAGE-33.md), решение —
+[`docs/adr/0035-symbols-and-property-key-namespace.md`](adr/0035-symbols-and-property-key-namespace.md).
+
+**Критерий выхода**: итерируемость определяется наличием `@@iterator`, а не
+формой значения, а символ — полноценный примитив и отдельное пространство
+ключей. Сейчас: test262 — **10 309/18 391 (56.1 %)**, reftests 13/13,
+токенайзер 6 792/6 820 (99.6 %), tree construction 1 792/1 792 (100 %),
+юнит-тестов **586**. Конверт расширен на 853 файла (сняты `Symbol`,
+`Symbol.iterator`, `Symbol.toStringTag`, `for-of`,
+`computed-property-names`). Открыто: `RegExp` (693 файла
+`built-ins/String`), `Date` (152), TDZ и блочные `let`/`const`,
+`Symbol.species`/`hasInstance`/`unscopables` как семантика, деструктуризация
+через `IteratorClose`.
+
+
 ---
 
 ## Риски и как их снимаем

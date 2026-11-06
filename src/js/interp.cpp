@@ -234,6 +234,7 @@ std::string json_serialize(const Value& value, int depth) {
   switch (value.type) {
     case ValueType::Undefined:
     case ValueType::Null:
+    case ValueType::Symbol:  // like `undefined`: it disappears from the output
       return "null";
     case ValueType::Boolean:
       return value.boolean ? "true" : "false";
@@ -253,7 +254,10 @@ std::string json_serialize(const Value& value, int depth) {
         return out + "]";
       }
       std::vector<std::string> keys;
-      for (const auto& entry : value.object->properties) keys.push_back(entry.first);
+      for (const auto& entry : value.object->properties) {
+        if (!entry.first.empty() && static_cast<unsigned char>(entry.first.front()) == 0xFF) continue;
+        keys.push_back(entry.first);
+      }
       std::sort(keys.begin(), keys.end());
       std::string out = "{";
       bool first = true;
@@ -420,6 +424,30 @@ struct RuntimeState {
   /// `Function.prototype` (stage 28): answers `constructor` without storing a
   /// back-reference to the `Function` global in itself.
   std::shared_ptr<Object> function_prototype;
+  /// Symbols (stage 33): a fresh id per `Symbol()` call, the `Symbol.for` registry, and
+  /// the well-known symbols this engine knows about.
+  double next_symbol_id = 1;
+  std::unordered_map<std::string, Value> symbol_registry;
+  /// id → description, so a symbol-valued property key can be turned back into a value
+  /// (`Object.getOwnPropertySymbols`).
+  std::unordered_map<double, std::string> symbol_descriptions;
+  /// Symbols created *without* a description (`Symbol()`), which `.description` reports as
+  /// `undefined` — distinct from `Symbol('')`.
+  std::unordered_set<double> symbol_without_description;
+  /// `Symbol.prototype` (20.4.3): the prototype of `Object(symbol)` wrappers.
+  std::shared_ptr<Object> symbol_prototype;
+  Value symbol_iterator;
+  Value symbol_async_iterator;
+  Value symbol_has_instance;
+  Value symbol_is_concat_spreadable;
+  Value symbol_species;
+  Value symbol_to_primitive;
+  Value symbol_to_string_tag;
+  Value symbol_unscopables;
+  Value symbol_match;
+  Value symbol_replace;
+  Value symbol_search;
+  Value symbol_split;
 
   void log(ConsoleEntry::Level level, const std::string& message) {
     console.push_back(ConsoleEntry{level, message});
@@ -464,6 +492,23 @@ bool has_accessor(const Object& object, const std::string& key) {
          object.receiver_getters.count(key) != 0 || object.receiver_setters.count(key) != 0;
 }
 
+/// Byte prefix for symbol-keyed properties. A UTF-8 string can never contain a lone
+/// 0xFF byte, so this namespace cannot collide with a string key.
+constexpr char kSymbolKeyPrefix = static_cast<char>(0xFF);
+
+[[nodiscard]] bool is_symbol_key(const std::string& key) {
+  return !key.empty() && key.front() == kSymbolKeyPrefix;
+}
+
+/// ToPropertyKey: a symbol stays a symbol (encoded), everything else becomes a string.
+[[nodiscard]] std::string to_property_key(const Value& value) {
+  if (value.is_symbol()) {
+    return std::string(1, kSymbolKeyPrefix) +
+           number_to_raw_string(value.number);  // the id, not the description
+  }
+  return to_string(value);
+}
+
 /// Own property keys. Array indices come first in ascending numeric order, then
 /// the remaining string keys sorted: `std::unordered_map` has no insertion
 /// order, so we sort instead of pretending to preserve it (see ADR 0025).
@@ -472,6 +517,7 @@ std::vector<std::string> own_property_keys(const Object& object, bool enumerable
   std::vector<std::string> names;
   auto classify = [&](const std::string& key, bool enumerable) {
     if (enumerable_only && !enumerable) return;
+    if (is_symbol_key(key)) return;  // `Object.keys`/`for-in` only see string keys
     std::size_t index = 0;
     (is_array_index(key, index) ? indices : names).push_back(key);
   };
@@ -499,6 +545,45 @@ std::vector<std::string> own_property_keys(const Object& object, bool enumerable
   std::sort(names.begin(), names.end());
   indices.insert(indices.end(), names.begin(), names.end());
   return indices;
+}
+
+/// Own symbol-keyed keys, ordered by symbol id (which is also creation order, so
+/// `Object.getOwnPropertySymbols` is deterministic).
+[[nodiscard]] std::vector<std::string> own_symbol_keys(const Object& object) {
+  std::vector<std::string> keys;
+  auto collect = [&](const auto& map) {
+    for (const auto& entry : map) {
+      if (is_symbol_key(entry.first)) keys.push_back(entry.first);
+    }
+  };
+  collect(object.properties);
+  collect(object.getters);
+  collect(object.setters);
+  collect(object.receiver_getters);
+  collect(object.receiver_setters);
+  std::sort(keys.begin(), keys.end(), [](const std::string& a, const std::string& b) {
+    const double left = std::strtod(a.c_str() + 1, nullptr);
+    const double right = std::strtod(b.c_str() + 1, nullptr);
+    return left < right;
+  });
+  keys.erase(std::unique(keys.begin(), keys.end()), keys.end());
+  return keys;
+}
+
+/// `Symbol.prototype.description` (20.4.3.2): `undefined` when the symbol was created
+/// with no description, the description string otherwise (`""` is a real description).
+Value symbol_description_value(const RuntimeState& runtime, double id) {
+  if (runtime.symbol_without_description.find(id) != runtime.symbol_without_description.end()) {
+    return Value::undefined();
+  }
+  const auto found = runtime.symbol_descriptions.find(id);
+  return Value::string_of(found == runtime.symbol_descriptions.end() ? std::string() : found->second);
+}
+
+Value symbol_value_from_key(const RuntimeState& runtime, const std::string& key) {
+  const double id = std::strtod(key.c_str() + 1, nullptr);
+  const auto description = runtime.symbol_descriptions.find(id);
+  return Value::symbol_of(id, description == runtime.symbol_descriptions.end() ? std::string() : description->second);
 }
 
 /// Array methods work on *array-likes*: real arrays, `arguments`, and any object
@@ -699,9 +784,20 @@ Value property_descriptor(const Object& object, const std::string& key) {
       } else {
         add_attribute("value", Value::object_of(owner->prototype_object));
       }
-      add_attribute("writable", Value::boolean_of(key == "prototype"));
+      // A builtin may pin the attributes by storing the property in its statics
+      // (`Symbol.prototype` is non-writable, 20.4.2.11).
+      bool writable = key == "prototype";
+      bool configurable = key != "prototype";
+      if (owner->statics != nullptr) {
+        const auto explicit_property = owner->statics->properties.find(key);
+        if (explicit_property != owner->statics->properties.end()) {
+          writable = explicit_property->second.writable;
+          configurable = explicit_property->second.configurable;
+        }
+      }
+      add_attribute("writable", Value::boolean_of(writable));
       add_attribute("enumerable", Value::boolean_of(false));
-      add_attribute("configurable", Value::boolean_of(key != "prototype"));
+      add_attribute("configurable", Value::boolean_of(configurable));
       return Value::object_of(std::move(own_descriptor));
     }
   }
@@ -954,10 +1050,74 @@ Value call_function(const Value& callee, const Value& this_value, std::vector<Va
 // ---------------------------------------------------------- member access ----
 
 /// Elements of an iterable for `...expr` (stage 30): arrays, strings and array-likes.
+bool get_iterator(const Value& value, Value& iterator);
+bool iterator_next(const Value& iterator, Value& out);
+Value make_iter_result(const Value& value, bool done);
+std::vector<Value> iterate_all(const Value& iterator);
+
+/// The string's code points as individual UTF-8 strings. String iteration
+/// (22.1.5.2.1 / `for-of`) walks code points, not bytes, so an astral character is
+/// one element; malformed input yields U+FFFD (one per maximal invalid subpart).
+std::vector<std::string> string_code_points(const std::string& text) {
+  std::vector<std::string> out;
+  static constexpr char kReplacement[] = "\xEF\xBF\xBD";
+  std::size_t i = 0;
+  while (i < text.size()) {
+    const auto byte = static_cast<unsigned char>(text[i]);
+    if (byte < 0x80) {
+      out.emplace_back(1, static_cast<char>(byte));
+      ++i;
+      continue;
+    }
+    std::size_t length = 0;
+    unsigned int code_point = 0;
+    if ((byte & 0xE0) == 0xC0) {
+      length = 2;
+      code_point = byte & 0x1Fu;
+    } else if ((byte & 0xF0) == 0xE0) {
+      length = 3;
+      code_point = byte & 0x0Fu;
+    } else if ((byte & 0xF8) == 0xF0) {
+      length = 4;
+      code_point = byte & 0x07u;
+    }
+    if (length == 0 || i + length > text.size()) {
+      out.emplace_back(kReplacement);
+      ++i;
+      continue;
+    }
+    bool valid = true;
+    for (std::size_t k = 1; k < length; ++k) {
+      const auto next = static_cast<unsigned char>(text[i + k]);
+      if ((next & 0xC0) != 0x80) {
+        valid = false;
+        break;
+      }
+      code_point = (code_point << 6) | (next & 0x3Fu);
+    }
+    const bool overlong = (length == 2 && code_point < 0x80) || (length == 3 && code_point < 0x800) ||
+                          (length == 4 && code_point < 0x10000);
+    if (!valid || overlong || code_point > 0x10FFFF || (code_point >= 0xD800 && code_point <= 0xDFFF)) {
+      out.emplace_back(kReplacement);
+      i += valid ? length : 1;
+      continue;
+    }
+    out.push_back(text.substr(i, length));
+    i += length;
+  }
+  return out;
+}
+
 std::vector<Value> spread_values(const Value& value) {
   std::vector<Value> out;
+  Value iterator;
+  if (get_iterator(value, iterator)) {
+    // `[...iterable]` / `f(...iterable)`: use @@iterator when the value has one (27.2).
+    out = iterate_all(iterator);
+    return out;
+  }
   if (value.is_string()) {
-    for (const char c : value.text) out.push_back(Value::string_of(std::string(1, c)));
+    for (const std::string& point : string_code_points(value.text)) out.push_back(Value::string_of(point));
     return out;
   }
   if (value.is_object() && value.object != nullptr) {
@@ -973,7 +1133,8 @@ std::vector<Value> spread_values(const Value& value) {
 /// One element of an array/string/array-like, for destructuring (`[a, b] = value`).
 Value element_of(const Value& value, std::size_t index) {
   if (value.is_string()) {
-    return index < value.text.size() ? Value::string_of(std::string(1, value.text[index])) : Value::undefined();
+    const std::vector<std::string> points = string_code_points(value.text);
+    return index < points.size() ? Value::string_of(points[index]) : Value::undefined();
   }
   if (value.is_object() && value.object != nullptr) {
     if (value.object->is_array()) {
@@ -1003,6 +1164,18 @@ void copy_own_enumerable(const Value& source, Object& target, const std::functio
 Value Interpreter::get_member(const Value& object, const std::string& key) {
   if (object.is_nullish()) {
     throw thrown(type_error("cannot read property '" + key + "' of " + to_string(object)));
+  }
+  if (object.is_symbol()) {
+    // A symbol primitive reads through `Symbol.prototype` (20.4.3), with the symbol
+    // itself as the receiver so the `description` accessor sees it.
+    Value found;
+    if (runtime_.symbol_prototype != nullptr && lookup_property(runtime_.symbol_prototype, key, found, &object)) {
+      return found;
+    }
+    if (runtime_.object_prototype != nullptr && lookup_property(runtime_.object_prototype, key, found, &object)) {
+      return found;
+    }
+    return Value::undefined();
   }
   if (object.type == ValueType::Object && object.object != nullptr && object.object->is_global_object) {
     // `this.x` / `globalThis.x` is the global variable `x` (10.2.1.2 Object Environment).
@@ -1054,7 +1227,7 @@ Value Interpreter::get_member(const Value& object, const std::string& key) {
     }
     if (key == "hasOwnProperty") {
       return native_value("hasOwnProperty", [](const std::vector<Value>& arguments, Value this_value) {
-        const std::string name = arguments.empty() ? std::string() : to_string(arguments[0]);
+        const std::string name = arguments.empty() ? std::string() : to_property_key(arguments[0]);
         const std::shared_ptr<Object> bag = property_bag(this_value);
         return Value::boolean_of(bag != nullptr && has_own_property(*bag, name));
       });
@@ -1373,6 +1546,98 @@ bool Interpreter::write_name(const ScopePtr& scope, const std::string& name, con
   return false;
 }
 
+// ------------------------------------------------------------- iteration ----
+
+Value make_iter_result(const Value& value, bool done) {
+  auto result = std::make_shared<Object>();
+  result->properties["value"] = Property{value};
+  result->properties["done"] = Property{Value::boolean_of(done)};
+  return Value::object_of(std::move(result));
+}
+
+/// GetIterator (7.4.1): `value[Symbol.iterator]()` when the value has such a method.
+/// Returns false when it does not, so callers can fall back to array-likes.
+bool get_iterator(const Value& value, Value& iterator) {
+  if (g_interpreter == nullptr || value.is_nullish()) return false;
+  const std::string key = to_property_key(g_interpreter->runtime().symbol_iterator);
+  const Value method = g_interpreter->get_member(value, key);
+  if (method.type != ValueType::Function) return false;
+  iterator = call_function(method, value, {});
+  return true;
+}
+
+/// IteratorStep (7.4.5): false means "done".
+bool iterator_next(const Value& iterator, Value& out) {
+  if (g_interpreter == nullptr) return false;
+  const Value next = g_interpreter->get_member(iterator, "next");
+  if (next.type != ValueType::Function) return false;
+  const Value result = call_function(next, iterator, {});
+  if (to_boolean(g_interpreter->get_member(result, "done"))) return false;
+  out = g_interpreter->get_member(result, "value");
+  return true;
+}
+
+/// IteratorClose (7.4.9): call the iterator's `return` hook, if any. Errors from the
+/// hook are the caller's business (`for-of` decides whether to surface them).
+void iterator_close(const Value& iterator) {
+  if (g_interpreter == nullptr) return;
+  const Value method = g_interpreter->get_member(iterator, "return");
+  if (method.type != ValueType::Function) return;
+  call_function(method, iterator, {});
+}
+
+std::vector<Value> iterate_all(const Value& iterator) {
+  std::vector<Value> out;
+  Value item;
+  while (iterator_next(iterator, item)) {
+    out.push_back(item);
+    if (out.size() > 1000000) throw thrown(make_error("Error", "iteration limit exceeded"));
+  }
+  return out;
+}
+
+/// `Array.prototype.values/keys/entries` (23.1.5) and `[Symbol.iterator]`: one lazy
+/// iterator over an array, an array-like or a string.
+Value make_array_iterator(const Value& source, int kind) {
+  auto index = std::make_shared<std::size_t>(0);
+  // Snapshot the code points once: a string iterator walks code points, not bytes.
+  auto points = std::make_shared<std::vector<std::string>>(
+      source.is_string() ? string_code_points(source.text) : std::vector<std::string>{});
+  auto iterator = std::make_shared<Object>();
+  iterator->properties["next"] =
+      Property{native_value("next", [source, index, kind, points](const std::vector<Value>&, Value) {
+                 std::size_t length = 0;
+                 if (source.is_string()) {
+                   length = points->size();
+                 } else if (source.is_object() && source.object != nullptr) {
+                   length = array_like_length(*source.object);
+                 }
+                 if (*index >= length) return make_iter_result(Value::undefined(), true);
+                 const std::size_t at = (*index)++;
+                 Value value;
+                 if (source.is_string()) {
+                   value = Value::string_of((*points)[at]);
+                 } else {
+                   value = array_like_get(*source.object, at);
+                 }
+                 if (kind == 1) return make_iter_result(Value::number_of(static_cast<double>(at)), false);
+                 if (kind == 2) {
+                   std::vector<Value> pair{Value::number_of(static_cast<double>(at)), value};
+                   return make_iter_result(Value::object_of(make_array(std::move(pair))), false);
+                 }
+                 return make_iter_result(value, false);
+               }),
+               true, false, true};
+  // An iterator is itself iterable (`%IteratorPrototype%[@@iterator]` returns `this`,
+  // 27.1.2.1); returning the receiver avoids a shared_ptr cycle with the iterator.
+  if (g_interpreter != nullptr) {
+    iterator->properties[to_property_key(g_interpreter->runtime().symbol_iterator)] =
+        Property{native_value("values", [](const std::vector<Value>&, Value this_value) { return this_value; }),
+                 true, false, true};
+  }
+  return Value::object_of(std::move(iterator));
+}
+
 const Value& Interpreter::global_this() {
   if (global_this_.is_undefined()) {
     const auto found = global_->variables.find("globalThis");
@@ -1434,6 +1699,14 @@ Value Interpreter::call(const Value& callee, const Value& this_value_in, std::ve
         arguments_object->properties[key] = Property{Value::undefined(), true, true, true};
       } else {
         arguments_object->properties[key] = Property{arguments[i]};
+      }
+    }
+    // `arguments[Symbol.iterator]` is `%Array.prototype.values%` (10.4.4.7 step 13).
+    if (runtime_.array_prototype != nullptr) {
+      const auto values = runtime_.array_prototype->properties.find("values");
+      if (values != runtime_.array_prototype->properties.end()) {
+        arguments_object->properties[to_property_key(runtime_.symbol_iterator)] =
+            Property{values->second.value, true, false, true};
       }
     }
     scope->variables["arguments"] = Value::object_of(std::move(arguments_object));
@@ -1622,23 +1895,29 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
       case ast::StmtKind::ForIn: {
         const Value iterable = eval(statement->expression, current);
         std::vector<Value> items;
+        Value lazy_iterator;  // `for (… of iterable)`: stepped lazily, so `break` stops it
+        bool lazy = false;
         if (statement->kind == ast::StmtKind::ForIn) {
           if (iterable.is_object() && iterable.object != nullptr) {
             for (const std::string& key : own_property_keys(*iterable.object, true)) {
               items.push_back(Value::string_of(key));
             }
           }
+        } else if (get_iterator(iterable, lazy_iterator)) {
+          lazy = true;
         } else if (iterable.is_string()) {
-          for (const char c : iterable.text) items.push_back(Value::string_of(std::string(1, c)));
+          for (const std::string& point : string_code_points(iterable.text)) items.push_back(Value::string_of(point));
         } else if (iterable.is_object() && iterable.object != nullptr && iterable.object->is_array()) {
           items = iterable.object->elements;
-        } else if (!iterable.is_nullish()) {
-          throw thrown(type_error("value is not iterable"));
+        } else {
+          // `for (… of null)` and friends are runtime errors, not empty loops.
+          throw thrown(type_error(to_string(iterable) + " is not iterable"));
         }
 
         const std::size_t labels_at_entry = label_stack_.size() - pending_labels_;
         pending_labels_ = 0;
-        for (const Value& item : items) {
+        // One iteration of the loop body: binds the item and runs the statement.
+        auto iteration = [&](const Value& item) -> Completion {
           const ScopePtr iteration_scope = runtime_.new_scope(current);
           if (statement->declaration_kind == "var") {
             current->variables[statement->names.front()] = item;
@@ -1650,23 +1929,59 @@ Completion Interpreter::exec(const ast::StmtPtr& statement, const ScopePtr& scop
               if (!write_name(current, target->text, item)) global_->variables[target->text] = item;
             } else if (target->kind == ast::ExprKind::Member) {
               const Value object = eval(target->children[0], current);
-              const std::string key = target->boolean ? to_string(eval(target->children[1], current)) : target->text;
+              const std::string key = target->boolean ? to_property_key(eval(target->children[1], current)) : target->text;
               set_member(object, key, item);
             }
           }
-          const Completion completion = exec(statement->body, iteration_scope);
-          if (completion.type == CompletionType::Break) {
-            // An unlabelled `break` leaves this loop; a labelled one only when the
-            // label is attached to this loop (`a: for (…) { break a; }`).
-            if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) break;
-            return completion;
+          return exec(statement->body, iteration_scope);
+        };
+        Completion pending_completion;
+        bool stop = false;
+        bool propagate = false;
+        auto run = [&](const Value& item) {
+          const Completion completion = iteration(item);
+          switch (completion.type) {
+            case CompletionType::Normal:
+              return;
+            case CompletionType::Continue:
+              if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) return;
+              break;
+            case CompletionType::Break:
+              // An unlabelled `break` leaves this loop; a labelled one only when the
+              // label is attached to this loop (`a: for (…) { break a; }`).
+              if (completion.label.empty() || label_belongs_to(labels_at_entry, completion.label)) {
+                stop = true;
+                return;
+              }
+              break;
+            default:
+              break;
           }
-          if (completion.type == CompletionType::Continue && !completion.label.empty() &&
-              !label_belongs_to(labels_at_entry, completion.label)) {
-            return completion;
+          propagate = true;
+          pending_completion = completion;
+        };
+        if (lazy) {
+          // `for (… of iterable)`: step the iterator lazily, so `break`/`return` stop it
+          // without pulling further values (7.4.9 IteratorClose is approximated).
+          Value item;
+          while (!stop && !propagate && iterator_next(lazy_iterator, item)) run(item);
+          // An early exit closes the iterator; with a pending completion (return/throw)
+          // the hook's own error must not mask it.
+          if (stop || propagate) {
+            try {
+              iterator_close(lazy_iterator);
+            } catch (const Completion& completion) {
+              if (!propagate) pending_completion = completion;
+            }
           }
-          if (completion.type == CompletionType::Return || completion.type == CompletionType::Throw) return completion;
+          if (!propagate && pending_completion.type != CompletionType::Normal) return pending_completion;
+        } else {
+          for (const Value& item : items) {
+            if (stop || propagate) break;
+            run(item);
+          }
         }
+        if (propagate) return pending_completion;
         return normal();
       }
 
@@ -1811,7 +2126,7 @@ void Interpreter::store_target(const ast::Expr& target, const Value& value, cons
   }
   if (target.kind == ast::ExprKind::Member) {
     const Value object = eval(target.children[0], scope);
-    const std::string key = target.boolean ? to_string(eval(target.children[1], scope)) : target.text;
+    const std::string key = target.boolean ? to_property_key(eval(target.children[1], scope)) : target.text;
     set_member(object, key, value, strict_scope(scope));
     return;
   }
@@ -1855,7 +2170,7 @@ void Interpreter::assign_pattern(const ast::Expr& pattern, const Value& value, c
         continue;
       }
       const std::string key =
-          property.computed_key != nullptr ? to_string(eval(property.computed_key, scope)) : property.key;
+          property.computed_key != nullptr ? to_property_key(eval(property.computed_key, scope)) : property.key;
       excluded.push_back(key);
       assign_pattern(*property.value, value.is_nullish() ? Value::undefined() : get_member(value, key), scope);
     }
@@ -1880,7 +2195,7 @@ Value Interpreter::make_class(const std::shared_ptr<ast::ClassNode>& node, const
   std::vector<std::string> keys;
   keys.reserve(node->methods.size());
   for (const ast::ClassMethod& method : node->methods) {
-    keys.push_back(method.computed_key != nullptr ? to_string(eval(method.computed_key, scope)) : method.key);
+    keys.push_back(method.computed_key != nullptr ? to_property_key(eval(method.computed_key, scope)) : method.key);
   }
 
   const ast::ClassMethod* constructor_method = nullptr;
@@ -2021,7 +2336,7 @@ Value Interpreter::eval_postfix_chain(const ast::Expr& expression, const ScopePt
         throw thrown(type_error("cannot read property '" + step.text + "' of " + to_string(current)));
       }
       if (followed_by_call) receiver = current;
-      const std::string key = step.boolean ? to_string(eval(step.children[1], scope)) : step.text;
+      const std::string key = step.boolean ? to_property_key(eval(step.children[1], scope)) : step.text;
       current = get_member(current, key);
       continue;
     }
@@ -2077,7 +2392,7 @@ Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope)
       throw thrown(type_error("'super' keyword unexpected here"));
     }
     const std::string key = callee_expression->boolean
-                                ? to_string(eval(callee_expression->children[1], scope))
+                                ? to_property_key(eval(callee_expression->children[1], scope))
                                 : callee_expression->text;
     for (std::shared_ptr<Object> object = parent.function->prototype_object; object != nullptr;
          object = object->prototype) {
@@ -2100,7 +2415,7 @@ Value Interpreter::eval_call(const ast::Expr& expression, const ScopePtr& scope)
   if (callee_expression->kind == ast::ExprKind::Member) {
     const Value object = eval(callee_expression->children[0], scope);
     const std::string key =
-        callee_expression->boolean ? to_string(eval(callee_expression->children[1], scope)) : callee_expression->text;
+        callee_expression->boolean ? to_property_key(eval(callee_expression->children[1], scope)) : callee_expression->text;
     this_value = object;
     callee = get_member(object, key);
   } else {
@@ -2190,7 +2505,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         }
         // A computed key is evaluated before its value (12.2.6.7 PropertyDefinitionEvaluation).
         const std::string key =
-            property.computed_key != nullptr ? to_string(eval(property.computed_key, scope)) : property.key;
+            property.computed_key != nullptr ? to_property_key(eval(property.computed_key, scope)) : property.key;
         const Value value = eval(property.value, scope);
         if (property.kind == ast::PropertyDef::Kind::Data) {
           object->properties[key] = Property{value};
@@ -2249,7 +2564,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         const ast::ExprPtr& target = expression->children[0];
         if (target->kind == ast::ExprKind::Member) {
           const Value object = eval(target->children[0], scope);
-          const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
+          const std::string key = target->boolean ? to_property_key(eval(target->children[1], scope)) : target->text;
           // `delete` only removes configurable properties and reports failure as
           // `false` (strict mode makes `delete <name>` a parse error instead).
           if (!erase_own_property(property_bag(object), key)) return Value::boolean_of(false);
@@ -2287,7 +2602,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         old_value = has_name(scope, target->text) ? read_name(scope, target->text) : Value::undefined();
       } else if (target->kind == ast::ExprKind::Member) {
         const Value object = eval(target->children[0], scope);
-        const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
+        const std::string key = target->boolean ? to_property_key(eval(target->children[1], scope)) : target->text;
         old_value = get_member(object, key);
       }
       const Value new_value = Value::number_of(to_number(old_value) + delta);
@@ -2295,7 +2610,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
         if (!write_name(scope, target->text, new_value)) global_->variables[target->text] = new_value;
       } else if (target->kind == ast::ExprKind::Member) {
         const Value object = eval(target->children[0], scope);
-        const std::string key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
+        const std::string key = target->boolean ? to_property_key(eval(target->children[1], scope)) : target->text;
         set_member(object, key, new_value);
       }
       return expression->boolean ? new_value : old_value;
@@ -2346,7 +2661,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
                                                     (static_cast<long long>(to_number(right)) & 31)));
       }
       if (op == "in") {
-        const std::string key = to_string(left);
+        const std::string key = to_property_key(left);
         if (!right.is_object() || right.object == nullptr) return Value::boolean_of(false);
         std::size_t index = 0;
         if (right.object->is_array() && is_array_index(key, index) && index < right.object->elements.size()) {
@@ -2405,7 +2720,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
       std::string key;
       if (!target_is_identifier) {
         object = eval(target->children[0], scope);
-        key = target->boolean ? to_string(eval(target->children[1], scope)) : target->text;
+        key = target->boolean ? to_property_key(eval(target->children[1], scope)) : target->text;
         if (object.is_nullish()) {
           throw thrown(type_error("cannot set property '" + key + "' of " + to_string(object)));
         }
@@ -2460,7 +2775,7 @@ Value Interpreter::eval(const ast::ExprPtr& expression, const ScopePtr& scope) {
     case ast::ExprKind::Member: {
       if (expression->optional || chain_has_optional(*expression)) return eval_postfix_chain(*expression, scope);
       const Value object = eval(expression->children[0], scope);
-      const std::string key = expression->boolean ? to_string(eval(expression->children[1], scope)) : expression->text;
+      const std::string key = expression->boolean ? to_property_key(eval(expression->children[1], scope)) : expression->text;
       return get_member(object, key);
     }
 
@@ -2600,6 +2915,136 @@ void install_builtins(RuntimeState& runtime) {
   global->variables["isNaN"] = native_value("isNaN", [](const std::vector<Value>& arguments, Value) {
     return Value::boolean_of(arguments.empty() || std::isnan(to_number(arguments[0])));
   });
+  // ---------------------------------------------------------------- Symbol --
+  // `Symbol(description)` (20.4): every call produces a fresh symbol; `Symbol.for`
+  // keeps a registry. Symbols use their own property-key namespace (see
+  // `to_property_key`), which is what makes them invisible to `Object.keys`/`for-in`.
+  auto symbol_prototype = std::make_shared<Object>();
+  runtime.symbol_prototype = symbol_prototype;
+  // thisSymbolValue (20.4.3): a symbol primitive, or a wrapper around one.
+  auto symbol_this = [](const Value& this_value, const char* method) -> Value {
+    if (this_value.is_symbol()) return this_value;
+    if (this_value.is_object() && this_value.object != nullptr && this_value.object->is_wrapper &&
+        this_value.object->wrapper_value.is_symbol()) {
+      return this_value.object->wrapper_value;
+    }
+    throw thrown(type_error(std::string("Symbol.prototype.") + method + " called on a non-symbol value"));
+  };
+  auto make_symbol = [&runtime](const std::string& description, bool described) {
+    const double id = runtime.next_symbol_id++;
+    runtime.symbol_descriptions[id] = description;
+    if (!described) runtime.symbol_without_description.insert(id);
+    return Value::symbol_of(id, description);
+  };
+  Value symbol_constructor =
+      native_value("Symbol", [make_symbol, symbol_prototype](const std::vector<Value>& arguments, Value this_value) {
+        // `new Symbol()` is a TypeError (20.4.1); `new` hands us the fresh instance.
+        if (this_value.is_object() && this_value.object != nullptr && this_value.object->prototype == symbol_prototype) {
+          throw thrown(type_error("Symbol is not a constructor"));
+        }
+        if (arguments.empty() || arguments[0].is_undefined()) return make_symbol(std::string(), false);
+        if (arguments[0].is_symbol()) throw thrown(type_error("cannot convert a Symbol value to a string"));
+        return make_symbol(to_string(arguments[0]), true);
+      });
+  symbol_constructor.function->prototype_object = symbol_prototype;
+  symbol_prototype->owner_function = symbol_constructor.function;
+
+  {
+    const std::shared_ptr<Object> symbol_statics = property_bag(symbol_constructor);
+    auto add_well_known = [&runtime, &symbol_statics](const char* name, Value& slot) {
+      const double id = runtime.next_symbol_id++;
+      runtime.symbol_descriptions[id] = std::string("Symbol.") + name;
+      slot = Value::symbol_of(id, std::string("Symbol.") + name);
+      symbol_statics->properties[name] = Property{slot, false, false, false};
+    };
+    add_well_known("iterator", runtime.symbol_iterator);
+    add_well_known("asyncIterator", runtime.symbol_async_iterator);
+    add_well_known("hasInstance", runtime.symbol_has_instance);
+    add_well_known("isConcatSpreadable", runtime.symbol_is_concat_spreadable);
+    add_well_known("species", runtime.symbol_species);
+    add_well_known("toPrimitive", runtime.symbol_to_primitive);
+    add_well_known("toStringTag", runtime.symbol_to_string_tag);
+    add_well_known("unscopables", runtime.symbol_unscopables);
+    add_well_known("match", runtime.symbol_match);
+    add_well_known("replace", runtime.symbol_replace);
+    add_well_known("search", runtime.symbol_search);
+    add_well_known("split", runtime.symbol_split);
+    symbol_statics->properties["prototype"] =
+        Property{Value::object_of(symbol_prototype), false, false, false};
+    auto add_symbol_static = [&symbol_statics](const char* name, Function::Native native, std::size_t arity) {
+      Value value = native_value(name, std::move(native));
+      value.function->parameter_count = arity;
+      symbol_statics->properties[name] = Property{value, true, false, true};
+    };
+    add_symbol_static(
+        "for",
+        [&runtime, make_symbol](const std::vector<Value>& arguments, Value) {
+          const std::string key = arguments.empty() ? std::string("undefined") : to_string(arguments[0]);
+          const auto found = runtime.symbol_registry.find(key);
+          if (found != runtime.symbol_registry.end()) return found->second;
+          Value symbol = make_symbol(key, true);
+          runtime.symbol_registry[key] = symbol;
+          return symbol;
+        },
+        1);
+    add_symbol_static(
+        "keyFor",
+        [&runtime](const std::vector<Value>& arguments, Value) {
+          // 20.4.2.6: a non-symbol argument is a TypeError, not `undefined`.
+          if (arguments.empty() || !arguments[0].is_symbol()) {
+            throw thrown(type_error("Symbol.keyFor requires a symbol argument"));
+          }
+          for (const auto& entry : runtime.symbol_registry) {
+            if (entry.second.is_symbol() && entry.second.number == arguments[0].number) {
+              return Value::string_of(entry.first);
+            }
+          }
+          return Value::undefined();
+        },
+        1);
+  }
+  // ---- Symbol.prototype (20.4.3) ----
+  symbol_prototype->prototype = runtime.object_prototype;
+  symbol_prototype->properties["constructor"] =
+      Property{Value::function_of(symbol_constructor.function), true, false, true};
+  {
+    Value to_string_method = native_value(
+        "toString", [symbol_this](const std::vector<Value>&, Value this_value) {
+          return Value::string_of("Symbol(" + symbol_this(this_value, "toString").text + ")");
+        });
+    Value value_of = native_value("valueOf", [symbol_this](const std::vector<Value>&, Value this_value) {
+      return symbol_this(this_value, "valueOf");
+    });
+    // `Symbol.prototype[@@toPrimitive]` (20.4.3.5): returns the wrapped primitive.
+    Value to_primitive = native_value(
+        "[Symbol.toPrimitive]", [symbol_this](const std::vector<Value>&, Value this_value) {
+          return symbol_this(this_value, "[Symbol.toPrimitive]");
+        });
+    to_primitive.function->parameter_count = 1;
+    symbol_prototype->properties["toString"] = Property{to_string_method, true, false, true};
+    symbol_prototype->properties["valueOf"] = Property{value_of, true, false, true};
+    symbol_prototype->properties[to_property_key(runtime.symbol_to_primitive)] =
+        Property{to_primitive, false, false, true};
+    symbol_prototype->properties[to_property_key(runtime.symbol_to_string_tag)] =
+        Property{Value::string_of("Symbol"), false, false, true};
+    symbol_prototype->receiver_getters["description"] = [symbol_this, &runtime](const Value& self) {
+      const Value symbol = symbol_this(self, "description");
+      return symbol_description_value(runtime, symbol.number);
+    };
+  }
+
+  global->variables["Symbol"] = symbol_constructor;
+
+  // `@@toStringTag` for the namespace objects (20.3.3.6, 24.5.3): `Math` and `JSON`
+  // are not constructors, so the tag is what `Object.prototype.toString` reports.
+  for (const auto& tagged : {std::pair<Value, const char*>{math, "Math"}, {json, "JSON"}}) {
+    const std::shared_ptr<Object> bag = property_bag(tagged.first);
+    if (bag != nullptr) {
+      bag->properties[to_property_key(runtime.symbol_to_string_tag)] =
+          Property{Value::string_of(tagged.second), false, false, true};
+    }
+  }
+
   // `isFinite` (18.2.2): non-numeric arguments are coerced; ±Infinity and NaN are not finite.
   global->variables["isFinite"] = native_value("isFinite", [](const std::vector<Value>& arguments, Value) {
     if (arguments.empty()) return Value::boolean_of(false);
@@ -2649,6 +3094,13 @@ void install_builtins(RuntimeState& runtime) {
   auto add_string_method = [&](const char* name, Function::Native native) {
     string_prototype->properties[name] = Property{native_value(name, std::move(native))};
   };
+  // String iteration yields characters (21.1.3.29); strings are byte-based here, so a
+  // code point outside ASCII arrives as its bytes.
+  string_prototype->properties[to_property_key(runtime.symbol_iterator)] = Property{
+      native_value("values", [string_this](const std::vector<Value>&, Value this_value) {
+        return make_array_iterator(Value::string_of(string_this(this_value, "values")), 0);
+      }),
+      true, false, true};
   add_string_method("toString", [string_this](const std::vector<Value>&, Value this_value) {
     return Value::string_of(string_this(this_value, "toString"));
   });
@@ -3109,6 +3561,23 @@ void install_builtins(RuntimeState& runtime) {
   auto add_array_method = [&](const char* name, Function::Native native) {
     array_prototype->properties[name] = Property{native_value(name, std::move(native))};
   };
+  // Iteration protocol (23.1.5.1): `values` is what `for (… of ar)` and `[...ar]` use.
+  const std::string array_iterator_key = to_property_key(runtime.symbol_iterator);
+  add_array_method("values", [](const std::vector<Value>&, Value this_value) {
+    return make_array_iterator(this_value, 0);
+  });
+  add_array_method("keys", [](const std::vector<Value>&, Value this_value) {
+    return make_array_iterator(this_value, 1);
+  });
+  add_array_method("entries", [](const std::vector<Value>&, Value this_value) {
+    return make_array_iterator(this_value, 2);
+  });
+  {
+    const auto values = array_prototype->properties.find("values");
+    if (values != array_prototype->properties.end()) {
+      array_prototype->properties[array_iterator_key] = values->second;
+    }
+  }
   add_array_method("push", [array_this](const std::vector<Value>& arguments, Value this_value) {
     const std::shared_ptr<Object> target = array_this(this_value, "push");
     std::size_t length = array_like_length(*target);
@@ -3520,21 +3989,27 @@ void install_builtins(RuntimeState& runtime) {
         const Value mapper = arguments.size() > 1 && arguments[1].type == ValueType::Function ? arguments[1]
                                                                                               : Value::undefined();
         const Value this_arg = arguments.size() > 2 ? arguments[2] : Value::undefined();
-        std::size_t length = 0;
-        if (source.is_object() && source.object != nullptr) {
-          length = array_like_length(*source.object);
-        } else if (source.is_string()) {
-          length = source.text.size();
+        // Iterables win over array-likes (23.1.2.1 step 4): `Array.from(map.keys())`.
+        std::vector<Value> elements;
+        Value iterator;
+        if (get_iterator(source, iterator)) {
+          elements = iterate_all(iterator);
         } else {
-          return Value::object_of(std::move(result));
-        }
-        for (std::size_t i = 0; i < length; ++i) {
-          Value element;
-          if (source.is_string()) {
-            element = Value::string_of(std::string(1, source.text[i]));
+          std::size_t length = 0;
+          if (source.is_object() && source.object != nullptr) {
+            length = array_like_length(*source.object);
+          } else if (source.is_string()) {
+            length = source.text.size();
           } else {
-            element = array_like_get(*source.object, i);
+            return Value::object_of(std::move(result));
           }
+          for (std::size_t i = 0; i < length; ++i) {
+            elements.push_back(source.is_string() ? Value::string_of(std::string(1, source.text[i]))
+                                                 : array_like_get(*source.object, i));
+          }
+        }
+        for (std::size_t i = 0; i < elements.size(); ++i) {
+          Value element = elements[i];
           if (mapper.type == ValueType::Function) {
             element = call_function(mapper, this_arg, {element, Value::number_of(static_cast<double>(i))});
           }
@@ -3556,7 +4031,7 @@ void install_builtins(RuntimeState& runtime) {
     if (bag == nullptr) {
       throw thrown(type_error("hasOwnProperty called on " + typeof_string(this_value)));
     }
-    const std::string key = arguments.empty() ? std::string() : to_string(arguments[0]);
+    const std::string key = arguments.empty() ? std::string() : to_property_key(arguments[0]);
     return Value::boolean_of(has_own_property(*bag, key));
   });
   add_proto_method("propertyIsEnumerable", [](const std::vector<Value>& arguments, Value this_value) {
@@ -3564,7 +4039,7 @@ void install_builtins(RuntimeState& runtime) {
     if (bag == nullptr) {
       throw thrown(type_error("propertyIsEnumerable called on " + typeof_string(this_value)));
     }
-    const std::string key = arguments.empty() ? std::string() : to_string(arguments[0]);
+    const std::string key = arguments.empty() ? std::string() : to_property_key(arguments[0]);
     if (!has_own_property(*bag, key)) return Value::boolean_of(false);
     const auto found = bag->properties.find(key);
     return Value::boolean_of(found == bag->properties.end() || found->second.enumerable);
@@ -3581,14 +4056,22 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::boolean_of(false);
   });
-  add_proto_method("toString", [](const std::vector<Value>&, Value this_value) {
+  add_proto_method("toString", [&runtime](
+                                     const std::vector<Value>&, Value this_value) {
     if (this_value.is_undefined()) return Value::string_of("[object Undefined]");
     if (this_value.is_null()) return Value::string_of("[object Null]");
+    // A `@@toStringTag` string wins over the built-in tag (20.1.3.6 step 13).
+    if (g_interpreter != nullptr && this_value.is_object()) {
+      const Value tag_value =
+          g_interpreter->get_member(this_value, to_property_key(runtime.symbol_to_string_tag));
+      if (tag_value.is_string()) return Value::string_of("[object " + tag_value.text + "]");
+    }
     std::string tag = "Object";
     switch (this_value.type) {
       case ValueType::Boolean: tag = "Boolean"; break;
       case ValueType::Number: tag = "Number"; break;
       case ValueType::String: tag = "String"; break;
+      case ValueType::Symbol: tag = "Symbol"; break;
       case ValueType::Function: tag = "Function"; break;
       default: break;
     }
@@ -3603,7 +4086,10 @@ void install_builtins(RuntimeState& runtime) {
         tag = "Arguments";
       } else if (this_value.object->is_wrapper) {
         const Value& boxed = this_value.object->wrapper_value;
-        tag = boxed.is_string() ? "String" : (boxed.is_number() ? "Number" : "Boolean");
+        tag = boxed.is_string()    ? "String"
+              : boxed.is_number()  ? "Number"
+              : boxed.is_boolean() ? "Boolean"
+                                   : "Symbol";
       }
     }
     return Value::string_of("[object " + tag + "]");
@@ -3633,13 +4119,26 @@ void install_builtins(RuntimeState& runtime) {
     }
   };
 
-  const Value object_constructor = native_value("Object", [](const std::vector<Value>& arguments, Value) {
+  const Value object_constructor = native_value("Object", [&runtime](const std::vector<Value>& arguments, Value) {
     if (!arguments.empty() && arguments[0].is_object()) return arguments[0];
     if (!arguments.empty() && arguments[0].is_nullish()) return Value::object_of(std::make_shared<Object>());
     if (!arguments.empty()) {
+      // `Object(primitive)` boxes the value in a wrapper of the matching kind (20.1.1.1),
+      // so `Object("ab").length` and `Object(sym).toString()` behave like their
+      // `new String(…)`/`Symbol.prototype` counterparts.
       const Value primitives = arguments[0];
       auto wrapper = std::make_shared<Object>();
-      wrapper->properties["value"] = Property{primitives};
+      wrapper->is_wrapper = true;
+      wrapper->wrapper_value = primitives;
+      if (primitives.is_string()) {
+        wrapper->prototype = runtime.string_prototype;
+      } else if (primitives.is_number()) {
+        wrapper->prototype = runtime.number_prototype;
+      } else if (primitives.is_boolean()) {
+        wrapper->prototype = runtime.boolean_prototype;
+      } else if (primitives.is_symbol()) {
+        wrapper->prototype = runtime.symbol_prototype;
+      }
       return Value::object_of(std::move(wrapper));
     }
     return Value::object_of(std::make_shared<Object>());
@@ -3723,10 +4222,20 @@ void install_builtins(RuntimeState& runtime) {
     }
     return Value::object_of(make_array(std::move(keys)));
   });
+  add_object_static("getOwnPropertySymbols", [object_argument, &runtime](const std::vector<Value>& arguments,
+                                                                        Value) {
+    const Value target = object_argument(arguments, "getOwnPropertySymbols");
+    std::vector<Value> symbols;
+    const std::shared_ptr<Object> bag = property_bag(target);
+    if (bag != nullptr) {
+      for (const std::string& key : own_symbol_keys(*bag)) symbols.push_back(symbol_value_from_key(runtime, key));
+    }
+    return Value::object_of(make_array(std::move(symbols)));
+  });
   add_object_static("getOwnPropertyDescriptor", [object_argument](const std::vector<Value>& arguments, Value) {
     const Value target = object_argument(arguments, "getOwnPropertyDescriptor");
     if (arguments.size() < 2) return Value::undefined();
-    const std::string key = to_string(arguments[1]);
+    const std::string key = to_property_key(arguments[1]);
     const std::shared_ptr<Object> bag = property_bag(target);
     if (bag == nullptr) return Value::undefined();
     return property_descriptor(*bag, key);
@@ -3737,7 +4246,7 @@ void install_builtins(RuntimeState& runtime) {
     if (arguments.size() < 2) throw thrown(type_error("Object.defineProperty needs a property key"));
     DescriptorInput input;
     if (arguments.size() > 2) read_descriptor(arguments[2], input);
-    define_own_property(bag, to_string(arguments[1]), input.value, input.getter, input.setter,
+    define_own_property(bag, to_property_key(arguments[1]), input.value, input.getter, input.setter,
                         input.writable, input.enumerable, input.configurable);
     return target;
   });
@@ -3745,7 +4254,10 @@ void install_builtins(RuntimeState& runtime) {
     const Value target = object_argument(arguments, "defineProperties");
     const std::shared_ptr<Object> bag = object_bag(target, "defineProperties");
     if (arguments.size() > 1 && arguments[1].is_object() && arguments[1].object != nullptr) {
-      for (const std::string& key : own_property_keys(*arguments[1].object, true)) {
+      std::vector<std::string> descriptor_keys = own_property_keys(*arguments[1].object, true);
+      const std::vector<std::string> symbol_keys = own_symbol_keys(*arguments[1].object);
+      descriptor_keys.insert(descriptor_keys.end(), symbol_keys.begin(), symbol_keys.end());
+      for (const std::string& key : descriptor_keys) {
         Value descriptor;
         if (!lookup_property(arguments[1].object, key, descriptor)) continue;
         DescriptorInput input;
@@ -3769,7 +4281,10 @@ void install_builtins(RuntimeState& runtime) {
       created->prototype = object_prototype;
     }
     if (arguments.size() > 1 && arguments[1].is_object() && arguments[1].object != nullptr) {
-      for (const std::string& key : own_property_keys(*arguments[1].object, true)) {
+      std::vector<std::string> descriptor_keys = own_property_keys(*arguments[1].object, true);
+      const std::vector<std::string> symbol_keys = own_symbol_keys(*arguments[1].object);
+      descriptor_keys.insert(descriptor_keys.end(), symbol_keys.begin(), symbol_keys.end());
+      for (const std::string& key : descriptor_keys) {
         Value descriptor;
         if (!lookup_property(arguments[1].object, key, descriptor)) continue;
         DescriptorInput input;
@@ -3964,11 +4479,7 @@ void install_builtins(RuntimeState& runtime) {
     const Value target = object_argument(arguments, "hasOwn");
     const std::shared_ptr<Object> bag = property_bag(target);
     if (bag == nullptr || arguments.size() < 2) return Value::boolean_of(false);
-    return Value::boolean_of(has_own_property(*bag, to_string(arguments[1])));
-  });
-  add_object_static("getOwnPropertySymbols", [](const std::vector<Value>&, Value) {
-    // Symbol is not implemented, so no object has symbol-keyed properties.
-    return Value::object_of(make_array({}));
+    return Value::boolean_of(has_own_property(*bag, to_property_key(arguments[1])));
   });
   add_object_static("assign", [](const std::vector<Value>& arguments, Value) {
     if (arguments.empty() || !arguments[0].is_object() || arguments[0].object == nullptr) {
@@ -3979,6 +4490,14 @@ void install_builtins(RuntimeState& runtime) {
       if (!arguments[i].is_object() || arguments[i].object == nullptr) continue;
       const std::shared_ptr<Object> source = arguments[i].object;
       for (const std::string& key : own_property_keys(*source, true)) {
+        Value value;
+        if (!lookup_property(source, key, value)) continue;
+        target->properties[key] = Property{value};
+      }
+      // `Object.assign` also copies enumerable own symbol-keyed properties.
+      for (const std::string& key : own_symbol_keys(*source)) {
+        const auto found = source->properties.find(key);
+        if (found == source->properties.end() || !found->second.enumerable) continue;
         Value value;
         if (!lookup_property(source, key, value)) continue;
         target->properties[key] = Property{value};
@@ -4116,6 +4635,8 @@ bool to_boolean(const Value& value) {
       return value.number != 0.0 && !std::isnan(value.number);
     case ValueType::String:
       return !value.text.empty();
+    case ValueType::Symbol:
+      return true;
     case ValueType::Object:
     case ValueType::Function:
       return true;
@@ -4143,6 +4664,8 @@ double to_number(const Value& value) {
       if (end == start) return std::nan("");
       return parsed;
     }
+    case ValueType::Symbol:
+      return std::nan("");  // the spec throws; NaN keeps arithmetic from cascading
     case ValueType::Object:
     case ValueType::Function:
       if (value.type == ValueType::Object && value.object != nullptr && value.object->is_wrapper) {
@@ -4165,6 +4688,8 @@ std::string to_string(const Value& value) {
       return number_to_raw_string(value.number);
     case ValueType::String:
       return value.text;
+    case ValueType::Symbol:
+      return "Symbol(" + value.text + ")";
     case ValueType::Function:
       return "function " + (value.function != nullptr ? value.function->name : std::string()) + "() { [code] }";
     case ValueType::Object: {
@@ -4194,6 +4719,8 @@ std::string to_string(const Value& value) {
 
 std::string typeof_string(const Value& value) {
   switch (value.type) {
+    case ValueType::Symbol:
+      return "symbol";
     case ValueType::Undefined:
       return "undefined";
     case ValueType::Null:
@@ -4242,6 +4769,8 @@ bool strict_equals(const Value& a, const Value& b) {
       return a.number == b.number;
     case ValueType::String:
       return a.text == b.text;
+    case ValueType::Symbol:
+      return a.number == b.number;  // symbol identity is the id, not the description
     case ValueType::Object:
       return a.object == b.object;
     case ValueType::Function:

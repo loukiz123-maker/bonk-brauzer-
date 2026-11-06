@@ -11,7 +11,9 @@ Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
 и интерпретатором**, flexbox, grid, позиционирование (`relative`/`absolute`/`fixed`
 с `z-index`), floats с `clear` и `overflow` с обрезкой и BFC, дескрипторы свойств
 и статика `Object` (`defineProperty`/`keys`/`create`/`freeze`…), `Array.prototype`
-с обобщёнными методами, прототипы `String`/`Number`/`Boolean` с обёртками,
+с обобщёнными методами, прототипы `String`/`Number`/`Boolean`/`Symbol` с обёртками,
+`Symbol` с символьными ключами свойств и протокол итерации (`for-of`,
+`Symbol.iterator`, spread, `Array.prototype.values/keys/entries`),
 объект `arguments`, `eval`, Canvas 2D,
 формы с отправкой GET/POST,
 cookies и `localStorage`, Same-Origin Policy с CORS и CSP, процесс на вкладку
@@ -61,7 +63,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 567 юнит-тестов
+$ make test               # 586 юнит-тестов
 $ make conformance        # прогон по html5lib-tests/test262/reftests -> docs/conformance.md
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
@@ -145,7 +147,7 @@ include/bonk/          публичные заголовки по модулям
   bindings/            bindings (window, document, обёртки элементов, события, инлайновые скрипты)
   apps/                pipeline (HTML → PNG за один вызов), cli, main
 src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
-tests/                 свой фреймворк + 567 тестов + tests/fixtures/
+tests/                 свой фреймворк + 586 тестов + tests/fixtures/
 docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
 .github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
 ```
