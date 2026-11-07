@@ -20,6 +20,7 @@
 #include "bonk/js/js.hpp"
 #include "bonk/net/http.hpp"
 #include "bonk/shell/shell.hpp"
+#include "bonk/shell/wayland.hpp"
 #include "bonk/shell/x11.hpp"
 #include "bonk/paint/canvas.hpp"
 
@@ -206,6 +207,107 @@ int run_view_isolated(const bonk::CliOptions& options) {
   return 0;
 }
 
+namespace {
+
+/// The two window backends expose the same shape of API; these traits are everything
+/// the generic view loop needs, so the event handling below is written once.
+struct X11Backend {
+  using Window = bonk::shell::x11::Window;
+  using Event = bonk::shell::x11::Event;
+  static constexpr auto kClose = bonk::shell::x11::EventType::Close;
+  static constexpr auto kExpose = bonk::shell::x11::EventType::Expose;
+  static constexpr auto kConfigure = bonk::shell::x11::EventType::Configure;
+  static constexpr auto kButtonPress = bonk::shell::x11::EventType::ButtonPress;
+  static constexpr auto kKeyPress = bonk::shell::x11::EventType::KeyPress;
+  static bool available() { return bonk::shell::x11::display_available(); }
+  static bonk::Result<std::unique_ptr<Window>> open(int width, int height, std::string_view title) {
+    return Window::open(width, height, title);
+  }
+};
+
+struct WaylandBackend {
+  using Window = bonk::shell::wayland::Window;
+  using Event = bonk::shell::wayland::Event;
+  static constexpr auto kClose = bonk::shell::wayland::EventType::Close;
+  static constexpr auto kExpose = bonk::shell::wayland::EventType::Expose;
+  static constexpr auto kConfigure = bonk::shell::wayland::EventType::Configure;
+  static constexpr auto kButtonPress = bonk::shell::wayland::EventType::ButtonPress;
+  static constexpr auto kKeyPress = bonk::shell::wayland::EventType::KeyPress;
+  static bool available() { return bonk::shell::wayland::display_available(); }
+  static bonk::Result<std::unique_ptr<Window>> open(int width, int height, std::string_view title) {
+    return Window::open(width, height, title);
+  }
+};
+
+/// Opens a window through `Backend` and runs the interactive loop: scroll with the wheel
+/// or the arrow/Page keys, click links with the left button, close the window to exit.
+template <class Backend>
+int run_window_loop(const bonk::CliOptions& options, bonk::shell::Session& session) {
+  using Window = std::unique_ptr<typename Backend::Window>;
+  bonk::Result<Window> window = Backend::open(options.width, options.height, session.tab().title);
+  if (window.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", window.error().to_string().c_str());
+    return 1;
+  }
+
+  bonk::paint::Canvas canvas(options.width, options.height);
+  (void)session.render(canvas);
+  (void)window.value()->present(canvas);
+
+  for (;;) {
+    const typename Backend::Event event = window.value()->poll(500);
+    if (event.type == Backend::kClose) return 0;
+    // A resize is the compositor's suggestion: the page keeps its own viewport for
+    // now, so the window is simply re-rendered at the next expose/input.
+    if (event.type == Backend::kConfigure) continue;
+    if (event.type == Backend::kExpose) {
+      (void)session.render(canvas);
+      (void)window.value()->present(canvas);
+      continue;
+    }
+    if (event.type == Backend::kButtonPress) {
+      if (event.button == 4 || event.button == 5) {
+        session.scroll_by(event.button == 4 ? -60.0f : 60.0f);
+      } else if (event.button == 1) {
+        (void)session.click(static_cast<float>(event.x), static_cast<float>(event.y));
+      } else {
+        continue;
+      }
+      (void)session.render(canvas);
+      (void)window.value()->present(canvas);
+      continue;
+    }
+    if (event.type == Backend::kKeyPress) {
+      switch (event.keysym) {
+        case 0xFF54:  // Down
+          session.scroll_by(40.0f);
+          break;
+        case 0xFF52:  // Up
+          session.scroll_by(-40.0f);
+          break;
+        case 0xFF56:  // Page_Down
+          session.scroll_by(static_cast<float>(options.height) * 0.9f);
+          break;
+        case 0xFF55:  // Page_Up
+          session.scroll_by(-static_cast<float>(options.height) * 0.9f);
+          break;
+        case 0xFF50:  // Home
+          session.set_scroll(0.0f);
+          break;
+        case 0xFF57:  // End
+          session.set_scroll(session.max_scroll());
+          break;
+        default:
+          continue;
+      }
+      (void)session.render(canvas);
+      (void)window.value()->present(canvas);
+    }
+  }
+}
+
+}  // namespace
+
 int run_view(const bonk::CliOptions& options) {
   if (options.isolated) return run_view_isolated(options);
   bonk::shell::Session session(static_cast<float>(options.width), static_cast<float>(options.height),
@@ -237,75 +339,35 @@ int run_view(const bonk::CliOptions& options) {
     return 0;
   }
 
-  if (!bonk::shell::x11::display_available()) {
+  const std::string& backend = options.backend;
+  if (backend == "x11" && !X11Backend::available()) {
     std::fprintf(stderr,
                  "bonk: no X11 display found ($DISPLAY is unset or the socket is missing).\n"
                  "      Use `bonk view %s --screenshot out.png` for a headless render.\n",
                  options.input.c_str());
     return 1;
   }
-
-  bonk::Result<std::unique_ptr<bonk::shell::x11::Window>> window =
-      bonk::shell::x11::Window::open(options.width, options.height, session.tab().title);
-  if (window.is_error()) {
-    std::fprintf(stderr, "bonk: %s\n", window.error().to_string().c_str());
+  if (backend == "wayland" && !WaylandBackend::available()) {
+    std::fprintf(stderr,
+                 "bonk: no Wayland compositor found ($WAYLAND_DISPLAY is unset or the socket is "
+                 "missing).\n      Use `bonk view %s --screenshot out.png` for a headless render.\n",
+                 options.input.c_str());
     return 1;
   }
-
-  bonk::paint::Canvas canvas(options.width, options.height);
-  (void)session.render(canvas);
-  (void)window.value()->present(canvas);
-
-  for (;;) {
-    const bonk::shell::x11::Event event = window.value()->poll(500);
-    switch (event.type) {
-      case bonk::shell::x11::EventType::Close:
-        return 0;
-      case bonk::shell::x11::EventType::Expose:
-        (void)session.render(canvas);
-        (void)window.value()->present(canvas);
-        break;
-      case bonk::shell::x11::EventType::ButtonPress:
-        if (event.button == 4 || event.button == 5) {
-          session.scroll_by(event.button == 4 ? -60.0f : 60.0f);
-        } else if (event.button == 1) {
-          (void)session.click(static_cast<float>(event.x), static_cast<float>(event.y));
-        } else {
-          break;
-        }
-        (void)session.render(canvas);
-        (void)window.value()->present(canvas);
-        break;
-      case bonk::shell::x11::EventType::KeyPress:
-        switch (event.keysym) {
-          case 0xFF54:  // Down
-            session.scroll_by(40.0f);
-            break;
-          case 0xFF52:  // Up
-            session.scroll_by(-40.0f);
-            break;
-          case 0xFF56:  // Page_Down
-            session.scroll_by(static_cast<float>(options.height) * 0.9f);
-            break;
-          case 0xFF55:  // Page_Up
-            session.scroll_by(-static_cast<float>(options.height) * 0.9f);
-            break;
-          case 0xFF50:  // Home
-            session.set_scroll(0.0f);
-            break;
-          case 0xFF57:  // End
-            session.set_scroll(session.max_scroll());
-            break;
-          default:
-            break;
-        }
-        (void)session.render(canvas);
-        (void)window.value()->present(canvas);
-        break;
-      default:
-        break;
-    }
+  if (backend == "auto") {
+    // A Wayland session usually has XWayland too; the native protocol is the better fit
+    // (no X server round-trip per frame), so it wins when both are present.
+    if (WaylandBackend::available()) return run_window_loop<WaylandBackend>(options, session);
+    if (X11Backend::available()) return run_window_loop<X11Backend>(options, session);
+    std::fprintf(stderr,
+                 "bonk: no window backend found: $WAYLAND_DISPLAY and $DISPLAY are unset or their\n"
+                 "      sockets are missing. Use `bonk view %s --screenshot out.png` for a headless "
+                 "render,\n      or --backend=x11 to force X11/XWayland.\n",
+                 options.input.c_str());
+    return 1;
   }
+  if (backend == "wayland") return run_window_loop<WaylandBackend>(options, session);
+  return run_window_loop<X11Backend>(options, session);
 }
 
 int run_render(const bonk::CliOptions& options) {

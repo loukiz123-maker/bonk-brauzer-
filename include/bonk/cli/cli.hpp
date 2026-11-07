@@ -42,6 +42,7 @@ struct CliOptions {
   std::string profile_dir;              // view/localStorage directory (empty = memory only)
   std::string selector;                 // devtools --selector: node to inspect
   bool isolated = false;                // view --isolated: render in a child process
+  std::string backend = "auto";          // view --backend=auto|x11|wayland
   std::string css_path;                 // extra stylesheet
   bool debug_boxes = false;
   bool dump_layout = false;

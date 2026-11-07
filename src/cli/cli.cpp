@@ -119,6 +119,14 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.isolated = true;
       continue;
     }
+    if (arg == "--backend") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--backend requires auto, x11 or wayland"));
+      options.backend = args[++i];
+      if (options.backend != "auto" && options.backend != "x11" && options.backend != "wayland") {
+        return Result<CliOptions>::failure(usage_error("--backend must be auto, x11 or wayland"));
+      }
+      continue;
+    }
     if (arg == "--selector") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--selector requires a CSS selector"));
       options.selector = args[++i];
@@ -238,12 +246,13 @@ std::string cli_help_text() {
   out += "                    parse, style, lay out and rasterise a local page to PNG\n";
   out += "  dom <file.html>   print the parsed DOM tree\n";
   out += "  fetch <url>       HTTP/1.1 GET and print the response head (TLS is not ready yet)\n";
-  out += "  view <page>       open the page in an X11 window (own X11 client, no Xlib)\n";
+  out += "  view <page>       open the page in a window (own Wayland/X11 clients, no libs)\n";
   out += "                    --screenshot out.png  render headlessly instead\n";
   out += "                    --scroll N            start scrolled down N pixels\n";
   out += "                    --click X,Y           click before screenshotting\n";
   out += "                    --profile DIR         persist localStorage in DIR\n";
   out += "                    --isolated            render in a child process (process-per-tab)\n";
+  out += "                    --backend=auto|x11|wayland  window backend (auto: Wayland, then X11)\n";
   out += "  js <file.js|code> run a script in the engine (own lexer, parser, interpreter)\n";
   out += "  devtools <page>   console, network log, security state and a CSS inspector\n";
   out += "                    --selector CSS        inspect one element (e.g. \"#main\")\n";

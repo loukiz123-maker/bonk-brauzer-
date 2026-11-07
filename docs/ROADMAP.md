@@ -719,6 +719,31 @@ tree construction 1 792/1 792 (100 %), юнит-тестов **567**. Откры
 через `IteratorClose`.
 
 
+## Этап 34 — свой Wayland-бэкенд
+
+Второй оконный бэкенд, реализованный прямо по протоколу Wayland: `wl_display`
+(`get_registry`, `sync`), `wl_registry`/`bind`, `wl_compositor.create_surface`,
+xdg-shell (`xdg_wm_base`/`xdg_surface`/`xdg_toplevel`, `ack_configure`,
+`set_title`), `wl_shm` с `memfd_create` и передачей дескриптора через
+`SCM_RIGHTS`, двойная буферизация `XRGB8888`, `wl_seat` + `wl_pointer`
+(движение, кнопки, колесо) + `wl_keyboard` (таблица evdev → keysym для
+US-раскладки вместо libxkbcommon), `zxdg_decoration_manager_v1` для серверного
+заголовка окна. `bonk view` получил `--backend=auto|x11|wayland`; цикл событий
+общий для обоих бэкендов (traits + один шаблон). Тесты — `tests/shell/
+wayland_test.cpp`, включая мок-композитор на unix-соке.
+
+Подробности: [`docs/STAGE-34.md`](STAGE-34.md), решение —
+[`docs/adr/0036-wayland-protocol-without-libwayland.md`](adr/0036-wayland-protocol-without-libwayland.md).
+
+**Критерий выхода**: страница открывается нативным окном на Wayland-сессии без
+XWayland, а X11/XWayland остаётся доступным тем же флагом. Сейчас: Wayland-окно
+под KDE Plasma 6 (нативный `xdg-shell`), юнит-тестов **594**, test262 без
+изменений — 10 309/18 391 (56.1 %). Открыто: client-side decorations и
+`xdg-decoration` v2, `wl_surface.frame` (синхронизация с VBlank),
+`wl_region`/буфер обмена/`wl_touch`, не-US раскладки (свой разбор xkb),
+ресайз вьюпорта при `configure`.
+
+
 ---
 
 ## Риски и как их снимаем
