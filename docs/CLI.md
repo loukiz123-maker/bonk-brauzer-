@@ -134,6 +134,18 @@ lynxdroid profiles delete   PROFILE_ID [--yes]
   imported as a copy rather than overwriting.
 * `delete` keeps a timestamped backup unless hard-deleted through the API.
 
+## perf
+
+```
+lynxdroid perf [--iterations N] [--json]
+```
+
+Times the stages LynxDroid owns: key event → touch events, wire encoding, and
+the `AF_UNIX` write. It prints, in both text and JSON, what it did **not**
+measure (compositor, container, Android dispatch, application frame) and makes
+no end-to-end claim. Keys are taken from the profile; a key that produces no
+events is an error rather than a flattering zero. See `docs/PERFORMANCE.md`.
+
 ## image
 
 ```

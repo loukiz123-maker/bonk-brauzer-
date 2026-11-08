@@ -184,7 +184,7 @@ jobs:
           PY
       - name: Every documented command exists
         run: |
-          for cmd in doctor status start stop apps display profiles image gui version; do
+          for cmd in doctor status start stop apps display profiles image perf gui version; do
             lynxdroid --help | grep -q "$cmd" || { echo "missing: $cmd"; exit 1; }
           done
           echo "all documented commands present"

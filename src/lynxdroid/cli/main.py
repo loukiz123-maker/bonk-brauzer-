@@ -36,9 +36,10 @@ from lynxdroid.core.diagnostics import Status
 from lynxdroid.core.errors import Blocked, DependencyMissing, ExitCode, LynxError, UsageError
 from lynxdroid.core.logging_setup import configure as configure_logging
 from lynxdroid.core.paths import AppPaths
+from lynxdroid.display.geometry import ViewportGeometry
 from lynxdroid.display.resolution import PRESETS, validate_display
 from lynxdroid.doctor import checks as doctor_checks
-from lynxdroid.profiles.model import ProfileError
+from lynxdroid.profiles.model import Profile, ProfileError
 from lynxdroid.profiles.store import ProfileStore
 from lynxdroid.settings import SettingsStore
 
@@ -225,6 +226,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_image_prepare.add_argument("--json", action="store_true")
     p_image_prepare.set_defaults(func=cmd_image_prepare)
+
+    # perf --------------------------------------------------------------
+    p_perf = sub.add_parser(
+        "perf", help="measure the latency of the pipeline we own (never end-to-end)"
+    )
+    p_perf.add_argument("--iterations", type=int, default=200)
+    p_perf.add_argument("--json", action="store_true")
+    p_perf.set_defaults(func=cmd_perf)
 
     # gui ---------------------------------------------------------------
     p_gui = sub.add_parser("gui", help="launch the graphical shell")
@@ -640,6 +649,38 @@ def cmd_image_prepare(args: argparse.Namespace, paths: AppPaths, store: Settings
     if results:
         print()
         print(images.render_install_instructions(results[0]))
+    return int(ExitCode.OK)
+
+
+def _demo_profile_and_geometry() -> tuple[Profile, ViewportGeometry]:
+    """A fixed, representative profile so numbers are comparable run to run."""
+    from lynxdroid.display.geometry import FitMode, Rotation, Size
+    from lynxdroid.profiles.model import Element, ElementType, Profile, Target
+
+    elements = (
+        Element(id="tap-fire", type=ElementType.TAP, label="Fire", x=0.86, y=0.82, keys=("space",)),
+        Element(id="tap-jump", type=ElementType.TAP, label="Jump", x=0.92, y=0.66, keys=("j",)),
+    )
+    profile = Profile.new("Perf sample", Target(package="org.example.perf"), elements=elements)
+    geometry = ViewportGeometry(
+        buffer=Size(1920, 1080),
+        surface=Size(1200, 675),
+        fit=FitMode.CONTAIN,
+        rotation=Rotation.NONE,
+    )
+    return profile, geometry
+
+
+def cmd_perf(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Numbers about our own work only; see ``lynxdroid.perf.SCOPE_NOTES``."""
+    from lynxdroid import perf
+
+    profile, geometry = _demo_profile_and_geometry()
+    result = perf.measure(profile=profile, geometry=geometry, iterations=max(1, args.iterations))
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
+        return int(ExitCode.OK)
+    perf.render(result)
     return int(ExitCode.OK)
 
 

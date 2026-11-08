@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (419) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (436) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -103,7 +103,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 419 tests, no display needed
+pytest                               # 436 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -176,6 +176,7 @@ silently producing taps that make a game unplayable.
 | `lynxdroid display show/set/presets` | viewport properties, previous values recorded |
 | `lynxdroid profiles list/validate/export/import/delete` | layout profiles, atomic writes |
 | `lynxdroid image plan/prepare` | OTA images: consent, checksum honesty, never writes `/var/lib` |
+| `lynxdroid perf` | times our own pipeline in µs; states what it did **not** measure |
 | `lynxdroid gui` | PySide6 shell |
 | `lynxdroid version --json` | version and schema numbers |
 
@@ -202,6 +203,7 @@ threat model: [`docs/SECURITY.md`](docs/SECURITY.md).
 | [`docs/SECURITY.md`](docs/SECURITY.md) | trust boundaries, privileged paths, threat model |
 | [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | every limitation, honestly |
 | [`docs/CLI.md`](docs/CLI.md) | full command and exit-code reference |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | what was measured, in µs; what was not measured and why |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | stage-by-stage state against the 20-stage plan |
 | [`android_agent/README.md`](android_agent/README.md) | the Android-side touch agent and its protocol |
 
