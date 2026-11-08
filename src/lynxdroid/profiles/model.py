@@ -337,16 +337,6 @@ class Profile:
         updated.validate()
         return updated
 
-    def with_reference(self, reference: ReferenceResolution) -> Profile:
-        updated = replace(self, reference=reference, updated_at=utc_now())
-        updated.validate()
-        return updated
-
-    def with_target(self, target: Target) -> Profile:
-        updated = replace(self, target=target, updated_at=utc_now())
-        updated.validate()
-        return updated
-
     def duplicate(self, new_name: str | None = None) -> Profile:
         """Copy with fresh identity so both can exist side by side."""
         return replace(

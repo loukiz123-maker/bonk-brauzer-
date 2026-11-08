@@ -25,7 +25,15 @@ import time
 from pathlib import Path
 
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QCloseEvent, QColor, QFocusEvent, QKeyEvent, QResizeEvent
+from PySide6.QtGui import (
+    QCloseEvent,
+    QColor,
+    QFocusEvent,
+    QHideEvent,
+    QKeyEvent,
+    QResizeEvent,
+    QShowEvent,
+)
 from PySide6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -675,6 +683,23 @@ class MainWindow(QMainWindow):
             if released:
                 log.info("released %d contact(s) on focus loss", len(released))
         super().focusOutEvent(event)
+
+    def hideEvent(self, event: QHideEvent) -> None:
+        """Stop polling while the window is not on screen.
+
+        The docstring on Poller has promised this since it was written; the
+        call itself was missing, so a minimised window kept running
+        ``waydroid status`` every two seconds for nothing.
+        """
+        self._poller.pause()
+        super().hideEvent(event)
+
+    def showEvent(self, event: QShowEvent) -> None:
+        # Only resume if something is actually worth watching; a stopped
+        # backend needs no polling.
+        if self._snapshot.state.is_active:
+            self._poller.resume()
+        super().showEvent(event)
 
     def _toggle_fullscreen(self) -> None:
         if self.isFullScreen():

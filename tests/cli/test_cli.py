@@ -7,6 +7,7 @@ from pathlib import Path
 
 import pytest
 
+from lynxdroid.cli import main as cli_main
 from lynxdroid.cli.main import main
 from lynxdroid.core.errors import ExitCode
 from lynxdroid.doctor import checks as doctor_checks
@@ -213,6 +214,47 @@ class TestDisplayCli:
         code, out, _ = run(capsys, ["display", "show", "--json"], root)
         assert code == ExitCode.OK
         assert isinstance(json.loads(out), dict)
+
+
+class TestShowCli:
+    """`show` presents the Android window; the backend method had no caller."""
+
+    @staticmethod
+    def _wire(monkeypatch, backend) -> None:
+        """Use one backend instance for both calls: the fake one is in-memory,
+        so 'start then show' through main() would build two different objects."""
+        monkeypatch.setattr(cli_main, "_backend", lambda args, store: backend)
+
+    def test_refuses_when_nothing_is_running(self, capsys, root: Path, monkeypatch) -> None:
+        """Showing a window for a stopped backend would be a lie."""
+        from lynxdroid.backend.waydroid import FakeBackend
+
+        self._wire(monkeypatch, FakeBackend())
+        code, _, err = run(capsys, ["show"], root)
+        assert code == ExitCode.BLOCKED
+        assert "lynxdroid start" in err
+
+    def test_reports_the_window_after_start(self, capsys, root: Path, monkeypatch) -> None:
+        from lynxdroid.backend.waydroid import FakeBackend
+
+        backend = FakeBackend()
+        self._wire(monkeypatch, backend)
+        run(capsys, ["start"], root)
+        code, out, _ = run(capsys, ["show"], root)
+        assert code == ExitCode.OK
+        assert "Android window" in out
+
+    def test_json_says_what_happened(self, capsys, root: Path, monkeypatch) -> None:
+        from lynxdroid.backend.waydroid import FakeBackend
+
+        backend = FakeBackend()
+        self._wire(monkeypatch, backend)
+        run(capsys, ["start"], root)
+        code, out, _ = run(capsys, ["show", "--json"], root)
+        assert code == ExitCode.OK
+        payload = json.loads(out)
+        assert payload["shown"] is True
+        assert payload["state"] == "running"
 
 
 class TestAppsCli:

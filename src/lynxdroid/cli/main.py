@@ -30,7 +30,7 @@ from pathlib import Path
 from lynxdroid import version as version_mod
 from lynxdroid.apps.catalog import inspect_apk, merge_apps
 from lynxdroid.backend import images
-from lynxdroid.backend.contract import AndroidBackend
+from lynxdroid.backend.contract import AndroidBackend, BackendState
 from lynxdroid.core import proc
 from lynxdroid.core.diagnostics import Status
 from lynxdroid.core.errors import Blocked, DependencyMissing, ExitCode, LynxError, UsageError
@@ -137,6 +137,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_stop.add_argument("--timeout", type=float, default=45.0)
     p_stop.add_argument("--json", action="store_true")
     p_stop.set_defaults(func=cmd_stop)
+
+    p_show = sub.add_parser(
+        "show", help="ask Waydroid to present the Android window", description=_SHOW_DOC
+    )
+    p_show.add_argument("--json", action="store_true")
+    p_show.set_defaults(func=cmd_show)
 
     # apps --------------------------------------------------------------
     p_apps = sub.add_parser("apps", help="installed Android applications")
@@ -372,6 +378,33 @@ def cmd_stop(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) ->
     else:
         print(f"Android is {snapshot.state.value}: {snapshot.detail}")
     return int(ExitCode.OK)
+
+
+_SHOW_DOC = (
+    "Waydroid runs Android in its own window; this asks it to open one. "
+    "It is not the same as start: start boots the session, show presents it."
+)
+
+
+def cmd_show(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Present the Android window. The backend method existed with no way in."""
+    backend = _backend(args, store)
+    snapshot = backend.snapshot()
+    if snapshot.state is not BackendState.RUNNING:
+        print(
+            f"Android is {snapshot.state.value}: start it first "
+            "(lynxdroid start), nothing to show yet",
+            file=sys.stderr,
+        )
+        return int(ExitCode.BLOCKED)
+    shown = backend.show_full_ui()
+    if args.json:
+        print(json.dumps({"shown": shown, "state": snapshot.state.value}, indent=2))
+    elif shown:
+        print("asked Waydroid to show the Android window")
+    else:
+        print("Waydroid refused to show the window", file=sys.stderr)
+    return int(ExitCode.OK if shown else ExitCode.FAIL)
 
 
 def cmd_apps_list(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

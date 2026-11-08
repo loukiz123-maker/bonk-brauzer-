@@ -114,10 +114,6 @@ class BackendState(str, Enum):
     ERROR = "error"
 
     @property
-    def is_transitional(self) -> bool:
-        return self in (BackendState.STARTING, BackendState.STOPPING)
-
-    @property
     def is_active(self) -> bool:
         return self in (BackendState.RUNNING, BackendState.STARTING)
 

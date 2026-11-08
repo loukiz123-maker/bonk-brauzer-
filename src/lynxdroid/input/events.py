@@ -21,10 +21,6 @@ class Action(str, Enum):
     UP = "up"
     CANCEL = "cancel"
 
-    @property
-    def ends_contact(self) -> bool:
-        return self in (Action.UP, Action.CANCEL)
-
 
 @dataclass(frozen=True, slots=True)
 class TouchEvent:

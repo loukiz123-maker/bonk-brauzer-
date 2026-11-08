@@ -138,6 +138,9 @@ not trustworthy about anything else.
 | 40 | The aspect-ratio warning said only "authored for a different aspect ratio"; `ReferenceResolution.relayout_hint` already had the sentence that tells the user to re-check key positions | same audit | fixed, the model's wording is shown |
 | 41 | Held elements looked idle: the overlay was lit from live contacts only, so a HOLD or a mouse grab showed nothing while it was working | tracing `press_state`, which nothing called | fixed, contacts and held keys are shown together |
 | 42 | `Element.as_pointer_displacement()` always returned `(0, 0)`, `DisplayRequest.as_async_clamp_string()`, `TouchEvent.with_seq()` and `EventQueue.peek_last()` were never called | same audit | removed rather than left as an API that promises nothing |
+| 43 | `AndroidBackend.show_full_ui()` was implemented for both backends and never called: there was no way to put the Android window on screen | end of the same audit | fixed, `lynxdroid show` |
+| 44 | `Poller.pause()`/`resume()` existed and nothing called them, while the docstring promised polling stops when the window is hidden | same audit | fixed, `hideEvent`/`showEvent` pause and resume it |
+| 45 | `BackendState.is_transitional()`, `Action.ends_contact()`, `AppEntry.initials()` and `Profile.with_reference()/with_target()` were never called | same audit | removed |
 
 ## Environment issues that are not bugs
 

@@ -85,6 +85,18 @@ reported as `starting`, not `running`.
 Failure codes: `boot-timeout`, `container-start-failed`, `service-unknown`,
 `not-installed`, `already-starting`.
 
+## show
+
+```
+lynxdroid show [--json]
+```
+
+Asks Waydroid to present the Android window (`waydroid show-full-ui`). This is
+not the same operation as `start`: `start` boots the session, `show` puts a
+window on screen for a session that is already running. It refuses with exit 6
+when Android is not `running`, because asking for a window that cannot appear
+only looks like a hang.
+
 ## apps
 
 ```

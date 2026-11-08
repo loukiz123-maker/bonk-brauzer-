@@ -106,11 +106,6 @@ class AppEntry:
     has_profile: bool = False
 
     @property
-    def initials(self) -> str:
-        letters = [part[0] for part in self.label.replace(".", " ").split() if part]
-        return "".join(letters[:2]).upper() or self.package[:2].upper()
-
-    @property
     def vendor(self) -> str:
         parts = self.package.split(".")
         return parts[1] if len(parts) > 2 else (parts[0] if parts else "")
