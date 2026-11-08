@@ -17,18 +17,18 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 | 6 | Window, image, scaling | **PARTIAL** | geometry engine verified (44 tests); Qt window written, never displayed here |
 | 7 | Resolution, DPI, properties | **DONE** | four concepts separated, validation + apply modes + rollback values; live verification blocked |
 | 8 | Base input, Wayland verification | **PARTIAL** | engine + channels done; multitouch transport needs the agent on a device |
-| 9 | Keyboard layout editor | **PARTIAL** | model, codec, store, CLI; drag-and-drop, selection and unsaved-changes handling implemented in Qt-free `gui/editor.py` (37 tests); the widgets themselves have never been displayed |
+| 9 | Keyboard layout editor | **PARTIAL** | model, codec, store, CLI; drag-and-drop, selection and unsaved-changes handling implemented in Qt-free `gui/editor.py` (40 tests); the widgets themselves have never been displayed |
 | 10 | Simultaneous presses, multitouch | **PARTIAL** | state machine and pointer allocation verified; real device test blocked |
 | 11 | Intel Iris Xe, laptop optimisation | **BLOCKED** | host GPU checks written; nothing can be measured without the GPU |
 | 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance deliberately `UNTESTED` |
 | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
 | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
-| 15 | Testing and quality criteria | **DONE** | 562 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+| 15 | Testing and quality criteria | **DONE** | 569 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
 | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
 | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
 | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |
 | 19 | C++ port and verification | **NOT STARTED** | gated on stage 17, per stage 17's own rule |
-| 20 | Build, results, sources | **PARTIAL** | README/ARCHITECTURE/SECURITY/TESTING/KNOWN_ISSUES/LICENSES written; a reproducible CachyOS build script and a verified install are pending |
+| 20 | Build, results, sources | **PARTIAL** | docs written; `scripts/install.sh` is reproducible and runs in CI on a clean runner, but a verified install **on CachyOS** is still pending |
 
 ## Why the C++ stage has not begun
 

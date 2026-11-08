@@ -182,6 +182,25 @@ jobs:
           print(f"valid report: {len(report['checks'])} checks, statuses {sorted(statuses)}")
           PY
 
+  install-script:
+    name: install script works on a clean machine
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install bash and check the script parses
+        run: bash -n scripts/install.sh
+      # The point of the script is that a fresh machine ends up with a
+      # working install. Running it here is the only way to know that - it is
+      # also why the script must never need sudo.
+      - name: Run scripts/install.sh end to end
+        run: ./scripts/install.sh
+      - name: The installed command works
+        run: |
+          .venv/bin/lynxdroid version --json | python -c "import json,sys; print(json.load(sys.stdin)['version'])"
+
   # Docs and code must not drift apart: the requirement registry references
   # real test ids, and the schema versions must match what the code emits.
   docs:

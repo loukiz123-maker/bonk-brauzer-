@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (562) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (569) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -86,9 +86,20 @@ sudo pacman -S waydroid
 
 # 2. LynxDroid (this project)
 git clone <this repository> lynxdroid && cd lynxdroid
+./scripts/install.sh                 # venv, install, and it verifies itself
+. .venv/bin/activate
+lynxdroid doctor                     # read-only, changes nothing
+```
+
+`scripts/install.sh` does the venv, the install and a self-check (the CLI
+starts, the test suite passes). It never runs `sudo` and never touches anything
+outside `.venv/`: installing Waydroid and picking a binder-capable kernel are
+your decisions, so it prints them instead of performing them. The long form, if
+you would rather do it yourself:
+
+```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[gui,dev]'          # [gui] pulls PySide6
-lynxdroid doctor                     # read-only, changes nothing
 ```
 
 Kernel requirement: `CONFIG_ANDROID_BINDER_IPC` and (preferably)
@@ -103,7 +114,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 562 tests, no display needed
+pytest                               # 569 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
