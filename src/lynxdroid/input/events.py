@@ -12,6 +12,8 @@ from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import Enum
 
+from lynxdroid.core.errors import ExitCode, LynxError
+
 
 class Action(str, Enum):
     DOWN = "down"
@@ -105,11 +107,19 @@ class EventQueue:
         self._items.clear()
 
 
-class InputError(RuntimeError):
-    """A documented, user-visible input failure (e.g. no free touch slot)."""
+class InputError(LynxError):
+    """A documented, user-visible input failure (e.g. no free touch slot).
 
-    def __init__(self, message: str, *, code: str = "input-error") -> None:
-        super().__init__(message)
+    It used to derive from ``RuntimeError``, which meant a failure to deliver
+    a touch escaped the CLI's error handling and printed a traceback instead of
+    a sentence. Every user-visible failure in this project goes through
+    ``LynxError`` so the exit code and the message stay consistent.
+    """
+
+    exit_code = ExitCode.FAIL
+
+    def __init__(self, message: str, *, code: str = "input-error", hint: str | None = None) -> None:
+        super().__init__(message, hint=hint)
         self.code = code
 
 

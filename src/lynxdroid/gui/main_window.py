@@ -20,6 +20,10 @@ tell "not implemented" from "not working right now".
 
 from __future__ import annotations
 
+import os
+import time
+from pathlib import Path
+
 from PySide6.QtCore import QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QCloseEvent, QColor, QFocusEvent, QKeyEvent, QResizeEvent
 from PySide6.QtWidgets import (
@@ -56,6 +60,8 @@ from lynxdroid.gui.theme import Palette, palette_for, stylesheet
 from lynxdroid.gui.workers import Poller, TaskRunner
 from lynxdroid.input.channels import Capabilities as ChannelCapabilities
 from lynxdroid.input.engine import InputEngine
+from lynxdroid.input.events import TouchEvent
+from lynxdroid.input.pipeline import InputPipeline
 from lynxdroid.profiles.model import Profile, ReferenceResolution
 from lynxdroid.profiles.store import ProfileStore
 from lynxdroid.settings import SettingsStore
@@ -89,6 +95,8 @@ class MainWindow(QMainWindow):
         self._editor: LayoutEditor | None = None
         self._engine: InputEngine | None = None
         self._channel_caps: ChannelCapabilities | None = None
+        self._pipeline = InputPipeline()
+        self._activity: list[str] = []
         self._banner_widgets: list[QWidget] = []
 
         kind = backend_kind or self._settings.backend
@@ -154,9 +162,16 @@ class MainWindow(QMainWindow):
 
         self._status_geometry = QLabel("geometry: —")
         self._status_channel = QLabel("input: not established")
+        self._latency_label = QLabel("send: no samples yet")
+        self._latency_label.setToolTip(
+            "Time for the control layer to hand events to the channel. "
+            "This is NOT end-to-end latency: compositor, container and the "
+            "Android app are not measured here."
+        )
         self._status_latency = QLabel("latency: —")
         self._statusbar.addWidget(self._status_geometry)
         self._statusbar.addPermanentWidget(self._status_channel)
+        self._statusbar.addPermanentWidget(self._latency_label)
         self._statusbar.addPermanentWidget(self._status_latency)
 
     def _build_topbar(self) -> QWidget:
@@ -566,7 +581,45 @@ class MainWindow(QMainWindow):
         else:
             self._engine.set_geometry(geometry)
             self._engine.set_profile(self._profile)
+        self._ensure_channel()
         return self._engine
+
+    def _append_log(self, message: str) -> None:
+        """One line of user-visible activity, never a traceback."""
+        log_line = f"{time.strftime('%H:%M:%S')}  {message}"
+        self._activity.append(log_line)
+        del self._activity[:-200]
+        get("gui").info("%s", message)
+
+    def _ensure_channel(self) -> None:
+        """Open the touch transport once, and report honestly what we got."""
+        if self._pipeline.channel is not None:
+            return
+        self._channel_caps = self._pipeline.choose(agent_socket=self._agent_socket_path())
+        for warning in self._pipeline.notes:
+            self._append_log(warning)
+        self._status_channel.setText(f"input: {self._channel_caps.describe()}")
+        self._refresh_overlay_hint()
+
+    def _agent_socket_path(self) -> str | None:
+        """The agent socket lives in the runtime dir, or it does not exist."""
+        runtime = os.environ.get("XDG_RUNTIME_DIR")
+        if not runtime:
+            return None
+        candidate = Path(runtime) / "lynxdroid-agent.sock"
+        return str(candidate) if candidate.exists() else None
+
+    def _deliver(self, events: list[TouchEvent]) -> None:
+        """Send engine output to Android through the tested pipeline."""
+        if self._pipeline.channel is None:
+            self._ensure_channel()
+        if not events:
+            return
+        delivered = self._pipeline.deliver(events)
+        self._latency_label.setText(self._pipeline.summary())
+        if not delivered and self._pipeline.last_error:
+            self._set_status(f"input not delivered: {self._pipeline.last_error}", 8000)
+            self._append_log(f"touch delivery failed: {self._pipeline.last_error}")
 
     def _on_touch_pressed(self, x: float, y: float) -> None:
         if self._engine is not None:
@@ -589,6 +642,7 @@ class MainWindow(QMainWindow):
         if self._engine is not None and not event.isAutoRepeat():
             events = self._engine.key_down(_key_name(event))
             if events:
+                self._deliver(events)
                 self._surface.set_active_elements(self._engine.active_element_ids())
                 event.accept()
                 return
@@ -598,6 +652,7 @@ class MainWindow(QMainWindow):
         if self._engine is not None and not event.isAutoRepeat():
             events = self._engine.key_up(_key_name(event))
             if events:
+                self._deliver(events)
                 self._surface.set_active_elements(self._engine.active_element_ids())
                 event.accept()
                 return

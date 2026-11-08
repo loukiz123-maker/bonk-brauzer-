@@ -151,6 +151,12 @@ and — most importantly — release-on-focus-loss. The channel owns the *transp
 and reports what it can actually carry. Splitting them is what allows the
 overlay to be tested to death without a device.
 
+The last hop is owned by `input/pipeline.py`, not by the window. It used to
+live in `MainWindow` - the engine computed touches, the window drew them, and
+nothing was ever sent. Moving the hop into a Qt-free class made it testable;
+`tests/input/test_pipeline.py` now proves that engine output reaches the
+channel and that a failing channel is reported instead of swallowed.
+
 A channel's `capabilities()` is a factual claim, and it is the claim the UI
 acts on. `NullChannel` - the test sink whose events reach nothing - therefore
 reports `available=False` and one contact. An earlier version reported ten

@@ -64,6 +64,25 @@ Because these are the only stages that exist on this machine. Timing a path
 whose middle is missing produces a small number that means nothing - exactly
 the "0 ms" failure mode the specification warns against.
 
+## What the GUI reports while you play
+
+The status bar shows the same measurement, live:
+
+```
+send: 12.3 µs median · p95 41.0 µs · 1204 events (not end-to-end)
+```
+
+It comes from `input/pipeline.py`, which times handing a frame to the channel
+and prints "(not end-to-end)" in the line itself so the number cannot be
+mistaken for the interaction latency a player feels.
+
+Two details are deliberate:
+
+* work faster than the display precision is printed in **microseconds**, not
+  rounded to `0.000 ms`, because "0 ms" is the claim stage 13 forbids;
+* a failed delivery shows the error instead of a timing, so an unmeasured path
+  can never look fast.
+
 ## Guard rails built into the tool
 
 `lynxdroid perf` is not a demo; it refuses to produce a meaningless number:
