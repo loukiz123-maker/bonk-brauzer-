@@ -151,6 +151,30 @@ class TestProfilesCli:
         assert code == ExitCode.OK
         assert "backup" in out
 
+    def test_rename_changes_the_name_and_keeps_the_id(self, capsys, root: Path) -> None:
+        profile_id = self._seed(root)
+        code, out, _ = run(capsys, ["profiles", "rename", profile_id, "Renamed"], root)
+        assert code == ExitCode.OK
+        assert "Renamed" in out
+        # The id is the file's identity: renaming must not mint a new profile.
+        code, out, _ = run(capsys, ["profiles", "list", "--json"], root)
+        listed = json.loads(out)
+        assert [p["id"] for p in listed] == [profile_id]
+        assert listed[0]["name"] == "Renamed"
+
+    def test_rename_with_an_empty_name_is_refused(self, capsys, root: Path) -> None:
+        profile_id = self._seed(root)
+        code, out, err = run(capsys, ["profiles", "rename", profile_id, "   "], root)
+        assert code == ExitCode.FAIL
+        # Errors go to stderr so a script can pipe stdout as data.
+        assert "cannot rename" in err
+        assert out == ""
+
+    def test_rename_of_an_unknown_profile_fails_cleanly(self, capsys, root: Path) -> None:
+        code, _, err = run(capsys, ["profiles", "rename", "nope", "X"], root)
+        assert code != ExitCode.OK
+        assert "Traceback" not in err
+
     def test_export_and_import_round_trip(self, capsys, root: Path, tmp_path: Path) -> None:
         profile_id = self._seed(root)
         destination = tmp_path / "exported.json"

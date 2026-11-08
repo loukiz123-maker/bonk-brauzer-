@@ -39,7 +39,7 @@ from lynxdroid.core.paths import AppPaths
 from lynxdroid.display.geometry import ViewportGeometry
 from lynxdroid.display.resolution import PRESETS, validate_display
 from lynxdroid.doctor import checks as doctor_checks
-from lynxdroid.profiles.model import Profile, ProfileError
+from lynxdroid.profiles.model import Profile, ProfileError, ProfileNotFound
 from lynxdroid.profiles.store import ProfileStore
 from lynxdroid.settings import SettingsStore
 
@@ -84,6 +84,9 @@ def main(argv: Sequence[str] | None = None) -> int:
             if exc.hint:
                 print(f"  hint: {exc.hint}", file=sys.stderr)
         return int(exc.exit_code)
+    except ProfileNotFound as exc:
+        print(f"lynxdroid: {exc}", file=sys.stderr)
+        return int(ExitCode.FAIL)
     except ProfileError as exc:
         print(f"lynxdroid: invalid profile: {exc}", file=sys.stderr)
         return int(ExitCode.FAIL)
@@ -191,6 +194,11 @@ def build_parser() -> argparse.ArgumentParser:
     p_prof_import.add_argument("source")
     p_prof_import.add_argument("--yes", action="store_true")
     p_prof_import.set_defaults(func=cmd_profiles_import)
+
+    p_prof_rename = prof_sub.add_parser("rename")
+    p_prof_rename.add_argument("profile_id")
+    p_prof_rename.add_argument("new_name")
+    p_prof_rename.set_defaults(func=cmd_profiles_rename)
 
     p_prof_delete = prof_sub.add_parser("delete")
     p_prof_delete.add_argument("profile_id")
@@ -584,6 +592,18 @@ def cmd_profiles_import(args: argparse.Namespace, paths: AppPaths, store: Settin
     profile_store = ProfileStore(paths)
     profile = profile_store.import_file(Path(args.source))
     print(f"imported '{profile.name}' ({profile.id}) for {profile.target.package}")
+    return int(ExitCode.OK)
+
+
+def cmd_profiles_rename(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    profile_store = ProfileStore(paths)
+    before = profile_store.load(args.profile_id)
+    try:
+        after = profile_store.rename(args.profile_id, args.new_name)
+    except ProfileError as exc:
+        print(f"lynxdroid: cannot rename: {exc}", file=sys.stderr)
+        return int(ExitCode.FAIL)
+    print(f"renamed '{before.name}' ({after.id}) to '{after.name}'")
     return int(ExitCode.OK)
 
 

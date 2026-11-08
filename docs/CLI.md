@@ -128,6 +128,7 @@ exits 6.
 lynxdroid profiles list     [--json]
 lynxdroid profiles validate [PATH]
 lynxdroid profiles export   PROFILE_ID DESTINATION
+lynxdroid profiles rename   PROFILE_ID NEW_NAME
 lynxdroid profiles import   SOURCE [--yes]
 lynxdroid profiles delete   PROFILE_ID [--yes]
 ```
@@ -138,6 +139,10 @@ lynxdroid profiles delete   PROFILE_ID [--yes]
 * `import` refuses symlinks and validates before storing; a colliding id is
   imported as a copy rather than overwriting.
 * `delete` keeps a timestamped backup unless hard-deleted through the API.
+* `rename` changes only the display name; the id identifies the file and is
+  never reissued, so a binding in the GUI survives the rename.
+* An id that names nothing exits 1 with a sentence pointing at
+  `profiles list`, not a traceback.
 
 ## perf
 

@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 512 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 522 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 512 passed
+pytest                                    # 522 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `512 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `522 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -35,7 +35,7 @@ Expected: `512 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/display/test_geometry.py` | 44 | input transform == image transform; bars reject touches; rotations round-trip |
 | `tests/display/test_resolution.py` | 36 | zero/negative/overflow/absurd values never reach the backend |
 | `tests/input/test_engine.py` | 32 | no stranded contacts; d-pad normalisation; slot exhaustion; focus-loss release |
-| `tests/input/test_pipeline.py` | 23 | engine output actually reaches a channel; sub-microsecond work is never printed as "0 ms" |
+| `tests/input/test_pipeline.py` | 30 | engine output actually reaches a channel; sub-microsecond work is never printed as "0 ms" |
 | `tests/input/test_channels.py` | 23 | single-touch honesty; agent protocol; rejections surface |
 | `tests/profiles/test_model.py` | 47 | schema, conflicts, paths in error messages |
 | `tests/profiles/test_store.py` | 28 | atomic writes, backups, corrupt-file refusal, delete cannot escape |
@@ -44,7 +44,7 @@ Expected: `512 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/backend/test_images.py` | 13 | nothing downloads without consent; checksum mismatch deletes |
 | `tests/gui/test_editor.py` | 37 | drag/clamp/reset state machine, hit-testing, portrait↔landscape transpose |
 | `tests/gui/test_viewmodel.py` | 49 | disabled-with-reason, banner logic, WCAG contrast |
-| `tests/cli/test_cli.py` | 47 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |
+| `tests/cli/test_cli.py` | 50 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |
 | `tests/test_requirements_registry.py` | 5 | the registry cites only tests and files that exist, and its counts are real |
 | `tests/test_perf.py` | 20 | the timing tool measures real events and never reports an end-to-end figure |
 | `tests/core/*` | 39 | XDG paths, symlink safety, no shell, timeouts |

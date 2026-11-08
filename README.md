@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (512) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (522) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -103,7 +103,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 512 tests, no display needed
+pytest                               # 522 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -174,7 +174,7 @@ silently producing taps that make a game unplayable.
 | `lynxdroid start` / `stop` | session control, waits for real readiness |
 | `lynxdroid apps list/launch/install` | package management with consent gates |
 | `lynxdroid display show/set/presets` | viewport properties, previous values recorded |
-| `lynxdroid profiles list/validate/export/import/delete` | layout profiles, atomic writes |
+| `lynxdroid profiles list/validate/export/rename/import/delete` | layout profiles, atomic writes |
 | `lynxdroid image plan/prepare` | OTA images: consent, checksum honesty, never writes `/var/lib` |
 | `lynxdroid perf` | times our own pipeline in µs; states what it did **not** measure |
 | `lynxdroid gui` | PySide6 shell |

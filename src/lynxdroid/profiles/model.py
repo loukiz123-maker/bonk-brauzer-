@@ -56,6 +56,15 @@ class ProfileError(ValueError):
         super().__init__(f"{path}: {message}" if path else message)
 
 
+class ProfileNotFound(ProfileError, FileNotFoundError):
+    """The user asked for a profile id that is not stored.
+
+    Deliberately also a ``FileNotFoundError``: callers that treat a missing
+    file as "nothing here" keep working, while the CLI can tell a wrong id
+    apart from a damaged profile and print a sentence instead of a traceback.
+    """
+
+
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 

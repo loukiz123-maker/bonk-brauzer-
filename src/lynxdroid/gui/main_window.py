@@ -168,11 +168,9 @@ class MainWindow(QMainWindow):
             "This is NOT end-to-end latency: compositor, container and the "
             "Android app are not measured here."
         )
-        self._status_latency = QLabel("latency: —")
         self._statusbar.addWidget(self._status_geometry)
         self._statusbar.addPermanentWidget(self._status_channel)
         self._statusbar.addPermanentWidget(self._latency_label)
-        self._statusbar.addPermanentWidget(self._status_latency)
 
     def _build_topbar(self) -> QWidget:
         bar = QFrame()

@@ -13,7 +13,7 @@ import pytest
 
 from lynxdroid.input.channels import NullChannel
 from lynxdroid.input.events import Action, InputError, TouchEvent
-from lynxdroid.input.pipeline import InputPipeline
+from lynxdroid.input.pipeline import InputPipeline, format_latency_ms
 
 
 def events(*specs: tuple[str, int, float, float]) -> list[TouchEvent]:
@@ -233,13 +233,37 @@ class TestPerformanceIsNotOverclaimed:
         for word in ("guarantee", "instant", "zero latency"):
             assert word not in text
 
-    def test_sub_microsecond_work_is_reported_in_microseconds(self) -> None:
-        """Regression: a null sink rounded to "0.000 ms", the exact claim
-        stage 13 forbids."""
+    @pytest.mark.parametrize(
+        ("value_ms", "expected"),
+        [
+            (0.0004, "0.4 µs"),
+            (0.000_9, "0.9 µs"),
+            (0.001, "0.001 ms"),
+            (0.5, "0.500 ms"),
+            (12.3456, "12.346 ms"),
+            (0.0, "below timer resolution"),
+            (-1.0, "below timer resolution"),
+        ],
+    )
+    def test_latency_rendering(self, value_ms: float, expected: str) -> None:
+        assert format_latency_ms(value_ms) == expected
+
+    def test_sub_microsecond_work_never_rounds_to_zero(self) -> None:
+        """Regression: a null sink used to render as "0.000 ms", the exact
+        claim stage 13 forbids.
+
+        Asserting on a real measured send made this test depend on the speed
+        of the machine - it passed locally and failed on a loaded CI runner.
+        The rendering is pure, so it is pinned here directly; the pipeline is
+        separately checked for the shape of its summary line.
+        """
         pipeline = InputPipeline()
         pipeline.attach(NullChannel())
         pipeline.deliver(events(("down", 1, 0.5, 0.5)))
-        assert "µs" in pipeline.summary() or "timer resolution" in pipeline.summary()
+        text = pipeline.summary()
+        assert "0.000 ms" not in text
+        assert "µs" in text or "timer resolution" in text
+        assert text.endswith("(not end-to-end)")
 
     @pytest.mark.parametrize("field", ["produced", "latencies_ms"])
     def test_stats_are_plain_counters(self, field: str) -> None:

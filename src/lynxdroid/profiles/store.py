@@ -27,7 +27,7 @@ from lynxdroid.core.errors import DataCorrupted
 from lynxdroid.core.paths import AppPaths, safe_remove
 from lynxdroid.core.storage import read_json, write_json
 from lynxdroid.profiles.codec import profile_from_dict, profile_to_dict
-from lynxdroid.profiles.model import Profile, ProfileError
+from lynxdroid.profiles.model import Profile, ProfileError, ProfileNotFound
 
 log = logging.getLogger("lynxdroid.profiles.store")
 
@@ -99,7 +99,11 @@ class ProfileStore:
 
     def load(self, profile_id: str) -> Profile:
         path = self.path_for(profile_id)
-        size = path.stat().st_size if path.exists() else 0
+        if not path.exists():
+            # A missing file is an ordinary user mistake ("wrong id"), not a
+            # crash: the CLI catches LynxError and prints a sentence.
+            raise ProfileNotFound(f"{profile_id!r}; run 'lynxdroid profiles list' to see the ids")
+        size = path.stat().st_size
         if size > MAX_PROFILE_BYTES:
             raise DataCorrupted(
                 f"{path.name} is {size} bytes, larger than the {MAX_PROFILE_BYTES} byte limit"

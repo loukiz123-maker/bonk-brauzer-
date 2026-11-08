@@ -26,6 +26,23 @@ from lynxdroid.input.channels import Channel, select_channel
 from lynxdroid.input.events import FrameStats, TouchEvent
 
 
+def format_latency_ms(value_ms: float) -> str:
+    """Render a latency without ever claiming more precision than we have.
+
+    Sub-microsecond work must not round to ``0.000 ms``: that reads as "zero
+    latency", which is the one claim this project refuses to make. A value the
+    clock could not distinguish from zero is named as such.
+
+    Kept as a plain function because it is pure: the tests can pin every
+    branch without depending on how fast the machine happens to be.
+    """
+    if 0.0 < value_ms < 0.001:
+        return f"{value_ms * 1000:.1f} µs"
+    if value_ms <= 0.0:
+        return "below timer resolution"
+    return f"{value_ms:.3f} ms"
+
+
 @dataclass
 class InputPipeline:
     """Delivers engine output to a channel and records what happened."""
@@ -92,16 +109,8 @@ class InputPipeline:
         if median is None:
             return "input: no events sent yet"
         p95 = self.stats.p95_latency_ms() or 0.0
-
-        def render(value_ms: float) -> str:
-            if 0.0 < value_ms < 0.001:
-                return f"{value_ms * 1000:.1f} µs"
-            if value_ms <= 0.0:
-                return "below timer resolution"
-            return f"{value_ms:.3f} ms"
-
         return (
-            f"send: {render(median)} median · p95 {render(p95)} · "
+            f"send: {format_latency_ms(median)} median · p95 {format_latency_ms(p95)} · "
             f"{self.stats.produced} events (not end-to-end)"
         )
 
