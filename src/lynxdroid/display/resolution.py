@@ -108,9 +108,6 @@ class DisplayRequest:
     def aspect(self) -> float:
         return self.width / self.height
 
-    def as_async_clamp_string(self) -> str:  # pragma: no cover - convenience
-        return f"{self.width}x{self.height}@{self.dpi}"
-
 
 @dataclass(frozen=True, slots=True)
 class ValidationIssue:

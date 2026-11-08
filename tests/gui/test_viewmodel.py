@@ -221,6 +221,13 @@ class TestProfileRows:
         assert rows[0].warning
         assert rows[0].tone is vm.Tone.WARNING
 
+    def test_aspect_mismatch_says_what_to_do_about_it(self) -> None:
+        """A warning that only says "different" leaves the user stuck."""
+        profile = Profile.new("Old", Target(package="com.a.b"))
+        warning = vm.profile_rows([profile], live_buffer=(1080, 1920))[0].warning
+        assert "authored for" in warning
+        assert "re-check key positions" in warning
+
     def test_matching_buffer_has_no_warning(self) -> None:
         profile = Profile.new("Same", Target(package="com.a.b"))
         assert vm.profile_rows([profile], live_buffer=(1920, 1080))[0].warning == ""

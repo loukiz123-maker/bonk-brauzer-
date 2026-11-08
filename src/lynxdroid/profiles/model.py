@@ -252,10 +252,6 @@ class Element:
             if not self.exit_key:
                 raise ProfileError("exit_key must not be empty", path=f"{path}.exit_key")
 
-    def as_pointer_displacement(self) -> tuple[float, float]:
-        """D-pad stick offset for the centre in normalised units (0, 0)."""
-        return (0.0, 0.0)
-
 
 def _check_keys(keys: Iterable[str], path: str) -> None:
     for key in keys:

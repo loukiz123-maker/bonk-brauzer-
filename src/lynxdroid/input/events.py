@@ -50,11 +50,6 @@ class TouchEvent:
             "seq": self.seq,
         }
 
-    def with_seq(self, seq: int) -> TouchEvent:
-        return TouchEvent(
-            self.action, self.pointer, self.x, self.y, self.timestamp_ms, seq, self.source
-        )
-
 
 @dataclass(frozen=True, slots=True)
 class KeyEventIn:
@@ -99,9 +94,6 @@ class EventQueue:
     def drain(self, limit: int | None = None) -> list[TouchEvent]:
         count = len(self._items) if limit is None else min(limit, len(self._items))
         return [self._items.popleft() for _ in range(count)]
-
-    def peek_last(self) -> TouchEvent | None:
-        return self._items[-1] if self._items else None
 
     def clear(self) -> None:
         self._items.clear()

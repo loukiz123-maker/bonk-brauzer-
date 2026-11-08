@@ -487,3 +487,28 @@ class TestMouseAimMode:
         engine.set_realtime_capture(False)
         assert engine.realtime_capture is False
         assert engine.aim_active is False
+
+
+class TestPressState:
+    """Which elements report a held key, for the overlay highlight."""
+
+    def test_a_hold_reports_itself_while_the_key_is_down(self, profile, geo, clock) -> None:
+        engine = build(profile, geo, clock)
+        assert engine.press_state() == {}
+        engine.key_down("k")  # the HOLD element in the shared fixture profile
+        assert engine.press_state() == {"hold-fire": {"k"}}
+        engine.key_up("k")
+        assert engine.press_state() == {}
+
+    def test_a_tap_is_not_reported_as_held(self, profile, geo, clock) -> None:
+        """A tap is over the moment it is pressed; nothing stays held."""
+        engine = build(profile, geo, clock)
+        engine.key_down("j")
+        assert engine.press_state() == {}
+        engine.key_up("j")
+
+    def test_every_reported_id_exists_in_the_profile(self, profile, geo, clock) -> None:
+        engine = build(profile, geo, clock)
+        engine.key_down("k")
+        ids = {element.id for element in profile.elements}
+        assert set(engine.press_state()) <= ids

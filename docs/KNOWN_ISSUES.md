@@ -135,6 +135,9 @@ not trustworthy about anything else.
 | 37 | Aim mode's first contact opened with MOVE, not DOWN: `_move()` let `_contact_for()` emit the DOWN into the queue but did not return it, and the window delivers only what is returned | writing the aim-mode tests | fixed, Android now sees the touch begin |
 | 38 | The grab key of a mouse element was ignored by the engine while `key_conflicts()` counted it, so a profile could warn about a conflict that could never happen | same tests | fixed, `keys` and `exit_key` are both bound |
 | 39 | `Report.ok_for()` and `doctor.prerequisites_state()` each implemented "which checks block us", so the CLI and the GUI could disagree about whether Android may start | same audit | fixed, one implementation (`blockers_for`) |
+| 40 | The aspect-ratio warning said only "authored for a different aspect ratio"; `ReferenceResolution.relayout_hint` already had the sentence that tells the user to re-check key positions | same audit | fixed, the model's wording is shown |
+| 41 | Held elements looked idle: the overlay was lit from live contacts only, so a HOLD or a mouse grab showed nothing while it was working | tracing `press_state`, which nothing called | fixed, contacts and held keys are shown together |
+| 42 | `Element.as_pointer_displacement()` always returned `(0, 0)`, `DisplayRequest.as_async_clamp_string()`, `TouchEvent.with_seq()` and `EventQueue.peek_last()` were never called | same audit | removed rather than left as an API that promises nothing |
 
 ## Environment issues that are not bugs
 

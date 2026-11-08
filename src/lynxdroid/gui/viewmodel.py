@@ -414,7 +414,9 @@ def profile_rows(
             ref = profile.reference
             same_shape = (ref.width >= ref.height) == (live_w >= live_h)
             if abs(ref.width / max(ref.height, 1) - live_w / max(live_h, 1)) > 0.05:
-                warning = "authored for a different aspect ratio"
+                # The model owns the wording: it also tells the user what to
+                # do about it, which a bare "different aspect ratio" does not.
+                warning = ref.relayout_hint
             elif not same_shape:
                 warning = "authored for another orientation"
         conflicts = key_conflicts(profile.elements)

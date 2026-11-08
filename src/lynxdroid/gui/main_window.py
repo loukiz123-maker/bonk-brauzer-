@@ -650,7 +650,7 @@ class MainWindow(QMainWindow):
             events = self._engine.key_down(_key_name(event))
             if events:
                 self._deliver(events)
-                self._surface.set_active_elements(self._engine.active_element_ids())
+                self._refresh_active_elements()
                 event.accept()
                 return
         super().keyPressEvent(event)
@@ -660,7 +660,7 @@ class MainWindow(QMainWindow):
             events = self._engine.key_up(_key_name(event))
             if events:
                 self._deliver(events)
-                self._surface.set_active_elements(self._engine.active_element_ids())
+                self._refresh_active_elements()
                 event.accept()
                 return
         super().keyReleaseEvent(event)
@@ -865,6 +865,20 @@ class MainWindow(QMainWindow):
         self._render_elements()
         self._save_profile_button.setEnabled(self._editor.dirty)
         self._set_status(f"{element_id}: {x:.3f}, {y:.3f} (unsaved)", 4000)
+
+    def _refresh_active_elements(self) -> None:
+        """Light up every element that is doing something right now.
+
+        Two different states light an element: a contact exists (a tap, a
+        d-pad push) or a key is held (a hold, a mouse grab). Showing only the
+        first left held elements looking idle, which reads as a dropped key.
+        """
+        if self._engine is None:
+            self._surface.set_active_elements(set())
+            return
+        self._surface.set_active_elements(
+            self._engine.active_element_ids() | set(self._engine.press_state())
+        )
 
     def _on_pointer_moved(self, dx: float, dy: float) -> None:
         """Aim mode: hand relative motion to the engine, which owns the maths."""
