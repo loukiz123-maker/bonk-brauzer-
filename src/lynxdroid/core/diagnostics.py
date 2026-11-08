@@ -99,12 +99,18 @@ class Report:
     def blockers(self) -> list[Check]:
         return self.by_status(Status.ERROR)
 
+    def blockers_for(self, required: Iterable[str]) -> list[Check]:
+        """The checks among *required* that stop us (ERROR or UNKNOWN)."""
+        wanted = set(required)
+        return [
+            check
+            for check in self.checks
+            if check.id in wanted and check.status in (Status.ERROR, Status.UNKNOWN)
+        ]
+
     def ok_for(self, required: Iterable[str]) -> bool:
         """True when none of the *required* check ids is ERROR/UNKNOWN."""
-        wanted = set(required)
-        return not any(
-            c.id in wanted and c.status in (Status.ERROR, Status.UNKNOWN) for c in self.checks
-        )
+        return not self.blockers_for(required)
 
     def as_dict(self) -> dict[str, object]:
         payload: dict[str, object] = {

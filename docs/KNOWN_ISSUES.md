@@ -134,6 +134,7 @@ not trustworthy about anything else.
 | 36 | `request_stop_during_start()` changed the detail but published no snapshot, so pressing Stop while STARTING left the screen saying "starting" | tracing `set_detail`, which nothing called on this path | fixed, observers are now told |
 | 37 | Aim mode's first contact opened with MOVE, not DOWN: `_move()` let `_contact_for()` emit the DOWN into the queue but did not return it, and the window delivers only what is returned | writing the aim-mode tests | fixed, Android now sees the touch begin |
 | 38 | The grab key of a mouse element was ignored by the engine while `key_conflicts()` counted it, so a profile could warn about a conflict that could never happen | same tests | fixed, `keys` and `exit_key` are both bound |
+| 39 | `Report.ok_for()` and `doctor.prerequisites_state()` each implemented "which checks block us", so the CLI and the GUI could disagree about whether Android may start | same audit | fixed, one implementation (`blockers_for`) |
 
 ## Environment issues that are not bugs
 

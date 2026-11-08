@@ -723,11 +723,10 @@ def full_report(*, areas: tuple[str, ...] | None = None) -> Report:
 
 
 def prerequisites_state(report: Report) -> tuple[bool, list[Check]]:
-    """``(ready, blocking_checks)`` for the container path."""
-    wanted = set(CONTAINER_PREREQUISITES)
-    blockers = [
-        check
-        for check in report.checks
-        if check.id in wanted and check.status in (Status.ERROR, Status.UNKNOWN)
-    ]
+    """``(ready, blocking_checks)`` for the container path.
+
+    The predicate itself lives in Report.ok_for() - one definition of "this
+    check blocks us", so the CLI and the GUI cannot drift apart.
+    """
+    blockers = report.blockers_for(CONTAINER_PREREQUISITES)
     return (not blockers, blockers)
