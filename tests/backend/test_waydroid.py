@@ -6,6 +6,8 @@ The CLI is never executed here: a fake runner is injected so the tests assert
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from lynxdroid.backend.contract import BackendState, Readiness, Support
@@ -394,3 +396,118 @@ class TestStartStop:
             backend.start(timeout_s=0.2)
         assert backend.lifecycle.state is BackendState.ERROR
         assert "boot completion" in (backend.lifecycle.snapshot().error or "")
+
+
+# ---------------------------------------------------------------------------
+# A start is silent for up to a minute. What the window shows during that
+# minute is the difference between "working" and "hung".
+# ---------------------------------------------------------------------------
+
+
+class TestStartReportsProgress:
+    def test_the_detail_changes_while_boot_is_awaited(self, backend, monkeypatch) -> None:
+        """Observers must see progress, not one frozen message.
+
+        A cold boot takes tens of seconds. The lifecycle published "user
+        requested start" and then said nothing until RUNNING, which is
+        indistinguishable from a start that hung - so this detail was the
+        only thing the user could steer by, and nothing exercised it.
+        """
+        details: list[str] = []
+        backend.lifecycle.subscribe(lambda snap: details.append(snap.detail))
+
+        # Poll 1: session not up yet. Poll 2: up, still booting. Poll 3: booted.
+        polls = iter([{"session": "STOPPED"}, {"session": "RUNNING"}, {"session": "RUNNING"}])
+        monkeypatch.setattr(backend, "read_status", lambda: next(polls, {"session": "RUNNING"}))
+        booted = iter([False, True])
+        monkeypatch.setattr(backend, "boot_completed", lambda **_: next(booted, True))
+        monkeypatch.setattr("lynxdroid.backend.waydroid.time.sleep", lambda _s: None)
+
+        backend.start(timeout_s=5.0)
+
+        waiting = [d for d in details if "waiting" in d]
+        assert len(set(waiting)) >= 2, (
+            f"the start never announced a second phase; details seen: {details}"
+        )
+        assert any("session" in d for d in waiting), details
+        assert any("Android" in d for d in waiting), details
+
+    def test_a_finished_start_stops_saying_it_is_waiting(self, backend, monkeypatch) -> None:
+        """The detail must describe now, not a wait that is over.
+
+        ``transition`` overwrites the detail with the reason it is given, so
+        this holds today; the test exists because that is a property of a
+        different module and could change without anyone noticing.
+        """
+        monkeypatch.setattr(backend, "read_status", lambda: {"session": "RUNNING"})
+        monkeypatch.setattr(backend, "boot_completed", lambda **_: True)
+        monkeypatch.setattr("lynxdroid.backend.waydroid.time.sleep", lambda _s: None)
+        spawns: list[list[str]] = []
+        monkeypatch.setattr(
+            "lynxdroid.backend.waydroid.proc.spawn",
+            lambda argv, **kw: spawns.append(argv) or _FakeSessionProc(),
+        )
+
+        snap = backend.start(timeout_s=5.0)
+        # The session was already running, so nothing was spawned; the point
+        # here is only what the snapshot says once the start is over.
+        assert spawns == []
+
+        assert "waiting" not in snap.detail, snap.detail
+
+
+class _FakeSessionProc:
+    """Stands in for a spawned ``waydroid session start`` process."""
+
+    pid = 4242
+
+
+class TestSessionLogLocation:
+    """The session log is ours to write, so it must live where we may write.
+
+    ``/var/lib/waydroid`` is root-owned. Writing the log there made every
+    start fail with "cannot spawn waydroid session: [Errno 2] No such file or
+    directory", which reads like Waydroid is missing rather than like a
+    permission problem - and this app runs as a normal user by design.
+    """
+
+    def test_the_log_is_written_under_the_xdg_state_directory(
+        self, backend, monkeypatch, tmp_path
+    ) -> None:
+        monkeypatch.setenv("XDG_STATE_HOME", str(tmp_path))
+        captured: list[Path] = []
+
+        def fake_spawn(argv, *, stdout_path=None, **kwargs):
+            captured.append(stdout_path)
+            return _FakeSessionProc()
+
+        monkeypatch.setattr("lynxdroid.backend.waydroid.proc.spawn", fake_spawn)
+        # Stopped at first (so the session is started, which is when the log
+        # path is chosen), running afterwards. A counter rather than an
+        # iterator: snapshot() reads the status too, so the number of looks
+        # before the spawn is not part of the contract and must not matter.
+        looks = {"n": 0}
+
+        def status() -> dict[str, str]:
+            looks["n"] += 1
+            return {"session": "STOPPED" if looks["n"] <= 2 else "RUNNING"}
+
+        monkeypatch.setattr(backend, "read_status", status)
+        monkeypatch.setattr(backend, "boot_completed", lambda **_: True)
+        monkeypatch.setattr("lynxdroid.backend.waydroid.time.sleep", lambda _s: None)
+
+        backend.start(timeout_s=5.0)
+
+        assert captured, "no session log path was used"
+        log_path = captured[0]
+        assert log_path is not None
+        assert str(tmp_path) in str(log_path), (
+            f"the session log went outside XDG_STATE_HOME: {log_path}"
+        )
+        assert "/var/lib/waydroid" not in str(log_path), (
+            "the session log is written to Waydroid's root-owned directory"
+        )
+
+    def test_the_config_no_longer_offers_a_root_owned_state_dir(self) -> None:
+        """A setting that can only fail is worse than no setting."""
+        assert not hasattr(BackendConfig(), "state_dir")

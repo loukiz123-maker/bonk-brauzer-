@@ -34,7 +34,7 @@ from lynxdroid.backend.contract import (
     Support,
 )
 from lynxdroid.backend.lifecycle import Lifecycle
-from lynxdroid.core import proc
+from lynxdroid.core import paths, proc
 from lynxdroid.core.diagnostics import Report
 from lynxdroid.core.logging_setup import get
 from lynxdroid.doctor import checks as doctor_checks
@@ -56,7 +56,6 @@ class BackendConfig:
     #: Never used unless the user explicitly opts in (stage 4).
     allow_session_start: bool = True
     image_dir: Path = Path("/var/lib/waydroid/images")
-    state_dir: Path = Path("/var/lib/waydroid")
 
 
 class WaydroidBackend(AndroidBackend):
@@ -449,8 +448,14 @@ class WaydroidBackend(AndroidBackend):
         binary = self.binary()
         if binary is None:  # pragma: no cover - guarded by start()
             raise BackendError("waydroid is not installed", code="not-installed")
-        log_path = Path(self._config.state_dir) / "lynxdroid-session.log"
+        # The session log belongs to *us*, not to Waydroid: /var/lib/waydroid
+        # is root-owned, so writing there fails for the normal user this app
+        # runs as (stage 14: nothing is written outside the XDG directories).
+        # The failure was a start that could never work, reported as
+        # "cannot spawn waydroid session".
+        log_path = paths.state_home() / "waydroid-session.log"
         try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
             self._session_proc = proc.spawn([binary, "session", "start"], stdout_path=log_path)
         except OSError as exc:
             raise BackendError(
@@ -459,12 +464,23 @@ class WaydroidBackend(AndroidBackend):
         self._lifecycle.set_readiness("container", Readiness.READY)
 
     def _wait_boot(self, deadline: float) -> bool:
-        """Poll until Android reports boot completion or the deadline passes."""
+        """Poll until Android reports boot completion or the deadline passes.
+
+        Waiting is the longest silent stretch of a start: a cold boot takes
+        tens of seconds, and without a running commentary the window shows
+        "user requested start" the whole time, which is indistinguishable
+        from a hung start. Each phase names what is being waited for.
+        """
+        phase = "waiting for the Waydroid session to start"
+        self._lifecycle.set_detail(phase)
         while time.monotonic() < deadline:
             status = self.read_status()
             self._lifecycle.set_raw(status)
             if _norm(status.get("session")) == "running":
                 self._lifecycle.set_readiness("container", Readiness.READY)
+                if phase != "waiting for Android to report boot completed":
+                    phase = "waiting for Android to report boot completed"
+                    self._lifecycle.set_detail(phase)
                 if self.boot_completed(use_cache=False):
                     return True
             time.sleep(POLL_INTERVAL_S)

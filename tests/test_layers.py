@@ -11,7 +11,8 @@ from pathlib import Path
 
 import pytest
 
-SRC = Path(__file__).resolve().parents[1] / "src" / "lynxdroid"
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src" / "lynxdroid"
 
 #: layer -> layers it may import (itself is implicit)
 ALLOWED: dict[str, set[str]] = {
@@ -320,3 +321,132 @@ class TestProcessCreationHasOneHome:
                             pytest.fail(
                                 f"{path.name}:{node.lineno} passes shell={ast.dump(keyword.value)}"
                             )
+
+
+# ---------------------------------------------------------------------------
+# The process that runs as the user must not write outside the XDG directories
+# it owns. `core/paths.py` states this rule; nothing enforced it, and the
+# Waydroid session log violated it by writing into /var/lib/waydroid, which is
+# root-owned - so the write failed for every normal user.
+# ---------------------------------------------------------------------------
+
+#: Directories that belong to the system, never to this process.
+SYSTEM_DIRS = ("/var", "/usr", "/etc", "/opt", "/boot")
+
+
+class TestNothingIsWrittenToSystemDirectories:
+    def test_no_write_call_targets_a_system_path(self) -> None:
+        """Writes are found by the call that creates them.
+
+        The path usually arrives in a variable (``log_path = ...; mkdir()``),
+        so the scanner resolves the literal assignments in the same scope
+        first. A search for the string "/var/lib" would miss a path assembled
+        at runtime, which is exactly how the session log went wrong.
+        """
+        offenders: list[str] = []
+        for path in sorted((ROOT / "src" / "lynxdroid").rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            where = path.relative_to(ROOT)
+            for tree, scope in _scopes(ast.parse(source)):
+                literals = _literal_assignments(scope)
+                for node in ast.walk(tree):
+                    if not isinstance(node, ast.Call):
+                        continue
+                    name = _call_name(node.func)
+                    if name not in {"mkdir", "open", "spawn", "write_text", "write_bytes"}:
+                        continue
+                    for arg in list(node.args) + [kw.value for kw in node.keywords]:
+                        for literal in _resolve(arg, literals):
+                            if literal.startswith(SYSTEM_DIRS):
+                                offenders.append(f"{where}:{node.lineno} {name}({literal})")
+        assert offenders == [], "writes outside the XDG directories: " + "; ".join(offenders)
+
+    def test_the_scan_can_see_writes(self) -> None:
+        """An empty scan must mean "nothing wrong", not "nothing looked at"."""
+        writes = 0
+        for path in sorted((ROOT / "src" / "lynxdroid").rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            for tree, _scope in _scopes(ast.parse(source)):
+                for node in ast.walk(tree):
+                    if isinstance(node, ast.Call) and _call_name(node.func) in {
+                        "mkdir",
+                        "write_text",
+                        "write_bytes",
+                        "spawn",
+                    }:
+                        writes += 1
+        assert writes > 5, f"the scanner found only {writes} write calls"
+
+    def test_the_scanner_resolves_a_variable_holding_a_path(self) -> None:
+        """The mutation that motivated this test must be caught.
+
+        The first version of the scanner only read literals at the call site.
+        Writing the log path to a variable - which is what the real bug did -
+        slipped straight past it, so the scan was green and useless.
+        """
+        literals = _literal_assignments(ast.parse('target = Path("/var/lib/x/y.log")').body)
+        call = ast.parse('open(target, "ab")').body[0]
+        assert isinstance(call, ast.Expr) and isinstance(call.value, ast.Call)
+        resolved = _resolve(call.value.args[0], literals)
+        assert any(text.startswith("/var") for text in resolved), resolved
+
+
+def _scopes(tree: ast.Module) -> list[tuple[ast.AST, list[ast.stmt]]]:
+    """The module body and every function body, each scanned on its own."""
+    scopes: list[tuple[ast.AST, list[ast.stmt]]] = [(tree, tree.body)]
+    for node in ast.walk(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            scopes.append((node, node.body))
+    return scopes
+
+
+def _literal_assignments(body: list[ast.stmt]) -> dict[str, str]:
+    """``name = <string literal>`` for names assigned exactly one value."""
+    seen: dict[str, str] = {}
+    conflicting: set[str] = set()
+    for node in body:
+        for inner in ast.walk(node):
+            if isinstance(inner, ast.Assign) and len(inner.targets) == 1:
+                target = inner.targets[0]
+                if not isinstance(target, ast.Name):
+                    continue
+                text = _string_of(inner.value)
+                if not text:
+                    continue
+                if target.id in seen and seen[target.id] != text:
+                    conflicting.add(target.id)
+                seen[target.id] = text
+    for name in conflicting:
+        seen.pop(name, None)
+    return seen
+
+
+def _resolve(node: ast.AST, literals: dict[str, str]) -> list[str]:
+    """Every system-path literal an expression could denote."""
+    found = [text for text in [_string_of(node)] if text]
+    for inner in ast.walk(node):
+        if isinstance(inner, ast.Name) and inner.id in literals:
+            found.append(literals[inner.id])
+    return found
+
+
+def _string_of(node: ast.AST) -> str:
+    """The literal text of a string, or of ``Path("/x")``, else ``""``."""
+    if isinstance(node, ast.Constant) and isinstance(node.value, str):
+        return node.value
+    if isinstance(node, ast.Call) and node.args:
+        return _string_of(node.args[0])
+    if isinstance(node, ast.BinOp):
+        left = _string_of(node.left)
+        right = _string_of(node.right)
+        return left or right
+    return ""
+
+
+def _call_name(func: ast.expr) -> str:
+    """``x.mkdir`` -> "mkdir", ``mkdir`` -> "mkdir", anything else -> ""."""
+    if isinstance(func, ast.Attribute):
+        return func.attr
+    if isinstance(func, ast.Name):
+        return func.id
+    return ""
