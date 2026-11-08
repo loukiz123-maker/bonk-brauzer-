@@ -97,7 +97,7 @@ Two details are deliberate:
   reported separately so they cannot be added up into an end-to-end claim;
 * every output - text and JSON - carries the scope note.
 
-Tests: `tests/test_perf.py` (17 tests), including one that asserts the JSON
+Tests: `tests/test_perf.py` (20 tests), including one that asserts the JSON
 contains no aggregate latency field.
 
 ## What the target machine must measure instead
