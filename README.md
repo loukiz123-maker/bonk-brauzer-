@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (708) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (712) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -114,7 +114,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 708 tests, no display needed
+pytest                               # 712 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -130,7 +130,7 @@ lynxdroid start                  # 4. bring Android up (waits for real boot comp
 lynxdroid show                   #    optionally: open the Android window
 lynxdroid apps list              # 5. installed packages
 lynxdroid display presets        # 6. viewport options
-lynxdroid display set 1280 720 240 --yes
+lynxdroid display set 1280 712 240 --yes
 lynxdroid gui                    # 7. the window
 ```
 

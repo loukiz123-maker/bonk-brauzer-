@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 708 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 712 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 708 passed
+pytest                                    # 712 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `708 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `712 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -46,7 +46,7 @@ Expected: `708 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/input/test_agent_protocol.py` | 11 | the Java agent and the Python client agree on protocol version, frame limit, op names |
 | `tests/profiles/test_compat.py` | 11 | the stored-format gate: a newer schema is refused, old files migrate, timestamps keep whole seconds |
 | `tests/test_settings_are_read.py` | 9 | every setting has a reader, a row in SETTINGS.md, and that row names the right module |
-| `tests/test_packaging.py` | 15 | desktop entry, icon, and the installer script run in a throwaway home |
+| `tests/test_packaging.py` | 17 | desktop entry, icon, and the installer script run in a throwaway home |
 | `tests/test_stage_criteria.py` | 11 | stage criteria: every HERE one cites a test that exists, every CI one a real job |
 | `tests/test_install_script.py` | 7 | the install script parses, never runs sudo, and matches what the README documents |
 | `tests/core/test_diagnostics.py` | 9 | the one definition of "this check blocks the container path" |
@@ -58,7 +58,7 @@ Expected: `708 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/test_perf.py` | 20 | the timing tool measures real events and never reports an end-to-end figure |
 | `tests/core/*` | 39 | XDG paths, symlink safety, no shell, timeouts |
 | `tests/doctor/test_gpu_info.py` | 7 | GPU detection against described sysfs trees: one card, two cards, a virtual card, no node |
-| `tests/test_layers.py` | 28 | architecture: layer imports, no `shell=True`, doctor never writes, no stray `print`, docstrings, Qt-free core |
+| `tests/test_layers.py` | 30 | architecture: layer imports, no `shell=True`, doctor never writes, no stray `print`, docstrings, Qt-free core |
 
 ### Failure injection already covered
 
@@ -118,7 +118,7 @@ lynxdroid stop && lynxdroid start && lynxdroid stop && lynxdroid start
 lynxdroid apps list        # expects a list, not an error
 
 # 4. viewport change and geometry agreement
-lynxdroid display set 1280 720 240 --yes
+lynxdroid display set 1280 712 240 --yes
 lynxdroid display show     # persist.waydroid.* match, wm size reported
 # then: measure that a click at the drawn position lands at that position
 

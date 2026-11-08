@@ -570,3 +570,64 @@ def _spec_exists(module_name: str) -> bool:
         return importlib.util.find_spec(module_name) is not None
     except (AttributeError, ImportError, ValueError):
         return False
+
+
+# ---------------------------------------------------------------------------
+# The package claims `requires-python = ">=3.10"`.
+#
+# On 3.10, `import tomllib` raises at module level, so a single such import in
+# a test file loses every test in that file - and only the 3.10 CI job notices.
+# A push is a slow way to find that out, so the syntax and the few post-3.10
+# stdlib names are checked here, in the interpreter that is running.
+# ---------------------------------------------------------------------------
+
+#: Names that exist only from 3.11, which this project supports 3.10 for.
+POST_310_NAMES = {"tomllib", "tasks", "TaskGroup", "StrEnum", "Self", "override"}
+
+
+class TestPython310Compatibility:
+    def test_every_file_parses_as_python_310(self) -> None:
+        import warnings
+
+        offenders: list[str] = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if any(part in {".venv", "__pycache__", "build", "dist"} for part in path.parts):
+                continue
+            try:
+                with warnings.catch_warnings():
+                    warnings.simplefilter("ignore")
+                    ast.parse(
+                        path.read_text(encoding="utf-8"),
+                        filename=str(path),
+                        feature_version=(3, 10),
+                    )
+            except SyntaxError as exc:
+                offenders.append(f"{path.relative_to(ROOT)}:{exc.lineno}: {exc.msg}")
+        assert offenders == [], "syntax newer than 3.10: " + "; ".join(offenders)
+
+    def test_no_module_level_import_of_a_post_310_stdlib_name(self) -> None:
+        """`tomllib` broke `pytest (3.10)` at collection, not at a test.
+
+        Importing it inside a function, with a fallback, is fine - that is the
+        fix in `tests/test_packaging.py`. Importing it at module level is not.
+        """
+        offenders: list[str] = []
+        for path in sorted(ROOT.rglob("*.py")):
+            if any(part in {".venv", "__pycache__", "build", "dist"} for part in path.parts):
+                continue
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+            for node in tree.body:  # module level only
+                if isinstance(node, ast.Import):
+                    for alias in node.names:
+                        if alias.name.split(".")[0] in POST_310_NAMES:
+                            offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+                elif (
+                    isinstance(node, ast.ImportFrom)
+                    and node.module
+                    and node.module.split(".")[0] in POST_310_NAMES
+                ):
+                    offenders.append(f"{path.relative_to(ROOT)}:{node.lineno}")
+        assert offenders == [], (
+            "these module-level imports fail on Python 3.10 and take the whole "
+            "file with them: " + ", ".join(offenders)
+        )

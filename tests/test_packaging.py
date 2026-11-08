@@ -16,12 +16,65 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import tomllib
-
 ROOT = Path(__file__).resolve().parents[1]
 PACKAGING = ROOT / "packaging"
 ENTRY = PACKAGING / "lynxdroid.desktop"
 ICON = PACKAGING / "lynxdroid.svg"
+
+
+def _pyproject() -> dict:
+    """Parse pyproject.toml without requiring Python 3.11.
+
+    `tomllib` is stdlib only from 3.11 and this project supports 3.10, where
+    importing it fails the whole module at collection - which is exactly what
+    CI caught on `pytest (3.10)`. The repository has no runtime dependencies
+    by design, so this reads the three things the tests need with a small
+    parser instead of adding one.
+    """
+    try:  # Python 3.11+
+        import tomllib
+    except ModuleNotFoundError:  # pragma: no cover - exercised on 3.10 only
+        return _pyproject_minimal()
+    return tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+
+
+def _pyproject_minimal() -> dict:
+    """The subset of pyproject.toml these tests ask for, read by hand.
+
+    Deliberately not a TOML parser: it understands `[a.b]` sections and
+    `key = value` lines, which is all this repository's pyproject uses below
+    the `[project]` table.
+    """
+    import re as _re
+
+    text = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    result: dict = {}
+    section: dict = result
+    for raw in text.splitlines():
+        line = raw.split("#", 1)[0].rstrip()
+        if not line.strip():
+            continue
+        header = _re.match(r"^\[([^\]]+)\]$", line.strip())
+        if header:
+            node = result
+            for part in header.group(1).split("."):
+                node = node.setdefault(part, {})
+            section = node
+            continue
+        pair = _re.match(r"^([A-Za-z0-9_-]+)\s*=\s*(.+)$", line.strip())
+        if not pair:
+            continue
+        key, value = pair.group(1), pair.group(2).strip()
+        if value.startswith("{") and value.endswith("}"):
+            inner: dict = {}
+            for item in _re.findall(r"([A-Za-z0-9_-]+)\s*=\s*\"([^\"]*)\"", value):
+                inner[item[0]] = item[1]
+            section[key] = inner
+        elif value.startswith("[") and value.endswith("]"):
+            section[key] = _re.findall(r"\"([^\"]*)\"", value)
+        else:
+            section[key] = value.strip('"')
+    return result
 
 
 def _entry() -> dict[str, str]:
@@ -51,7 +104,7 @@ class TestDesktopEntry:
         """The command must be one this package installs, not a guess."""
         fields = _entry()
         command = fields["Exec"].split()[0]
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        project = _pyproject()
         scripts = project["project"].get("scripts", {})
         gui_scripts = project["project"].get("gui-scripts", {})
         installed = set(scripts) | set(gui_scripts)
@@ -59,7 +112,7 @@ class TestDesktopEntry:
 
     def test_it_uses_a_gui_script_not_a_terminal_one(self) -> None:
         """Launched from a menu there is no terminal to print to."""
-        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        project = _pyproject()
         command = _entry()["Exec"].split()[0]
         assert command in project["project"].get("gui-scripts", {}), (
             f"{command} is not a gui-script; a console script would need Terminal=true"
@@ -211,3 +264,37 @@ def shutil_which(name: str) -> str | None:
 
 
 _ = sys  # imported for the skip message helpers above
+
+
+class TestPyprojectFallback:
+    """The 3.10 fallback is code that only runs on 3.10.
+
+    CI caught the original failure (`import tomllib` at module level) and CI
+    would catch a regression, but only after a push. Comparing the two
+    readers here means the fallback is exercised on every interpreter.
+    """
+
+    def test_the_fallback_agrees_with_the_real_parser(self) -> None:
+        full = _pyproject()
+        minimal = _pyproject_minimal()
+        assert full["project"].get("scripts") == minimal["project"].get("scripts")
+        assert full["project"].get("gui-scripts") == minimal["project"].get("gui-scripts")
+
+    def test_the_module_imports_without_tomllib(self, monkeypatch) -> None:
+        """The original bug: the import was at module level, so 3.10 died at
+        collection and every test in the file was lost, not just the one."""
+        import builtins
+        import importlib
+
+        real_import = builtins.__import__
+
+        def guard(name, *args, **kwargs):
+            if name == "tomllib":
+                raise ModuleNotFoundError("No module named 'tomllib'")
+            return real_import(name, *args, **kwargs)
+
+        monkeypatch.setattr(builtins, "__import__", guard)
+        module = importlib.reload(importlib.import_module("test_packaging"))
+        assert module._pyproject()["project"]["scripts"]
+        monkeypatch.undo()
+        importlib.reload(module)
