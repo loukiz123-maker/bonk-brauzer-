@@ -100,3 +100,48 @@ class TestTotals:
     def test_roadmap_total(self, counts: dict[str, int]) -> None:
         declared = int(re.search(r"(\d+) automated tests", ROADMAP.read_text("utf-8")).group(1))
         assert declared == counts["(total)"]
+
+
+# ---------------------------------------------------------------------------
+# The CLI documentation must list exactly the commands that exist.
+# ---------------------------------------------------------------------------
+
+CLI_DOC = ROOT / "docs" / "CLI.md"
+
+
+def _documented_commands() -> set[str]:
+    text = CLI_DOC.read_text(encoding="utf-8")
+    return set(re.findall(r"^lynxdroid ([a-z]+)", text, re.MULTILINE))
+
+
+def _real_commands() -> set[str]:
+    """Read the subcommand list out of the parser itself, not out of --help."""
+    import sys
+
+    sys.path.insert(0, str(ROOT / "src"))
+    from lynxdroid.cli.main import build_parser
+
+    parser = build_parser()
+    for action in parser._actions:
+        if action.dest == "command":
+            return set(action.choices)  # type: ignore[union-attr]
+    raise AssertionError("the parser has no 'command' argument")
+
+
+class TestCliDocumentation:
+    def test_every_documented_command_exists(self) -> None:
+        missing = _documented_commands() - _real_commands()
+        assert missing == set(), "docs/CLI.md documents commands that do not exist: " + ", ".join(
+            sorted(missing)
+        )
+
+    def test_every_command_is_documented(self) -> None:
+        undocumented = _real_commands() - _documented_commands()
+        assert undocumented == set(), "these commands are not in docs/CLI.md: " + ", ".join(
+            sorted(undocumented)
+        )
+
+    def test_the_scan_finds_commands_on_both_sides(self) -> None:
+        """Both sets being empty would satisfy the two tests above."""
+        assert len(_real_commands()) >= 8
+        assert len(_documented_commands()) >= 8
