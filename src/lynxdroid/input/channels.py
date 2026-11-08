@@ -269,13 +269,33 @@ class AgentChannel(Channel):
         except ValueError as exc:
             sock.close()
             raise InputError(f"touch agent handshake failed: {exc}", code="agent-protocol") from exc
-        if reply.get("protocol") != AGENT_PROTOCOL:
+        # The agent answers a refusal two ways: a bare ok=false (what the
+        # shipped Java does) or a protocol field naming its version. Both mean
+        # the same thing, and reporting "speaks protocol None" for the first
+        # would tell the user nothing.
+        if reply.get("ok") is False or reply.get("protocol") != AGENT_PROTOCOL:
             sock.close()
-            raise InputError(
-                f"touch agent speaks protocol {reply.get('protocol')}, "
-                f"this build speaks {AGENT_PROTOCOL}",
-                code="agent-protocol-mismatch",
-            )
+            # Three shapes exist in the wild and they must not be conflated:
+            #   {protocol: N}            the agent's own version is N
+            #   {ok: false, supported:N} the agent wants N and refused ours
+            #   {ok: false}              the agent declined without detail
+            # Printing "speaks protocol 1, this build speaks 1" (both sides
+            # naming themselves) is what happened when these were merged.
+            theirs = reply.get("protocol")
+            supported = reply.get("supported")
+            reason = reply.get("error")
+            if theirs is not None and theirs != AGENT_PROTOCOL:
+                detail = f"speaks protocol {theirs}"
+            elif supported is not None:
+                detail = f"wants protocol {supported}, this build sends {AGENT_PROTOCOL}"
+            elif reason:
+                detail = f"refused the handshake ({reason})"
+            else:
+                detail = "refused the handshake"
+            message = f"touch agent {detail}"
+            if "this build" not in detail:
+                message += f"; this build speaks {AGENT_PROTOCOL}"
+            raise InputError(message, code="agent-protocol-mismatch")
         if not reply.get("max_touches"):
             sock.close()
             raise InputError("touch agent reported no touch slots", code="agent-no-slots")

@@ -118,9 +118,12 @@ class TestAdbShellChannel:
 class _FakeAgent:
     """Minimal in-process implementation of the agent protocol."""
 
-    def __init__(self, path: Path, *, protocol: int = 1, max_touches: int = 10) -> None:
+    def __init__(
+        self, path: Path, *, protocol: int = 1, max_touches: int = 10, terse_refusal: bool = False
+    ) -> None:
         self.path = path
         self.protocol = protocol
+        self.terse_refusal = terse_refusal
         self.max_touches = max_touches
         self.received: list[dict] = []
         self.fail = False
@@ -156,12 +159,29 @@ class _FakeAgent:
                 payload = json.loads(body.decode())
                 self.received.append(payload)
                 if payload.get("op") == "hello":
-                    reply = {
-                        "protocol": self.protocol,
-                        "max_touches": self.max_touches,
-                        "relative_motion": True,
-                        "latency_supported": True,
-                    }
+                    if payload.get("protocol") != self.protocol and self.terse_refusal:
+                        # What an agent that predates the fix answers.
+                        reply = {"ok": False, "error": "protocol mismatch"}
+                    elif payload.get("protocol") != self.protocol:
+                        # Mirrors TouchAgentService.java. "protocol" is the
+                        # agent's OWN version - the client reads it to say
+                        # "the agent speaks 0" - and "supported" is what it
+                        # would accept. Sending the client's version back
+                        # produced the message "speaks protocol 1, this build
+                        # speaks 1", which is how this was caught.
+                        reply = {
+                            "ok": False,
+                            "error": "protocol mismatch",
+                            "protocol": self.protocol,
+                            "supported": self.protocol,
+                        }
+                    else:
+                        reply = {
+                            "protocol": self.protocol,
+                            "max_touches": self.max_touches,
+                            "relative_motion": True,
+                            "latency_supported": True,
+                        }
                 elif payload.get("op") == "bye":
                     return
                 elif self.fail:
@@ -219,6 +239,40 @@ class TestAgentChannel:
                 channel.connect()
         finally:
             fake.close()
+
+    def test_the_mismatch_message_names_both_versions(self, tmp_path: Path) -> None:
+        """The user must be able to tell which side to update."""
+        fake = _FakeAgent(tmp_path / "old.sock", protocol=0)
+        try:
+            channel = AgentChannel(str(fake.path))
+            with pytest.raises(InputError) as caught:
+                channel.connect()
+        finally:
+            fake.close()
+        message = caught.value.message
+        # The agent's own version is what must be reported. The bug this
+        # guards against used the *client's* version in both halves and read
+        # "speaks protocol 1, this build speaks 1": true, useless, and
+        # indistinguishable from the agent being fine.
+        assert "speaks protocol 0" in message, message
+        assert message.count("this build speaks") == 1, message
+        assert "speaks protocol 1, this build speaks 1" not in message, message
+
+    def test_a_bare_refusal_is_reported_as_a_refusal(self, tmp_path: Path) -> None:
+        """The shipped Java agent answers ok=false with no protocol field.
+
+        Reading that as "speaks protocol None" told the user nothing; this
+        pins the wording for the answer the agent actually gives.
+        """
+        fake = _FakeAgent(tmp_path / "terse.sock", protocol=0, terse_refusal=True)
+        try:
+            channel = AgentChannel(str(fake.path))
+            with pytest.raises(InputError) as caught:
+                channel.connect()
+        finally:
+            fake.close()
+        assert caught.value.message.startswith("touch agent refused the handshake")
+        assert "None" not in caught.value.message
 
     def test_agent_rejection_is_an_error(self, agent_socket) -> None:
         agent_socket.fail = True

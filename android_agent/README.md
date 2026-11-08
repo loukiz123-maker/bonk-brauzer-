@@ -44,6 +44,18 @@ Agent → client:
 {"ok": false, "error": "no permission to inject events"}
 ```
 
+A refused handshake answers with the agent's own version, never an echo of the
+client's:
+
+```json
+{"ok": false, "error": "protocol mismatch", "protocol": 1, "supported": 2}
+```
+
+`protocol` is what the agent speaks; `supported` is what the client asked for.
+The desktop client reads the pair to print which side to update. An agent that
+predates this answers `{"ok": false}` with nothing else, and the client reports
+that as a refusal rather than as a version it could not read.
+
 Actions are `down`, `move`, `up`, `cancel`. `pointer` is `1..10` and must be
 unique while the contact is open. The agent keeps a pointer-id bitmap and
 rejects a `down` on an id that is already down, so a desktop bug cannot leave a

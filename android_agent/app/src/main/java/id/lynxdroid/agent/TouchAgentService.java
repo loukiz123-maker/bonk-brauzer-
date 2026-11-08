@@ -136,8 +136,18 @@ public class TouchAgentService extends Service {
             JSONObject reply = new JSONObject();
             try {
                 if ("hello".equals(op)) {
-                    if (request.optInt("protocol", -1) != PROTOCOL) {
-                        reply.put("ok", false).put("error", "protocol mismatch");
+                    int theirs = request.optInt("protocol", -1);
+                    if (theirs != PROTOCOL) {
+                        // "protocol" is this agent's own version and
+                        // "supported" is what the client asked for, matching
+                        // the field meanings the desktop client reads. Note
+                        // "supported" is the CLIENT's value here on purpose:
+                        // both sides use it to say "the number the other end
+                        // sent", which is what makes the mismatch readable.
+                        reply.put("ok", false)
+                             .put("error", "protocol mismatch")
+                             .put("protocol", PROTOCOL)
+                             .put("supported", theirs);
                     } else {
                         reply.put("protocol", PROTOCOL)
                              .put("max_touches", MAX_TOUCHES)

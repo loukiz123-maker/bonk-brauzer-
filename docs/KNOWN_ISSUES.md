@@ -144,6 +144,8 @@ not trustworthy about anything else.
 | 46 | The schema-version claim ("profile JSON written by Python must load in C++ unchanged") was the stated gate for the C++ port and had no test; `migrate()` was never executed by anything | writing the gate tests | covered by `tests/profiles/test_compat.py`, which also pinned the deliberate whole-second timestamp precision |
 | 47 | The test counts in README/TESTING/ROADMAP had drifted again (four per-file rows and the total were stale); I had been fixing them by hand, which is why | writing a check for them | fixed, `tests/test_doc_counts.py` compares every quoted number with a real collection pass |
 | 48 | SECURITY.md claims `core/proc.py` is the only place a subprocess is created and that nothing sets `shell=True`, and nothing verified either | reading §3 against the tests | fixed, two static checks in `tests/test_layers.py` |
+| 49 | The Java touch agent and the Python client implement one protocol with nothing comparing them; the agent answered a refused handshake with `{ok: false}` while the client only expected a `protocol` field | writing the cross-implementation test | fixed on both sides, and `tests/input/test_agent_protocol.py` now holds them together |
+| 50 | A protocol refusal could print "the agent speaks protocol 1, this build speaks 1" - both halves naming us, which reads as if nothing were wrong, because the agent echoed the client's version back | the test above, which failed on exactly that string | fixed: each side reports its own version |
 
 ## Environment issues that are not bugs
 
