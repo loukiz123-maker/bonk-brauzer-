@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 480 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 481 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -16,13 +16,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 480 passed
+pytest                                    # 481 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `480 passed in ~3 s`, no display, no network, no Waydroid.
+Expected: `481 passed in ~3 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -35,7 +35,7 @@ Expected: `480 passed in ~3 s`, no display, no network, no Waydroid.
 | `tests/profiles/test_model.py` | 47 | schema, conflicts, paths in error messages |
 | `tests/profiles/test_store.py` | 28 | atomic writes, backups, corrupt-file refusal, delete cannot escape |
 | `tests/backend/test_lifecycle.py` | 20 | illegal transitions, observers, stop-during-start |
-| `tests/backend/test_waydroid.py` | 28 | status parsing, consent gates, real boot check |
+| `tests/backend/test_waydroid.py` | 29 | status parsing, consent gates, real boot check |
 | `tests/backend/test_images.py` | 13 | nothing downloads without consent; checksum mismatch deletes |
 | `tests/gui/test_editor.py` | 37 | drag/clamp/reset state machine, hit-testing, portrait↔landscape transpose |
 | `tests/gui/test_viewmodel.py` | 49 | disabled-with-reason, banner logic, WCAG contrast |

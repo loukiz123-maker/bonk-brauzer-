@@ -187,6 +187,25 @@ class TestStatusParsing:
 
 
 class TestCapabilities:
+    def test_max_touches_matches_the_channel_not_the_dream(self) -> None:
+        """The CLI path carries one contact at a time; saying 10 would be a lie.
+
+        Multitouch needs the Android-side agent; while the backend can only
+        use `waydroid shell`, the honest number is 1 (and 0 when the binary is
+        not installed at all, because then there is no path whatsoever).
+        """
+        missing = WaydroidBackend(BackendConfig(binary=None))
+        missing.binary = lambda: None  # type: ignore[method-assign]
+        assert missing.capabilities().max_touches == 0
+
+        installed = WaydroidBackend(BackendConfig(binary="/usr/bin/waydroid"))
+        installed.binary = lambda: "/usr/bin/waydroid"  # type: ignore[method-assign]
+        caps = installed.capabilities()
+        assert caps.max_touches == 1
+        # ... and the multitouch feature itself must not be advertised as ready.
+        multi = caps.feature("multitouch")
+        assert multi is None or multi.support is not Support.SUPPORTED
+
     def test_reports_unsupported_features_honestly(self, backend: WaydroidBackend) -> None:
         caps = backend.capabilities()
         assert caps.status_of("split-apk") == Support.UNSUPPORTED.value
