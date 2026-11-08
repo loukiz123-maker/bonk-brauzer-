@@ -76,7 +76,17 @@ LIGHT = Palette(
 PALETTES = {"dark": DARK, "light": LIGHT}
 
 
-def palette_for(name: str) -> Palette:
+def palette_for(name: str, *, system_is_dark: bool = True) -> Palette:
+    """Resolve a theme name to a palette.
+
+    ``"system"`` is a real choice in ``settings.Settings``, so it has to mean
+    something: it follows the desktop's colour scheme. The caller passes what
+    Qt reported (``system_is_dark``); without that information the dark
+    palette is used, which is this project's default rather than a guess about
+    the user's desktop.
+    """
+    if name == "system":
+        return DARK if system_is_dark else LIGHT
     return PALETTES.get(name, DARK)
 
 

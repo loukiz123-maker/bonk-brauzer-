@@ -144,7 +144,9 @@ class MainWindow(QMainWindow):
         splitter.setChildrenCollapsible(False)
         splitter.setHandleWidth(8)
 
-        self._surface = GameSurface(palette_for(self._settings.theme))
+        self._surface = GameSurface(
+            palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
+        )
         self._surface.element_selected.connect(self._on_element_selected)
         self._surface.element_moved.connect(self._on_element_moved)
         self._surface.pointer_moved_by.connect(self._on_pointer_moved)
@@ -434,10 +436,26 @@ class MainWindow(QMainWindow):
         return _scrolled(page)
 
     # ==================================================================
+    def _system_is_dark(self) -> bool:
+        """Whether the desktop is in dark mode, as Qt reports it.
+
+        ``QGuiApplication.styleHints().colorScheme()`` is the only portable
+        answer; when Qt cannot say, the project's own default (dark) is used
+        rather than guessing from an environment variable.
+        """
+        try:
+            from PySide6.QtGui import QGuiApplication
+        except ImportError:  # pragma: no cover - Qt is optional
+            return True
+        hints = QGuiApplication.styleHints()
+        scheme = hints.colorScheme()
+        return scheme != Qt.ColorScheme.Light
+
     # theme / settings
+
     # ==================================================================
     def _apply_theme(self) -> None:
-        palette = palette_for(self._settings.theme)
+        palette = palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
         self.setStyleSheet(stylesheet(palette))
         self._surface.set_palette(palette)
 
@@ -467,7 +485,7 @@ class MainWindow(QMainWindow):
             settings=self._settings,
             channel=self._channel_caps,
         )
-        palette = palette_for(self._settings.theme)
+        palette = palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
         for banner in entries[:4]:
             widget = _BannerWidget(banner, palette)
             self._banner_area.addWidget(widget)
@@ -520,7 +538,7 @@ class MainWindow(QMainWindow):
 
     def _render_layers(self, panel: vm.StatusPanel) -> None:
         self._layer_list.clear()
-        palette = palette_for(self._settings.theme)
+        palette = palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
         for label, _readiness, text in panel.layers:
             item = QListWidgetItem(f"{label:<18} {text}")
             colour = {
@@ -1092,7 +1110,7 @@ class MainWindow(QMainWindow):
     def _on_report(self, report: Report) -> None:
         self._report = report
         summary, tone = vm.report_summary(report)
-        palette = palette_for(self._settings.theme)
+        palette = palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
         self._doctor_summary.setText(summary)
         self._doctor_summary.setStyleSheet(f"color: {palette.tone_colour(tone)};")
         self._render_doctor()
@@ -1107,7 +1125,7 @@ class MainWindow(QMainWindow):
         if self._report is None:
             return
         self._doctor_list.clear()
-        palette = palette_for(self._settings.theme)
+        palette = palette_for(self._settings.theme, system_is_dark=self._system_is_dark())
         rows = vm.check_rows(self._report, include_ok=not self._hide_ok_checkbox.isChecked())
         for row in rows:
             text = f"{row.symbol} {row.title}\n    {row.detail}"

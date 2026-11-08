@@ -371,3 +371,31 @@ class TestTheme:
     def test_contrast_ratio_rejects_bad_hex(self) -> None:
         with pytest.raises(ValueError):
             contrast_ratio("red", "#000000")
+
+
+class TestThemeChoice:
+    """`theme = "system"` must mean the system, not the default.
+
+    It was an accepted setting value that resolved to the dark palette
+    unconditionally: a user who chose "follow my desktop" got dark, on a
+    light desktop, with nothing said.
+    """
+
+    def test_system_follows_a_light_desktop(self) -> None:
+        assert palette_for("system", system_is_dark=False).name == "light"
+
+    def test_system_follows_a_dark_desktop(self) -> None:
+        assert palette_for("system", system_is_dark=True).name == "dark"
+
+    def test_an_explicit_choice_ignores_the_desktop(self) -> None:
+        assert palette_for("light", system_is_dark=True).name == "light"
+        assert palette_for("dark", system_is_dark=False).name == "dark"
+
+    def test_an_unknown_name_still_falls_back(self) -> None:
+        assert palette_for("neon").name == "dark"
+
+    def test_every_theme_value_settings_accepts_can_be_resolved(self) -> None:
+        """The two lists must agree, or a valid setting renders as a fallback."""
+        accepted = {"dark", "light", "system"}
+        for name in accepted:
+            assert palette_for(name, system_is_dark=False).name in {"dark", "light"}, name

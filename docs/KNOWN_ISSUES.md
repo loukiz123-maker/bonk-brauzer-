@@ -153,6 +153,7 @@ not trustworthy about anything else.
 | 55 | `core/storage.py` carried two wrappers, `patched_file` and `atomic_update`, with no caller in `src/` or `tests/` - 20 unexercised lines that looked like part of the save path | the coverage report, then a grep for both names | removed; `read_json`/`write_json` are the two primitives the app uses |
 | 56 | `version.py` told the reader that bumping a schema needs "a migration entry in `profiles.migration`" - a module that does not exist; the migration lives in `profiles.codec.migrate` | a test that imports every module a docstring names | fixed, and `tests/test_layers.py` now resolves those names by import |
 | 57 | Ctrl-C during an image download left the `.part` file on disk: only `URLError` and `OSError` cleaned up, and `KeyboardInterrupt` is neither, so a later run found a partial image with no way to tell it from a crashed transfer | stopping a download the way a user does | fixed: any `BaseException` removes the partial file and re-raises; the interrupt still reaches the caller |
+| 58 | `theme = "system"` was an accepted setting that resolved to the dark palette unconditionally: choosing "follow my desktop" gave dark on a light desktop, silently | asking what each accepted value actually resolves to | fixed: `palette_for` takes the desktop's colour scheme and `main_window` reads it from `QGuiApplication.styleHints()`; the palette itself still needs a display to be seen, so the rendered result stays `ЗАБЛОКИРОВАН` |
 
 ## Environment issues that are not bugs
 
