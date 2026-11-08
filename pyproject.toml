@@ -29,6 +29,9 @@ dependencies = []
 
 [project.optional-dependencies]
 gui = ["PySide6>=6.6"]
+# Floors are the versions this repository was verified with; CI installs
+# these or newer. Ruff's rule set changes between releases, so the floor is
+# deliberately close to tested, and pyproject pins the rule selection.
 dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
 
 [project.scripts]

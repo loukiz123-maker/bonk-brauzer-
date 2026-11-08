@@ -8,6 +8,10 @@ Three tiers, never confused with each other.
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
+CI pins `ruff==0.17.4` on purpose: Ruff adds rules between minor releases,
+so an unpinned upgrade can turn a green branch red with no code change. The
+floor in `pyproject.toml` and the exact version in CI are recorded together.
+
 A green tier 1 is **not** evidence for tier 3. The specification says so
 explicitly and this project follows it.
 
