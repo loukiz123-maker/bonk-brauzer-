@@ -40,9 +40,31 @@ class TestNullChannel:
         with pytest.raises(InputError, match="backend gone"):
             channel.send([])
 
-    def test_capabilities_are_test_only(self) -> None:
+    def test_reports_itself_unavailable(self) -> None:
+        """Regression: it used to claim 10 simultaneous touches.
+
+        Nothing this channel sends reaches Android, so claiming availability
+        enabled the key overlay on a machine where no touch could be
+        delivered. The capability must describe reality.
+        """
         caps = NullChannel().capabilities()
-        assert "test" in caps.reason or "dry-run" in caps.reason
+        assert caps.available is False
+        assert caps.simultaneous_touches == 1
+        assert caps.relative_motion is False
+        assert not caps.real_multitouch
+        assert "never reach Android" in caps.reason
+
+    def test_an_unavailable_channel_never_enables_the_overlay(self) -> None:
+        from lynxdroid.backend.contract import BackendCapabilities
+        from lynxdroid.gui.viewmodel import overlay_control
+        from lynxdroid.profiles.model import Profile, Target
+
+        caps = NullChannel().capabilities()
+        backend = BackendCapabilities(name="test", version="0", max_touches=1)
+        profile = Profile.new("P", Target(package="org.example.game"))
+        state = overlay_control(backend, caps, profile)
+        assert not state.enabled
+        assert "never reach Android" in state.reason
 
 
 class TestAdbShellChannel:

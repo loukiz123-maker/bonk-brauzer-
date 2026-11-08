@@ -99,7 +99,14 @@ class Channel(abc.ABC):
 
 @dataclass
 class NullChannel(Channel):
-    """Accepts everything and records it. Used by tests and dry runs."""
+    """Accepts everything and records it. Used by tests and dry runs.
+
+    It reports ``available=False`` on purpose. The events it "sends" go into a
+    list and reach no Android process, so claiming availability would enable
+    the key overlay on a machine where nothing can ever be delivered. Tests
+    that need to observe delivery read ``sent``; they do not need the
+    capability to lie.
+    """
 
     sent: list[TouchEvent] = field(default_factory=list)
     fail_with: str | None = None
@@ -107,20 +114,19 @@ class NullChannel(Channel):
     def capabilities(self) -> Capabilities:
         return Capabilities(
             kind=ChannelKind.NULL,
-            available=True,
-            simultaneous_touches=MAX_NULL_TOUCHES,
-            relative_motion=True,
+            available=False,
+            simultaneous_touches=1,
+            relative_motion=False,
             latency_measured=False,
-            reason="no real backend attached (test/dry-run sink)",
+            reason=(
+                "no touch channel is attached: events are recorded locally and never reach Android"
+            ),
         )
 
     def send(self, events: list[TouchEvent]) -> None:
         if self.fail_with:
             raise InputError(self.fail_with, code="channel-failure")
         self.sent.extend(events)
-
-
-MAX_NULL_TOUCHES = 10
 
 
 # --------------------------------------------------------------------------

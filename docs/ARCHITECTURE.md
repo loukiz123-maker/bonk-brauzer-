@@ -151,6 +151,13 @@ and — most importantly — release-on-focus-loss. The channel owns the *transp
 and reports what it can actually carry. Splitting them is what allows the
 overlay to be tested to death without a device.
 
+A channel's `capabilities()` is a factual claim, and it is the claim the UI
+acts on. `NullChannel` - the test sink whose events reach nothing - therefore
+reports `available=False` and one contact. An earlier version reported ten
+simultaneous touches, which made `overlay_control()` enable the key overlay on
+a machine where no touch could possibly be delivered; `tests/input/test_channels.py`
+now pins the honest answer and fails if the capability starts flattering itself.
+
 **Why a unix socket and not a port:** stage 14 forbids debug ports reachable
 from outside. `AF_UNIX` in `$XDG_RUNTIME_DIR` with `0600` still means other
 processes *of the same user* can connect - the documentation says so instead of
