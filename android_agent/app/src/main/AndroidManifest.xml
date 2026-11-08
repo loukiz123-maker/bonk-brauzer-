@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  LynxDroid touch agent.
+
+  This manifest is intentionally minimal: one background service, no
+  activities, no network permission. INJECT_EVENTS is a signature-level
+  permission, so it is declared with tools:ignore and will simply not be
+  granted on an unmodified user build. That is the honest state of path A and
+  the reason the desktop side refuses to advertise multitouch without it.
+-->
+<manifest xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
+    package="id.lynxdroid.agent">
+
+    <uses-permission
+        android:name="android.permission.INJECT_EVENTS"
+        tools:ignore="ProtectedPermissions" />
+
+    <application
+        android:label="LynxDroid touch agent"
+        android:allowBackup="false"
+        android:hasFragileUserData="false">
+
+        <service
+            android:name=".TouchAgentService"
+            android:exported="false"
+            android:directBootAware="true" />
+    </application>
+</manifest>

@@ -9,60 +9,182 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+env:
+  PYTHONDONTWRITEBYTECODE: "1"
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+
 jobs:
-  # Canonical build: GNU make, two compilers, both build modes.
-  make:
-    name: make (${{ matrix.cxx }}, ${{ matrix.mode }})
+  # The suite is stdlib-only by design: no PySide6, no display, no Waydroid.
+  # Green here proves the logic, never the target machine (see docs/TESTING.md).
+  tests:
+    name: pytest (${{ matrix.python }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
       matrix:
-        cxx: [g++, clang++]
-        mode: [debug, release]
+        python: ["3.10", "3.11", "3.12"]
     steps:
       - uses: actions/checkout@v4
-      - name: Install toolchain
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends clang
-      - name: Build
-        run: make -j"$(nproc)" CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
-      - name: Unit tests
-        run: make test CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
-      - name: Self test
-        run: make selftest CXX=${{ matrix.cxx }} MODE=${{ matrix.mode }}
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: python -m pip install -e '.[dev]'
+      - name: Unit and contract tests
+        run: python -m pytest -q
+      - name: Architecture rules
+        run: python -m pytest tests/test_layers.py -q
 
-  # Memory safety: the engine is a parser-heavy codebase, so leaks/UB are
-  # checked on every push rather than "later".
-  sanitizers:
-    name: sanitizers (asan+ubsan)
+  lint:
+    name: ruff
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Test under ASan + UBSan
-        run: make SAN=address,undefined MODE=debug test
-      - name: Self test under ASan + UBSan
-        run: make SAN=address,undefined MODE=debug selftest
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install ruff
+      - name: Lint
+        run: ruff check src tests
+      - name: Format check
+        run: ruff format --check src tests
 
-  # Warnings are errors in CI; the local default keeps them visible but not fatal.
-  warnings:
-    name: warnings-as-errors
+  types:
+    name: mypy --strict
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make WARN="-Wall -Wextra -Wpedantic -Wshadow -Werror" -j"$(nproc)"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e '.[dev]'
+      - name: Type check the library (Qt is optional and stubbed)
+        run: mypy --strict src/lynxdroid --exclude 'gui/(main_window|overlay|app|workers)\.py'
 
-  cmake:
-    name: cmake + ctest
+  # Proves the GUI dependency really is optional: the package must import and
+  # run its CLI on a machine where PySide6 cannot be installed.
+  no-qt:
+    name: works without PySide6
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
-      - run: cmake --build build-cmake -j"$(nproc)"
-      - run: ctest --test-dir build-cmake --output-on-failure
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Import everything except the Qt widgets
+        run: |
+          python - <<'PY'
+          import importlib
+          for name in ("lynxdroid", "lynxdroid.cli.main", "lynxdroid.doctor.platform",
+                       "lynxdroid.display.geometry", "lynxdroid.input.engine",
+                       "lynxdroid.profiles.store", "lynxdroid.backend.waydroid",
+                       "lynxdroid.gui.viewmodel"):
+              importlib.import_module(name)
+          print("all non-Qt modules import")
+          PY
+      # This runner has no Waydroid, no binder and no GPU, so doctor exits
+      # non-zero by design. The assertion is about the report, not the verdict.
+      - name: CLI smoke test
+        run: |
+          lynxdroid version --json
+          set +e
+          lynxdroid doctor --json > doctor.json
+          set -e
+          python -c "import json;d=json.load(open('doctor.json'));print(len(d['checks']),'checks, schema',d['schema'])"
+          python -c "
+          import json;d=json.load(open('doctor.json'))
+          assert d['checks'], 'empty report'
+          "
+      - name: GUI must fail with a clear message, not a traceback
+        run: |
+          set +e
+          timeout 30 lynxdroid gui --offscreen > gui.log 2>&1
+          code=$?
+          echo "exit=$code"; cat gui.log
+          # 3 = missing dependency. Anything else means the error handling
+          # regressed, and a traceback would show up in gui.log.
+          [ "$code" = "3" ] || { echo "expected exit 3 (missing dependency), got $code"; exit 1; }
+          grep -qi "PySide6" gui.log || exit 1
+          if grep -q "Traceback" gui.log; then echo "traceback leaked to the user"; exit 1; fi
 
-  # The module table lives in code; the docs copy must not drift.
+  build:
+    name: wheel build and install
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install build
+      - run: python -m build --wheel
+      - name: Install the wheel in a clean venv
+        run: |
+          python -m venv /tmp/venv
+          /tmp/venv/bin/pip install dist/*.whl
+          /tmp/venv/bin/lynxdroid version
+      # A runner has no Waydroid and no binder, so doctor legitimately exits 1
+      # (failure) or 6 (blocked) here. What we assert is that the report is
+      # well-formed and that the exit code is one of the documented values.
+      - name: The doctor report from the wheel is valid JSON
+        run: |
+          set +e
+          /tmp/venv/bin/lynxdroid doctor --json > /tmp/report.json
+          code=$?
+          set -e
+          echo "doctor exit=$code"
+          case "$code" in
+            0|1|3|5|6) ;;
+            *) echo "undocumented exit code $code"; exit 1 ;;
+          esac
+          python - <<'PY'
+          import json
+          report = json.load(open("/tmp/report.json"))
+          assert report["schema"] == 1, report.get("schema")
+          assert report["checks"], "report has no checks"
+          statuses = {c["status"] for c in report["checks"]}
+          assert statuses <= {"OK", "WARNING", "ERROR", "UNKNOWN"}, statuses
+          print(f"valid report: {len(report['checks'])} checks, statuses {sorted(statuses)}")
+          PY
+
+  # Docs and code must not drift apart: the requirement registry references
+  # real test ids, and the schema versions must match what the code emits.
   docs:
-    name: generated docs in sync
+    name: docs match code
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - run: make docs-check
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: python -m pip install -e .
+      - name: Schema versions match the documentation
+        run: |
+          python - <<'PY'
+          from lynxdroid.version import SCHEMA_VERSIONS, __version__
+          text = open("docs/ARCHITECTURE.md", encoding="utf-8").read()
+          assert '"schema": 1' in text, "profile example must show schema 1"
+          assert SCHEMA_VERSIONS["profile"] == 1
+          readme = open("README.md", encoding="utf-8").read()
+          assert __version__ in readme or "0.1.0" in readme
+          print("docs consistent with", __version__, SCHEMA_VERSIONS)
+          PY
+      - name: README and CLI agree on the test count
+        run: |
+          python - <<'PY'
+          import re, subprocess, sys
+          out = subprocess.run([sys.executable, "-m", "pytest", "-q", "--collect-only"],
+                               capture_output=True, text=True).stdout
+          collected = int(re.search(r"(\d+) tests? collected", out).group(1))
+          readme = open("README.md", encoding="utf-8").read()
+          documented = int(re.search(r"Unit tests \((\d+)\)", readme).group(1))
+          assert collected == documented, (
+              f"README says {documented} tests, pytest collects {collected}")
+          print(f"{collected} tests, README agrees")
+          PY
+      - name: Every documented command exists
+        run: |
+          for cmd in doctor status start stop apps display profiles image gui version; do
+            lynxdroid --help | grep -q "$cmd" || { echo "missing: $cmd"; exit 1; }
+          done
+          echo "all documented commands present"
