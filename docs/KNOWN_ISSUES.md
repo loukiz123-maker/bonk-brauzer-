@@ -101,10 +101,29 @@ high-speed camera or a photodiode and is not claimed.
 | 12 | `doctor` on a non-Arch distro reports `pkgmanager=apt` and warns | none, it is honest | ignore on Arch/CachyOS |
 | 13 | `Poller` keeps polling every 2 s while stopped | negligible CPU, one small subprocess every 2 s | none needed |
 | 14 | Overlay is drawn over the reference plate, not over live Android video | keys appear on our plate while Android shows in its own window | use the plate for positioning, verify in-game |
-| 15 | No profile editor drag-and-drop yet — elements are created by clicking the plate | slower authoring | edit JSON, or wait for stage 9 completion |
+| 15 | Drag-and-drop, selection and reset exist in `gui/editor.py` (37 tests) but have **never been exercised by a real mouse** — no Qt here | a drag may still behave differently under a real compositor | first thing to try on the laptop |
 | 16 | D-pad analog mode (`analog_dpad`) has no GUI control | only keyboard-driven d-pad in the UI | API only |
 | 17 | Mouse aim mode is implemented in the engine but not exposed in the UI | unusable for now | API only |
+| 19 | The layout editor writes nothing until you press Save, and asks before discarding | one extra click | intended, but untested with a human |
+| 20 | `realtime_capture` is never called: the window never requests pointer capture | aim mode cannot work even if exposed | needs stage 8 work on the laptop |
 | 18 | `FakeBackend` is selectable with `--backend fake` in the GUI | could confuse a first-time user | it is labelled "test backend" everywhere |
+
+## Defects found during development, kept on the record
+
+These were real bugs in this repository, found by running it rather than
+reading it. They are listed because a project that hides its own history is
+not trustworthy about anything else.
+
+| # | Defect | How it was caught | Status |
+|---|---|---|---|
+| 21 | The GUI computed touches and never sent them: `select_channel()` was never called | reading the event path while wiring the editor | fixed (`input/pipeline.py`, 23 tests) |
+| 22 | `NullChannel` (a sink) claimed 10 simultaneous touches, enabling the overlay with no delivery | manual check of `capabilities()` | fixed, regression test added |
+| 23 | `version --json` said `gui_available: true` while Qt's libraries could not load | running the CLI in this container | fixed, probe now load-tests |
+| 24 | `doctor` told users to run `lynxdroid image prepare`, a command that did not exist | following the doctor's own advice | fixed, plus a test that resolves every hint against the parser |
+| 25 | `InputError` derived from `RuntimeError`, so delivery failures printed tracebacks | writing the pipeline tests | fixed, now a `LynxError` |
+| 26 | The latency readout printed `0.000 ms` for sub-microsecond work | a test asserting "0 ms" never appears | fixed, reported in µs |
+| 27 | `find_for_package` / `version_mismatch` were dead code | audit for unreferenced functions | fixed, `apps launch` reports the binding |
+| 28 | `hit_test` lived in a Qt module: untested and, in fact, never called | same audit | fixed (`gui/viewport.py`) |
 
 ## Environment issues that are not bugs
 
