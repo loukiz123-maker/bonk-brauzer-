@@ -33,8 +33,26 @@ jobs:
       # --tb=short and -ra keep the failure readable in the run summary; the
       # junit file is uploaded so a failure on one interpreter can be compared
       # with the others without re-running everything.
+      - name: Environment
+        run: |
+          python -VV
+          python -m pip list
       - name: Unit and contract tests
-        run: python -m pytest -q --tb=short -ra --junitxml=junit-${{ matrix.python }}.xml
+        run: python -m pytest -q --tb=long -ra --junitxml=junit-${{ matrix.python }}.xml -p no:cacheprovider
+      # An annotation is visible without downloading anything; that is the
+      # difference between a diagnosable failure and a red X.
+      - name: Summarise failures
+        if: failure()
+        run: |
+          python - <<'PY'
+          import glob, xml.etree.ElementTree as ET
+          for path in glob.glob("junit-*.xml"):
+              for case in ET.parse(path).getroot().iter("testcase"):
+                  for bad in case.findall("failure") + case.findall("error"):
+                      msg = (bad.get("message") or "").splitlines()[:1]
+                      print(f"::error title={case.get('classname')}.{case.get('name')}"
+                            f"::{msg[0] if msg else 'failed'}")
+          PY
       - name: Upload the test report
         if: always()
         uses: actions/upload-artifact@v4
