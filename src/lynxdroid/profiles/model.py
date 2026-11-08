@@ -103,14 +103,17 @@ class Target:
             raise ProfileError("instance must be a short lower-case id", path="target.instance")
 
     def matches(self, package: str, version: str | None = None) -> bool:
-        if package != self.package:
-            return False
-        if self.package_version and version and self.package_version != version:
-            # Version differs: the profile still applies, but the UI must warn.
-            return True
-        return True
+        """Whether this target can be applied to that package.
+
+        A different app version does **not** disqualify the profile: the user
+        keeps their layout and is warned instead (see ``version_mismatch``).
+        Only the package identity decides applicability, which is why this is
+        a plain comparison and not a scoring function.
+        """
+        return package == self.package
 
     def version_mismatch(self, version: str | None) -> bool:
+        """True when the app was updated since the profile was authored."""
         return bool(self.package_version and version and self.package_version != version)
 
 

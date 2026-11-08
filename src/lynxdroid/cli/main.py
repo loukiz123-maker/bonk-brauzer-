@@ -398,10 +398,54 @@ def cmd_apps_list(args: argparse.Namespace, paths: AppPaths, store: SettingsStor
 
 
 def cmd_apps_launch(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Launch a package and report which layout applies to it.
+
+    Stage 9 binds a profile to the application id and version and requires a
+    warning when the version changes. Without this the binding lived in the
+    model and never reached the user.
+    """
     backend = _backend(args, store)
     backend.launch_app(args.package)
     print(f"launched {args.package}")
+
+    profile_store = ProfileStore(paths)
+    matches = profile_store.find_for_package(args.package)
+    if not matches:
+        print(
+            "  no layout profile is bound to this package yet; create one in the "
+            "GUI or import one with 'lynxdroid profiles import'"
+        )
+        return int(ExitCode.OK)
+
+    installed = _installed_version(backend, args.package)
+    print(f"  {len(matches)} layout profile(s) bound to this package:")
+    for profile in matches:
+        print(f"    {profile.name}  ({profile.id})")
+        if profile.target.version_mismatch(installed):
+            print(
+                "      warning: written for version "
+                f"{profile.target.package_version}, installed is "
+                f"{installed or 'unknown'} - key positions may no longer match "
+                "the game's controls"
+            )
     return int(ExitCode.OK)
+
+
+def _installed_version(backend: AndroidBackend, package: str) -> str | None:
+    """Best-effort version from the real app list, or ``None``.
+
+    A missing answer must never be reported as a version mismatch, so the
+    caller treats ``None`` as "do not warn". ``list_apps`` is the only source
+    the backend contract offers, and it may not carry a version at all.
+    """
+    try:
+        for entry in backend.list_apps():
+            if entry.get("package") == package:
+                version = entry.get("version")
+                return str(version) if version else None
+    except (LynxError, NotImplementedError):
+        return None
+    return None
 
 
 def cmd_apps_install(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

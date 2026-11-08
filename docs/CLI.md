@@ -93,6 +93,11 @@ lynxdroid apps launch PACKAGE
 lynxdroid apps install PATH.apk [--yes]
 ```
 
+`launch` also reports which layout profile is bound to that package, and warns
+when the profile was written for a different app version. If the version cannot
+be read, nothing is claimed - an unknown version is never reported as a
+mismatch.
+
 `install` prints the file name, size, SHA-256 and the source directory, then
 refuses without `--yes`. It rejects symlinks, non-`.apk` files, empty files,
 files over 4 GiB and anything without the `PK\x03\x04` magic. Split APK

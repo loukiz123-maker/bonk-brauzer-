@@ -427,3 +427,93 @@ class TestHelpIsTruthful:
             "version",
         ):
             assert command in known, f"{command} is documented but not implemented"
+
+
+class TestLaunchReportsTheLayout:
+    """Stage 9: a profile is bound to the app id and version, and the user is
+    told about both. Before this the binding existed in the model but no code
+    path ever looked it up, so `find_for_package` and `version_mismatch` were
+    dead code.
+    """
+
+    @staticmethod
+    def _save_profile(root: Path, package: str, version: str | None) -> None:
+        from lynxdroid.core.paths import AppPaths
+        from lynxdroid.profiles.model import Element, ElementType, Profile, Target
+        from lynxdroid.profiles.store import ProfileStore
+
+        paths = AppPaths.resolve(root)
+        paths.ensure()
+        store = ProfileStore(paths)
+        store.save(
+            Profile.new(
+                "Shooter",
+                Target(package=package, package_version=version),
+                elements=(
+                    Element(
+                        id="tap", type=ElementType.TAP, label="Fire", x=0.5, y=0.5, keys=("j",)
+                    ),
+                ),
+            )
+        )
+
+    @staticmethod
+    def _use_fake_backend(root: Path) -> None:
+        from lynxdroid.core.paths import AppPaths
+        from lynxdroid.settings import SettingsStore
+
+        paths = AppPaths.resolve(root)
+        paths.ensure()
+        SettingsStore(paths).update(backend="fake")
+
+    def test_says_when_no_profile_is_bound(self, capsys, root: Path) -> None:
+        self._use_fake_backend(root)
+        code, out, _ = run(capsys, ["apps", "launch", "com.example.none"], root)
+        assert code == ExitCode.OK
+        assert "no layout profile is bound" in out
+
+    def test_names_the_bound_profile(self, capsys, root: Path) -> None:
+        self._save_profile(root, "com.example.game", "1.0.0")
+        self._use_fake_backend(root)
+        code, out, _ = run(capsys, ["apps", "launch", "com.example.game"], root)
+        assert code == ExitCode.OK
+        assert "1 layout profile(s) bound" in out
+        assert "Shooter" in out, f"the profile name lost its case: {out!r}"
+
+    def test_warns_when_the_app_version_changed(self, capsys, root: Path, monkeypatch) -> None:
+        """The warning must fire on a real mismatch, not on every launch."""
+        from lynxdroid.backend.waydroid import FakeBackend
+
+        self._save_profile(root, "com.example.game", "1.0.0")
+        self._use_fake_backend(root)
+        monkeypatch.setattr(
+            FakeBackend,
+            "list_apps",
+            lambda self: [{"package": "com.example.game", "version": "2.0.0"}],
+        )
+        code, out, _ = run(capsys, ["apps", "launch", "com.example.game"], root)
+        assert code == ExitCode.OK
+        assert "warning" in out.lower()
+        assert "1.0.0" in out and "2.0.0" in out
+
+    def test_no_warning_when_versions_agree(self, capsys, root: Path, monkeypatch) -> None:
+        from lynxdroid.backend.waydroid import FakeBackend
+
+        self._save_profile(root, "com.example.game", "1.0.0")
+        self._use_fake_backend(root)
+        monkeypatch.setattr(
+            FakeBackend,
+            "list_apps",
+            lambda self: [{"package": "com.example.game", "version": "1.0.0"}],
+        )
+        code, out, _ = run(capsys, ["apps", "launch", "com.example.game"], root)
+        assert code == ExitCode.OK
+        assert "warning" not in out.lower()
+
+    def test_no_warning_when_the_version_is_unknown(self, capsys, root: Path) -> None:
+        """An unreadable version must never be reported as a mismatch."""
+        self._save_profile(root, "com.example.game", "1.0.0")
+        self._use_fake_backend(root)  # FakeBackend lists no apps
+        code, out, _ = run(capsys, ["apps", "launch", "com.example.game"], root)
+        assert code == ExitCode.OK
+        assert "warning" not in out.lower()
