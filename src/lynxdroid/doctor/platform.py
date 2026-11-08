@@ -400,12 +400,19 @@ def _pci_vendor_name(vendor_id: str) -> str:
     }.get(vendor_id.lower(), vendor_id)
 
 
-def gpu_info() -> tuple[GpuInfo | None, str]:
+def gpu_info(
+    drm_root: Path | None = None, module_root: Path | None = None
+) -> tuple[GpuInfo | None, str]:
     """Identify the active DRM device and its kernel driver.
 
     Returns ``(info, reason_when_missing)``. Only /sys is read.
+
+    The two roots are parameters so a test can describe a machine (one GPU,
+    two GPUs, a missing subsystem) without the hardware being present. They
+    default to the real sysfs.
     """
-    drm_root = Path("/sys/class/drm")
+    drm_root = Path(drm_root) if drm_root is not None else Path("/sys/class/drm")
+    module_root = Path(module_root) if module_root is not None else Path("/sys/module")
     if not drm_root.is_dir():
         return None, "/sys/class/drm is absent (no DRM subsystem)"
     cards = sorted(p for p in drm_root.iterdir() if re.fullmatch(r"card\d+", p.name))
@@ -426,16 +433,29 @@ def gpu_info() -> tuple[GpuInfo | None, str]:
             driver_name = line.split("=", 1)[1].strip()
     if not drm_driver:
         drm_driver = f"{driver_name} (uevent unavailable)"
-    if Path(f"/sys/module/{driver_name}/version").exists():
-        driver_version = read_first_line(f"/sys/module/{driver_name}/version") or ""
+    version_file = module_root / driver_name / "version"
+    if version_file.exists():
+        driver_version = read_first_line(version_file) or ""
 
     node_name: str | None = None
     usable = False
+    # Link a render node to the card by PCI address. The previous test was
+    # ``link.endswith("0")`` - the card index, not part of a PCI address -
+    # which picks an arbitrary node on a machine with two GPUs and made the
+    # report blame the wrong driver.
+    card_address = _pci_address(device_dir)
     for node in render_nodes:
         link = read_symlink(node / "device")
-        if link and link.endswith(Path(chosen.name).name.lstrip("card") or ""):
+        if card_address and link and _pci_address_from_link(link) == card_address:
             node_name = f"/dev/dri/{node.name}"
             break
+    if node_name is None:
+        for node in render_nodes:
+            link = read_symlink(node / "device")
+            if link and _pci_address_from_link(link) is None:
+                # A virtual driver (virtio, vkms) exposes no PCI address.
+                node_name = f"/dev/dri/{node.name}"
+                break
     if node_name is None and len(render_nodes) == 1:
         # Fall back to the single render node: with one GPU there is no
         # ambiguity about which device backs the card.
@@ -458,6 +478,26 @@ def gpu_info() -> tuple[GpuInfo | None, str]:
         source=str(device_dir),
     )
     return info, ""
+
+
+_PCI_ADDRESS_RE = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9a-fA-F]")
+
+
+def _pci_address(device_dir: Path) -> str | None:
+    """The PCI address of a card's ``device`` directory, e.g. ``0000:00:02.0``.
+
+    The directory name itself is the address; the symlink target is used as
+    a fallback for older layouts where it is not.
+    """
+    if _PCI_ADDRESS_RE.fullmatch(device_dir.name):
+        return device_dir.name.lower()
+    return _pci_address_from_link(read_symlink(device_dir) or "")
+
+
+def _pci_address_from_link(link: str) -> str | None:
+    """The first PCI address inside a sysfs symlink target."""
+    match = _PCI_ADDRESS_RE.search(link)
+    return match.group(0).lower() if match else None
 
 
 def _gpu_model_name(device_dir: Path) -> str | None:
