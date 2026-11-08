@@ -4,7 +4,9 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "lynxdroid"
-version = "0.1.0"
+# Single source of truth: the version lives in src/lynxdroid/version.py and is
+# read from there, so the package and the metadata cannot drift apart.
+dynamic = ["version"]
 description = "LynxDroid - own control layer for an Android container (Waydroid) on the host Linux kernel"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -42,6 +44,9 @@ lynxdroid-gui = "lynxdroid.gui.app:main"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "lynxdroid.version.__version__" }
 
 [tool.setuptools.packages.find]
 where = ["src"]

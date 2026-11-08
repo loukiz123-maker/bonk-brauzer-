@@ -152,6 +152,27 @@ def profile_keys(profile: Profile) -> tuple[str, ...]:
     return tuple(seen)
 
 
+def _connect_with_retry(
+    client: socket.socket, path: Path, *, attempts: int = 100, delay_s: float = 0.01
+) -> None:
+    """Connect to the timing server, tolerating the bind/listen window.
+
+    ``bind()`` creates the socket file before the server calls ``listen()``, so
+    a client that reacts to "the file exists" can race it and be refused.
+    This was a real intermittent failure: roughly one run in ten raised
+    ``ConnectionRefusedError`` from what looked like a timing test.
+    """
+    last: OSError | None = None
+    for _ in range(attempts):
+        try:
+            client.connect(str(path))
+            return
+        except (ConnectionRefusedError, FileNotFoundError) as exc:
+            last = exc
+            time.sleep(delay_s)
+    raise LynxError(f"cannot connect to the timing socket: {last}")
+
+
 def measure(
     *,
     profile: Profile,
@@ -188,7 +209,7 @@ def measure(
 
         client = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         try:
-            client.connect(str(sock_path))
+            _connect_with_retry(client, sock_path)
             events_per_sample = 0
             for index in range(iterations):
                 key = keys[index % len(keys)]

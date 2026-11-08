@@ -30,8 +30,18 @@ jobs:
           python-version: ${{ matrix.python }}
       - name: Install
         run: python -m pip install -e '.[dev]'
+      # --tb=short and -ra keep the failure readable in the run summary; the
+      # junit file is uploaded so a failure on one interpreter can be compared
+      # with the others without re-running everything.
       - name: Unit and contract tests
-        run: python -m pytest -q
+        run: python -m pytest -q --tb=short -ra --junitxml=junit-${{ matrix.python }}.xml
+      - name: Upload the test report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: junit-${{ matrix.python }}
+          path: junit-${{ matrix.python }}.xml
+          retention-days: 7
       - name: Architecture rules
         run: python -m pytest tests/test_layers.py -q
 
@@ -165,16 +175,36 @@ jobs:
         with:
           python-version: "3.12"
       - run: python -m pip install -e .
+      # The version is single-sourced. pyproject and the package must agree,
+      # and the CLI must report the same value it advertises.
+      - name: Version is single-sourced
+        run: |
+          python - <<'PY'
+          import json, subprocess, sys
+          from lynxdroid.version import SCHEMA_VERSIONS, __version__
+
+          pyproject = open("pyproject.toml", encoding="utf-8").read()
+          assert f'version = "{__version__}"' in pyproject, (
+              f"pyproject and lynxdroid.version disagree about {__version__}")
+
+          reported = json.loads(
+              subprocess.run([sys.executable, "-m", "lynxdroid", "version", "--json"],
+                             capture_output=True, text=True, check=True).stdout)
+          assert reported["version"] == __version__, reported
+          assert reported["schemas"] == dict(SCHEMA_VERSIONS), reported["schemas"]
+          print("version", __version__, "consistent; schemas", dict(SCHEMA_VERSIONS))
+          PY
+
       - name: Schema versions match the documentation
         run: |
           python - <<'PY'
-          from lynxdroid.version import SCHEMA_VERSIONS, __version__
-          text = open("docs/ARCHITECTURE.md", encoding="utf-8").read()
-          assert '"schema": 1' in text, "profile example must show schema 1"
-          assert SCHEMA_VERSIONS["profile"] == 1
-          readme = open("README.md", encoding="utf-8").read()
-          assert __version__ in readme or "0.1.0" in readme
-          print("docs consistent with", __version__, SCHEMA_VERSIONS)
+          from lynxdroid.version import SCHEMA_VERSIONS
+          arch = open("docs/ARCHITECTURE.md", encoding="utf-8").read()
+          assert '"schema": 1' in arch, "the profile example must show schema 1"
+          for name, value in SCHEMA_VERSIONS.items():
+              assert str(value) in arch or name not in arch, (
+                  f"docs mention {name} but not its schema version {value}")
+          print("documented schema versions agree with the code:", dict(SCHEMA_VERSIONS))
           PY
       - name: README and CLI agree on the test count
         run: |

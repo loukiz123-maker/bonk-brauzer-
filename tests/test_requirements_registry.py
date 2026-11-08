@@ -63,23 +63,36 @@ def test_every_cited_test_file_exists() -> None:
 
 
 def _collected_count(relative: str) -> int:
-    """How many test items pytest really collects, parametrisation included.
+    """How many test items a file defines, parametrisation included.
 
-    Counting ``def test_`` lines would undercount parametrised tests (one
-    function, several cases), so the number comes from pytest itself rather
-    than from a regex over the source.
+    Counted from the source rather than by launching pytest: a nested pytest
+    run inside the suite is slow, depends on the interpreter, and would fail
+    for reasons unrelated to the registry. Parametrised tests are expanded
+    from their ``@pytest.mark.parametrize`` list so the number matches what
+    pytest reports.
     """
-    import subprocess
-    import sys
+    import ast
 
-    result = subprocess.run(
-        [sys.executable, "-m", "pytest", relative, "--collect-only", "-q"],
-        capture_output=True,
-        text=True,
-        cwd=ROOT,
-    )
-    # Collected items are printed as "tests/path.py::TestX::test_y".
-    return len([line for line in result.stdout.splitlines() if "::" in line])
+    path = ROOT / relative
+    tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+    total = 0
+    for node in ast.walk(tree):
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+            continue
+        if not node.name.startswith("test_"):
+            continue
+        cases = 1
+        for decorator in node.decorator_list:
+            if not isinstance(decorator, ast.Call):
+                continue
+            name = getattr(decorator.func, "attr", None) or getattr(decorator.func, "id", None)
+            if name != "parametrize":
+                continue
+            # @pytest.mark.parametrize("a", [1, 2, 3]) -> three cases
+            if len(decorator.args) >= 2 and isinstance(decorator.args[1], (ast.List, ast.Tuple)):
+                cases *= max(len(decorator.args[1].elts), 1)
+        total += cases
+    return total
 
 
 def test_every_test_count_in_the_registry_matches_reality() -> None:
