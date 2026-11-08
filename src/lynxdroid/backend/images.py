@@ -221,6 +221,13 @@ def download(
     except OSError as exc:
         partial.unlink(missing_ok=True)
         raise LynxError(f"cannot write {partial}: {exc.strerror}") from exc
+    except BaseException:
+        # Ctrl-C during a multi-gigabyte download is the normal way to stop
+        # one. Without this the .part file is left behind, and a later run
+        # that finds it has no way to tell a deliberate interruption from a
+        # crashed download - so it must not be kept.
+        partial.unlink(missing_ok=True)
+        raise
 
     digest = sha.hexdigest()
     verified = False

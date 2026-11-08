@@ -139,3 +139,56 @@ class TestInstructions:
         assert "LynxDroid does not do this for you" in text
         assert "not" in text.lower() and "verified" in text.lower()
         assert result.sha256 in text
+
+
+class TestInterruptedDownload:
+    """Ctrl-C is how a user stops a multi-gigabyte download.
+
+    The partial file used to survive, and nothing tells a later run whether
+    it holds a deliberate interruption or a crashed transfer. A leftover
+    .part also blocks the destination name it belongs to.
+    """
+
+    def test_a_keyboard_interrupt_leaves_no_partial_file(self, tmp_path: Path, monkeypatch) -> None:
+        class Interrupted:
+            def __init__(self) -> None:
+                self._sent = False
+
+            def read(self, _size: int) -> bytes:
+                if not self._sent:
+                    self._sent = True
+                    return b"x" * 1024
+                raise KeyboardInterrupt
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Interrupted())
+        target = tmp_path / "system.img"
+
+        with pytest.raises(KeyboardInterrupt):
+            images.download("https://example.invalid/x", target, consent=True)
+
+        leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith("system.img")]
+        assert leftovers == [], f"an interrupted download left files behind: {leftovers}"
+
+    def test_the_interrupt_still_propagates(self, tmp_path: Path, monkeypatch) -> None:
+        """Swallowing it would look like a successful download to the caller."""
+
+        class Interrupted:
+            def read(self, _size: int) -> bytes:
+                raise KeyboardInterrupt
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                return False
+
+        monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Interrupted())
+        with pytest.raises(KeyboardInterrupt):
+            images.download("https://example.invalid/x", tmp_path / "x.img", consent=True)
+        assert not (tmp_path / "x.img").exists()
