@@ -364,6 +364,35 @@ class Profile:
             raise ProfileError(f"no element with id '{element.id}'", path="elements")
         return self.with_elements(element if e.id == element.id else e for e in self.elements)
 
+    def move_element(self, element_id: str, x: float, y: float, *, clamp: bool = True) -> Profile:
+        """Move an element (drag-and-drop), keeping it inside the screen.
+
+        The d-pad is the awkward case: its *centre* must stay far enough from
+        the edges for the whole stick to be reachable, otherwise a drag would
+        produce a profile that cannot be saved. With ``clamp`` the position is
+        pulled back to the nearest legal point instead of failing mid-gesture;
+        without it, an out-of-range drag raises.
+        """
+        existing = self.element(element_id)
+        if existing is None:
+            raise ProfileError(f"no element with id '{element_id}'", path="elements")
+
+        min_x, max_x, min_y, max_y = 0.0, 1.0, 0.0, 1.0
+        if existing.type is ElementType.DPAD:
+            radius = existing.dpad_radius
+            min_x, max_x = radius, 1.0 - radius
+            min_y, max_y = radius, 1.0 - radius
+            if min_x > max_x or min_y > max_y:  # pragma: no cover - radius is capped at 0.5
+                raise ProfileError("the stick is too large for this orientation", path="elements")
+
+        if clamp:
+            x = min(max(x, min_x), max_x)
+            y = min(max(y, min_y), max_y)
+
+        moved = replace(existing, x=x, y=y)
+        moved.validate()
+        return self.replace_element(moved)
+
     def checksum(self) -> str:
         """Stable digest of the semantic content (for change detection/UX)."""
         payload = "|".join(

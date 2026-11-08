@@ -50,6 +50,7 @@ from lynxdroid.core.paths import AppPaths
 from lynxdroid.display.geometry import Rotation, ViewportGeometry
 from lynxdroid.display.resolution import PRESETS
 from lynxdroid.gui import viewmodel as vm
+from lynxdroid.gui.editor import LayoutEditor
 from lynxdroid.gui.overlay import GameSurface
 from lynxdroid.gui.theme import Palette, palette_for, stylesheet
 from lynxdroid.gui.workers import Poller, TaskRunner
@@ -85,6 +86,7 @@ class MainWindow(QMainWindow):
         self._caps: BackendCapabilities | None = None
         self._report: Report | None = None
         self._profile: Profile | None = None
+        self._editor: LayoutEditor | None = None
         self._engine: InputEngine | None = None
         self._channel_caps: ChannelCapabilities | None = None
         self._banner_widgets: list[QWidget] = []
@@ -127,6 +129,8 @@ class MainWindow(QMainWindow):
         splitter.setHandleWidth(8)
 
         self._surface = GameSurface(palette_for(self._settings.theme))
+        self._surface.element_selected.connect(self._on_element_selected)
+        self._surface.element_moved.connect(self._on_element_moved)
         self._surface.touch_pressed.connect(self._on_touch_pressed)
         self._surface.touch_moved.connect(self._on_touch_moved)
         self._surface.touch_released.connect(self._on_touch_released)
@@ -322,6 +326,10 @@ class MainWindow(QMainWindow):
         self._delete_profile_button = QPushButton("Delete")
         self._delete_profile_button.setObjectName("Danger")
         self._delete_profile_button.clicked.connect(self._delete_profile)
+        self._save_profile_button = QPushButton("Save")
+        self._save_profile_button.clicked.connect(self._save_profile)
+        self._save_profile_button.setEnabled(False)
+        buttons.addWidget(self._save_profile_button)
         buttons.addWidget(self._new_profile_button)
         buttons.addWidget(self._delete_profile_button)
         layout.addLayout(buttons)
@@ -731,7 +739,10 @@ class MainWindow(QMainWindow):
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
     ) -> None:
         if current is None:
+            self._discard_unsaved()
             self._profile = None
+            self._editor = None
+            self._surface.set_editor_mode(False)
             self._surface.set_profile(None)
             self._element_list.clear()
             return
@@ -741,10 +752,57 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             self._set_status(f"cannot open profile: {exc}", 15000)
             return
+        self._editor = LayoutEditor(profile=self._profile, saved=self._profile)
+        self._surface.set_editor_mode(True)
         self._surface.set_profile(self._profile)
         self._render_elements()
         self._ensure_engine()
         self._refresh_overlay_hint()
+
+    def _on_element_selected(self, element_id: str) -> None:
+        if self._editor is not None:
+            self._editor.selected = element_id or None
+        for row in range(self._element_list.count()):
+            item = self._element_list.item(row)
+            if item is not None:
+                item.setSelected(item.data(Qt.ItemDataRole.UserRole) == element_id)
+
+    def _on_element_moved(self, element_id: str, x: float, y: float) -> None:
+        """A drag finished a step: mirror it into the list and the dirty state."""
+        if self._editor is None:
+            return
+        self._profile = self._editor.profile
+        self._render_elements()
+        self._save_profile_button.setEnabled(self._editor.dirty)
+        self._set_status(f"{element_id}: {x:.3f}, {y:.3f} (unsaved)", 4000)
+
+    def _discard_unsaved(self) -> None:
+        """Ask before silently dropping a moved key when the user switches."""
+        if self._editor is None or not self._editor.dirty:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Unsaved layout changes",
+            f"The layout '{self._profile.name if self._profile else ''}' has unsaved "
+            "changes. Save them before switching?",
+            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard,
+            QMessageBox.StandardButton.Save,
+        )
+        if answer == QMessageBox.StandardButton.Save:
+            self._save_profile()
+
+    def _save_profile(self) -> None:
+        if self._editor is None or self._profile is None:
+            return
+        try:
+            self._profile_store.save(self._editor.profile)
+        except Exception as exc:
+            self._set_status(f"cannot save profile: {exc}", 15000)
+            return
+        self._profile = self._editor.profile
+        self._editor.mark_saved(self._profile)
+        self._save_profile_button.setEnabled(False)
+        self._set_status("layout saved", 4000)
 
     def _render_elements(self) -> None:
         self._element_list.clear()

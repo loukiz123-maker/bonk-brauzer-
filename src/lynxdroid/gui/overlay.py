@@ -29,8 +29,9 @@ from PySide6.QtGui import (
 )
 from PySide6.QtWidgets import QWidget
 
-from lynxdroid.display.geometry import Rect, Rotation, Size, ViewportGeometry
+from lynxdroid.display.geometry import Rotation, Size, ViewportGeometry
 from lynxdroid.gui.theme import Palette
+from lynxdroid.gui.viewport import hit_test
 from lynxdroid.profiles.model import Element, ElementType, Profile
 
 
@@ -43,6 +44,10 @@ class GameSurface(QWidget):
     touch_released = Signal(float, float)
     pointer_entered_content = Signal(bool)
     wheel_delta = Signal(int)
+    #: Editor mode: an element was selected (or "" for a click on empty space).
+    element_selected = Signal(str)
+    #: Editor mode: an element was dragged to a new normalised position.
+    element_moved = Signal(str, float, float)
 
     def __init__(self, palette: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -55,6 +60,7 @@ class GameSurface(QWidget):
         self._editor_mode = False
         self._drawing = False
         self._last_android: tuple[float, float] | None = None
+        self._dragging_element: str | None = None
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(320, 200)
@@ -166,6 +172,11 @@ class GameSurface(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         point = event.position()
+        if self._editor_mode:
+            # In the editor a click selects and starts a drag; it must never
+            # inject a touch into the game.
+            self._begin_element_drag(point.x(), point.y())
+            return
         mapped = self._geometry.widget_to_android(point.x(), point.y())
         if mapped is None:
             # Press on a black bar: deliberately ignored, never clamped.
@@ -176,8 +187,28 @@ class GameSurface(QWidget):
         self._last_android = mapped
         self.touch_pressed.emit(*mapped)
 
+    def _begin_element_drag(self, px: float, py: float) -> None:
+        element = hit_test(self._geometry, self._profile, px, py)
+        self._selected_id = element.id if element else None
+        self._dragging_element = element.id if element else None
+        self.element_selected.emit(element.id if element else "")
+        self.update()
+
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
         point = event.position()
+        if self._editor_mode:
+            if self._dragging_element is not None and self._profile is not None:
+                mapped_uv = self._geometry.widget_to_normalized_profile(point.x(), point.y())
+                if mapped_uv is not None:
+                    target = self._profile.element(self._dragging_element)
+                    if target is not None:
+                        moved = self._profile.move_element(target.id, *mapped_uv)
+                        self._profile = moved
+                        updated = moved.element(target.id)
+                        if updated is not None:
+                            self.element_moved.emit(updated.id, updated.x, updated.y)
+                        self.update()
+            return
         mapped = self._geometry.widget_to_android(point.x(), point.y())
         self.setCursor(Qt.CursorShape.CrossCursor if mapped else Qt.CursorShape.ArrowCursor)
         if not self._drawing or mapped is None:
@@ -186,6 +217,9 @@ class GameSurface(QWidget):
         self.touch_moved.emit(*mapped)
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self._editor_mode:
+            self._dragging_element = None
+            return
         if event.button() != Qt.MouseButton.LeftButton or not self._drawing:
             return
         self._drawing = False
@@ -381,34 +415,3 @@ def _paint_hint(painter: QPainter, area: QRectF, palette: Palette, profile: Prof
         Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
         first_line,
     )
-
-
-def hit_test(
-    geometry: ViewportGeometry, profile: Profile | None, px: float, py: float
-) -> Element | None:
-    """Topmost element under a window point, or ``None``.
-
-    Used by the editor to select a key, and by tests to prove the drawn
-    position is the clickable position.
-    """
-    if profile is None:
-        return None
-    content = geometry.content_rect()
-    short_side = min(content.width, content.height)
-    best: Element | None = None
-    best_distance = float("inf")
-    for element in profile.elements:
-        ex, ey = geometry.normalized_to_widget(element.x, element.y)
-        radius = max(12.0, element.radius * short_side)
-        distance = ((px - ex) ** 2 + (py - ey) ** 2) ** 0.5
-        if element.type is ElementType.DPAD:
-            radius = max(radius, element.dpad_radius * short_side)
-        if distance <= radius and distance < best_distance:
-            best = element
-            best_distance = distance
-    return best
-
-
-def content_rect_contains(geometry: ViewportGeometry, px: float, py: float) -> bool:
-    rect: Rect = geometry.content_rect()
-    return rect.contains(px, py)

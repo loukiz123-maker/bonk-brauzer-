@@ -29,7 +29,7 @@ Columns: **ID** · **P** (priority) · **Requirement** · **Test / evidence** ·
 | P0-KERNEL | Report the actual kernel, not an assumed one | `platform.os_info()` | `ПРОВЕРЕН` (6.1.158+ reported) |
 | P0-NONROOT | GUI and CLI run as a normal user | `session.privileges` check; no `sudo` in any code path | `ПРОВЕРЕН` |
 | P0-WAYDROID | Drive the installed backend, do not reinstall it | `backend/waydroid.py`, `test_waydroid.py` | `ПРОВЕРЕН` (unit), `ЗАБЛОКИРОВАН` (live) |
-| P0-IMAGES | Show source/licence/size, get consent before any download | `backend/images.py`, `tests/backend/test_images.py` (12 tests) | `ПРОВЕРЕН` |
+| P0-IMAGES | Show source/licence/size, get consent before any download | `backend/images.py`, `tests/backend/test_images.py` (13 tests) | `ПРОВЕРЕН` |
 | P0-DISK | Check free space before an image download | `check_space()`, `disk.space` check | `ПРОВЕРЕН` |
 | P0-MEMFD | Probe `memfd_create` without side effects | `platform.memfd_available()` via `ctypes` | `ПРОВЕРЕН` |
 | P0-NS | Verify container namespaces exist | `platform.namespaces_available()` | `ПРОВЕРЕН` |
@@ -63,7 +63,7 @@ Columns: **ID** · **P** (priority) · **Requirement** · **Test / evidence** ·
 | P1-PSI | PSI is optional, reported as such | `kernel.psi` | `ПРОВЕРЕН` |
 | P1-MULTITOUCH | Real simultaneous touches through a supported channel | `TestAgentChannel` (protocol, 10 ids), `android_agent/` | `ЗАБЛОКИРОВАН` (needs APK on device) |
 | P1-SINGLE-TOUCH | The single-touch channel is labelled as such and disables the overlay | `test_reports_single_touch_only`, `overlay_control` | `ПРОВЕРЕН` |
-| P1-DISPLAY-VALIDATE | Reject zero/negative/overflow/absurd resolutions | `tests/display/test_resolution.py` (29 tests) | `ПРОВЕРЕН` |
+| P1-DISPLAY-VALIDATE | Reject zero/negative/overflow/absurd resolutions | `tests/display/test_resolution.py` (36 tests) | `ПРОВЕРЕН` |
 | P1-APPLY-MODE | Say which changes need a restart | `suggest_apply_mode`, `apply_display` steps | `ПРОВЕРЕН` |
 | P1-PROFILES | Create/rename/copy/save/reset/delete with confirmation | `ProfileStore` + CLI + GUI actions | `ПРОВЕРЕН` (logic), `В РАБОТЕ` (GUI untested on a display) |
 | P1-PROFILE-BINDING | Bind to package (+version warning), never to a title | `Target`, `version_mismatch`, `profile_rows` | `ПРОВЕРЕН` |

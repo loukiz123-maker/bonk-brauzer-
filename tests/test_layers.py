@@ -209,6 +209,23 @@ class TestStyleRules:
                 missing.append(str(path.relative_to(SRC)))
         assert not missing, f"modules without a docstring: {missing}"
 
+    def test_ui_logic_modules_are_importable_without_qt(self) -> None:
+        """Behaviour must live outside the widget modules.
+
+        Regression: ``hit_test`` sat in ``overlay.py``, which imports PySide6 at
+        module level, so it could not be tested anywhere and was in fact never
+        called. A module listed here must not import Qt.
+        """
+        qt_free_ui = ["gui/viewmodel.py", "gui/theme.py", "gui/viewport.py", "gui/editor.py"]
+        offenders: list[str] = []
+        for relative in qt_free_ui:
+            path = SRC / relative
+            assert path.exists(), f"{relative} is missing"
+            modules = imports_of_full(path)
+            if any(m.startswith("PySide6") for m in modules):
+                offenders.append(relative)
+        assert not offenders, f"UI logic must be Qt-free: {offenders}"
+
     def test_no_todo_markers_without_context(self) -> None:
         """A bare TODO hides work; require a reason after it."""
         bad: list[str] = []
