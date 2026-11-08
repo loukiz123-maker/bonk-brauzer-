@@ -48,6 +48,19 @@ class LayoutEditor:
         self.selected = element.id if element else None
         return self.selected
 
+    def select(self, element_id: str | None) -> str | None:
+        """Select from outside the canvas (the element list, a test).
+
+        The canvas and the list must agree: clicking a key highlights its row,
+        so choosing a row must highlight the key and mark it on the surface.
+        An id that is not in this profile selects nothing rather than leaving a
+        stale selection behind.
+        """
+        if element_id is not None and self.profile.element(element_id) is None:
+            element_id = None
+        self.selected = element_id
+        return self.selected
+
     def begin_drag(self, geometry: ViewportGeometry, px: float, py: float) -> str | None:
         """Start dragging whatever is under the pointer, inside the content area.
 

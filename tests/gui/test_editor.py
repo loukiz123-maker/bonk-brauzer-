@@ -134,6 +134,23 @@ class TestEditorSelection:
         assert editor.select_at(GEOMETRY, 250, 250) is None
         assert editor.selected is None
 
+    def test_selecting_by_id_matches_clicking(self) -> None:
+        """Choosing a row in the element list selects the same key on the canvas."""
+        editor = LayoutEditor(profile=profile(tap()))
+        assert editor.select("tap-a") == "tap-a"
+        assert editor.selected == "tap-a"
+
+    def test_selecting_none_clears(self) -> None:
+        editor = LayoutEditor(profile=profile(tap()), selected="tap-a")
+        assert editor.select(None) is None
+        assert editor.selected is None
+
+    def test_selecting_an_unknown_id_selects_nothing(self) -> None:
+        """A stale row must not leave a selection pointing at nothing."""
+        editor = LayoutEditor(profile=profile(tap()), selected="tap-a")
+        assert editor.select("gone") is None
+        assert editor.selected is None
+
 
 class TestEditorDrag:
     def test_drag_updates_the_position(self) -> None:

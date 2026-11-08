@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 522 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 525 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 522 passed
+pytest                                    # 525 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `522 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `525 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -42,7 +42,7 @@ Expected: `522 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/backend/test_lifecycle.py` | 20 | illegal transitions, observers, stop-during-start |
 | `tests/backend/test_waydroid.py` | 29 | status parsing, consent gates, real boot check |
 | `tests/backend/test_images.py` | 13 | nothing downloads without consent; checksum mismatch deletes |
-| `tests/gui/test_editor.py` | 37 | drag/clamp/reset state machine, hit-testing, portrait↔landscape transpose |
+| `tests/gui/test_editor.py` | 40 | drag/clamp/reset state machine, hit-testing, portrait↔landscape transpose |
 | `tests/gui/test_viewmodel.py` | 49 | disabled-with-reason, banner logic, WCAG contrast |
 | `tests/cli/test_cli.py` | 50 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |
 | `tests/test_requirements_registry.py` | 5 | the registry cites only tests and files that exist, and its counts are real |

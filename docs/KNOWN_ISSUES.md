@@ -124,6 +124,11 @@ not trustworthy about anything else.
 | 26 | The latency readout printed `0.000 ms` for sub-microsecond work | a test asserting "0 ms" never appears | fixed, reported in µs |
 | 27 | `find_for_package` / `version_mismatch` were dead code | audit for unreferenced functions | fixed, `apps launch` reports the binding |
 | 28 | `hit_test` lived in a Qt module: untested and, in fact, never called | same audit | fixed (`gui/viewport.py`) |
+| 29 | `ProfileStore.rename()` had no command: renaming a profile meant export → edit JSON → import | audit for unreferenced functions | fixed, `profiles rename` |
+| 30 | Every profile command printed a Python traceback when the id named nothing | the rename tests, which used a wrong id | fixed, `ProfileNotFound` is reported as a sentence |
+| 31 | The status bar's `latency: —` label was created and never updated, so it stayed empty forever | reading the widget list during the same audit | fixed, duplicate label removed |
+| 32 | Choosing a row in the element list did not select the key on the canvas, though clicking the key did select the row | tracing `set_selected`, which nothing called | fixed, both directions now agree |
+| 33 | A test asserted a measured send takes under a microsecond; it passed locally and failed on a loaded CI runner (and on 3.10, where the clock resolves to 1 µs) | the 3.10 CI job | fixed, rendering moved to the pure `format_latency_ms()` |
 
 ## Environment issues that are not bugs
 

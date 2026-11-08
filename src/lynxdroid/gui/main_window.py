@@ -349,6 +349,7 @@ class MainWindow(QMainWindow):
 
         layout.addWidget(_section("Keys in this profile"))
         self._element_list = QListWidget()
+        self._element_list.currentItemChanged.connect(self._on_element_row_chosen)
         layout.addWidget(self._element_list, 1)
 
         self._overlay_hint = QLabel("")
@@ -813,12 +814,38 @@ class MainWindow(QMainWindow):
         self._refresh_overlay_hint()
 
     def _on_element_selected(self, element_id: str) -> None:
+        """The canvas was clicked: mirror the choice into the row and editor."""
         if self._editor is not None:
-            self._editor.selected = element_id or None
-        for row in range(self._element_list.count()):
-            item = self._element_list.item(row)
-            if item is not None:
-                item.setSelected(item.data(Qt.ItemDataRole.UserRole) == element_id)
+            self._editor.select(element_id or None)
+        self._sync_element_row(element_id or None)
+        self._surface.set_selected(element_id or None)
+
+    def _on_element_row_chosen(
+        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+    ) -> None:
+        """A row was chosen: the canvas must show the same selection.
+
+        Without this the two views disagreed - clicking a key highlighted its
+        row, but choosing a row left the canvas with whatever was selected
+        before.
+        """
+        if current is None:
+            return
+        element_id = str(current.data(Qt.ItemDataRole.UserRole))
+        if self._editor is not None:
+            self._editor.select(element_id)
+        self._surface.set_selected(element_id)
+
+    def _sync_element_row(self, element_id: str | None) -> None:
+        """Select the matching row without echoing back into the handler."""
+        self._element_list.blockSignals(True)
+        try:
+            for row in range(self._element_list.count()):
+                item = self._element_list.item(row)
+                if item is not None:
+                    item.setSelected(item.data(Qt.ItemDataRole.UserRole) == element_id)
+        finally:
+            self._element_list.blockSignals(False)
 
     def _on_element_moved(self, element_id: str, x: float, y: float) -> None:
         """A drag finished a step: mirror it into the list and the dirty state."""
