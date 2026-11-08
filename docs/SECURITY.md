@@ -89,7 +89,7 @@ User-controlled strings that reach argv are validated first:
 
 | Interaction | Direction | Bounded by |
 |---|---|---|
-| OTA metadata / image download | outbound HTTPS, user-initiated only | explicit consent flag, space check, SHA-256 computed locally |
+| OTA metadata / image download | outbound HTTPS, user-initiated only | a `Consent` object that only `user_consented()` creates, space check, SHA-256 computed locally |
 | touch agent | **unix socket only** | `$XDG_RUNTIME_DIR`, `0600`, protocol version handshake |
 | adb | local socket / USB | `adb` itself |
 

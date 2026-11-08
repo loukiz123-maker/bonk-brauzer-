@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from lynxdroid.backend.contract import BackendState, Readiness
+from lynxdroid.backend.contract import BackendState, Consent, Readiness
 from lynxdroid.backend.lifecycle import Lifecycle
 from lynxdroid.backend.waydroid import FakeBackend
 
@@ -186,5 +186,12 @@ class TestFakeBackend:
 
     def test_prop_write_with_consent(self) -> None:
         backend = FakeBackend()
-        assert backend.set_prop("persist.waydroid.width", "1280", consent=True)
+        assert backend.set_prop("persist.waydroid.width", "1280", consent=_consent())
         assert backend.get_prop("persist.waydroid.width") == "1280"
+
+
+def _consent() -> Consent:
+    """A user who agreed; only the CLI can create one in the real app."""
+    from lynxdroid.backend.contract import user_consented
+
+    return user_consented("test: change the viewport")

@@ -143,6 +143,37 @@ class Snapshot:
         }
 
 
+@dataclass(frozen=True)
+class Consent:
+    """Proof that a human agreed to a persistent change.
+
+    A ``bool`` argument called ``consent`` proves nothing about the user: any
+    caller can pass ``True``, and a caller that does is indistinguishable from
+    one that asked. This object can only be produced by :func:`user_consented`,
+    whose name appears in a diff when someone starts handing it out.
+
+    It carries the text the user was shown, so a log line can say what was
+    agreed to rather than that something was.
+    """
+
+    subject: str
+    detail: str = ""
+
+    def describe(self) -> str:
+        return f"{self.subject} ({self.detail})" if self.detail else self.subject
+
+
+def user_consented(subject: str, detail: str = "") -> Consent:
+    """Record that the user agreed to ``subject``.
+
+    Call this *after* the confirmation, never before: the value is the
+    evidence, so creating one early and using it later would be a lie.
+    """
+    if not subject.strip():
+        raise ValueError("consent must name what was agreed to")
+    return Consent(subject=subject, detail=detail)
+
+
 class BackendError(LynxError):
     """A backend operation failed, with the reason the UI should display.
 
@@ -199,8 +230,14 @@ class AndroidBackend(abc.ABC):
 
     # -- viewport --------------------------------------------------------
     @abc.abstractmethod
-    def apply_display(self, width: int, height: int, dpi: int) -> list[str]:
-        """Apply a resolution; returns the list of human-readable steps."""
+    def apply_display(
+        self, width: int, height: int, dpi: int, *, consent: Consent | None = None
+    ) -> list[str]:
+        """Apply a resolution; returns the list of human-readable steps.
+
+        Writes persistent Android properties, so it needs a :class:`Consent`
+        that came from :func:`user_consented`.
+        """
 
     @abc.abstractmethod
     def read_display(self) -> dict[str, str]:
@@ -225,8 +262,8 @@ class AndroidBackend(abc.ABC):
         """Read one backend/Android property."""
 
     @abc.abstractmethod
-    def set_prop(self, name: str, value: str, *, consent: bool = False) -> bool:
-        """Write a property. Requires ``consent=True`` for persistent values."""
+    def set_prop(self, name: str, value: str, *, consent: Consent | None = None) -> bool:
+        """Write a property. Requires a :class:`Consent` for persistent values."""
 
     # -- windowing -------------------------------------------------------
     @abc.abstractmethod

@@ -8,7 +8,10 @@ What this file is:
 What it is not:
     a re-installer of Waydroid, a fork, or something that silently edits
     ``/var/lib/waydroid``. Every mutating call needs a session that the user
-    started, and every persistent property write requires ``consent=True``.
+    started, and every persistent property write requires a
+    :class:`~lynxdroid.backend.contract.Consent` - an object that only
+    :func:`~lynxdroid.backend.contract.user_consented` can create, so a caller
+    cannot claim agreement on the user's behalf by passing ``True``.
 
 Parsing rules are deliberately forgiving: Waydroid's ``status`` output has
 changed format between releases, so we parse key: value pairs and never depend
@@ -28,6 +31,7 @@ from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendError,
     BackendState,
+    Consent,
     Feature,
     Readiness,
     Snapshot,
@@ -542,7 +546,9 @@ class WaydroidBackend(AndroidBackend):
     # ------------------------------------------------------------------
     # Display
     # ------------------------------------------------------------------
-    def apply_display(self, width: int, height: int, dpi: int) -> list[str]:
+    def apply_display(
+        self, width: int, height: int, dpi: int, *, consent: Consent | None = None
+    ) -> list[str]:
         """Apply resolution/DPI through the documented Waydroid properties.
 
         The order matters and is reported to the user verbatim:
@@ -554,6 +560,16 @@ class WaydroidBackend(AndroidBackend):
         """
         if width <= 0 or height <= 0 or dpi <= 0:
             raise BackendError("width, height and dpi must be positive", code="invalid-display")
+        # Refuse before reading anything. Checking at the first set_prop (the
+        # previous behaviour) meant an unauthorised call still ran `prop get`
+        # twice and put "1280 -> 1920" in the steps it hands the user, which
+        # reads like a completed change.
+        if not isinstance(consent, Consent):
+            raise BackendError(
+                "changing the viewport writes persistent Android properties",
+                code="consent-required",
+                hint="ask the user first, then pass what user_consented returned",
+            )
         steps: list[str] = []
 
         for key, value in (
@@ -562,7 +578,7 @@ class WaydroidBackend(AndroidBackend):
         ):
             previous = self.get_prop(key)
             steps.append(f"{key}: {previous or '<unset>'} -> {value}")
-            if not self.set_prop(key, value, consent=True):
+            if not self.set_prop(key, value, consent=consent):
                 raise BackendError(f"failed to set {key}", code="prop-failed")
 
         density = self._shell(f"wm density {dpi}")
@@ -647,11 +663,19 @@ class WaydroidBackend(AndroidBackend):
         value = result.stdout.strip()
         return value or None
 
-    def set_prop(self, name: str, value: str, *, consent: bool = False) -> bool:
-        """Write a property. Persistent writes need an explicit consent flag."""
+    def set_prop(self, name: str, value: str, *, consent: Consent | None = None) -> bool:
+        """Write a property. Persistent writes need a :class:`Consent`.
+
+        The parameter is an object rather than a bool so that a caller cannot
+        assert the user's agreement by passing ``True``: the only way to get a
+        Consent is to call :func:`user_consented` after asking.
+        """
         if not _PROP_RE.match(name):
             raise BackendError(f"invalid property name '{name}'", code="invalid-prop")
-        if not consent:
+        # isinstance, not "is None": the annotation is not enforced at run
+        # time, so a caller passing the old `consent=True` must still be
+        # refused rather than silently believed.
+        if not isinstance(consent, Consent):
             raise BackendError(
                 f"refusing to change {name} without explicit consent",
                 code="consent-required",
@@ -745,7 +769,13 @@ class FakeBackend(AndroidBackend):
         self._state = BackendState.STOPPED
         return self.snapshot()
 
-    def apply_display(self, width: int, height: int, dpi: int) -> list[str]:
+    def apply_display(
+        self, width: int, height: int, dpi: int, *, consent: Consent | None = None
+    ) -> list[str]:
+        if not isinstance(consent, Consent):
+            raise BackendError(
+                "changing the viewport needs explicit consent", code="consent-required"
+            )
         self._props["persist.waydroid.width"] = str(width)
         self._props["persist.waydroid.height"] = str(height)
         return [f"fake: set {width}x{height}@{dpi}"]
@@ -765,8 +795,8 @@ class FakeBackend(AndroidBackend):
     def get_prop(self, name: str) -> str | None:
         return self._props.get(name)
 
-    def set_prop(self, name: str, value: str, *, consent: bool = False) -> bool:
-        if not consent:
+    def set_prop(self, name: str, value: str, *, consent: Consent | None = None) -> bool:
+        if not isinstance(consent, Consent):
             raise BackendError("consent required", code="consent-required")
         self._props[name] = value
         return True

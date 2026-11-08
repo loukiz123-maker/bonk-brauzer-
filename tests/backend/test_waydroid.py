@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from lynxdroid.backend.contract import BackendState, Readiness, Support
+from lynxdroid.backend.contract import BackendError, BackendState, Consent, Readiness, Support
 from lynxdroid.backend.waydroid import BackendConfig, WaydroidBackend
 from lynxdroid.core import proc
 
@@ -239,6 +239,13 @@ class TestCapabilities:
         assert not caps.supports("session")
 
 
+def _consent() -> Consent:
+    """Stand-in for a user who said yes; only the CLI and GUI can create one."""
+    from lynxdroid.backend.contract import user_consented
+
+    return user_consented("test: change the viewport")
+
+
 class TestConsent:
     def test_set_prop_without_consent_raises(self, backend: WaydroidBackend) -> None:
         from lynxdroid.backend.contract import BackendError
@@ -251,7 +258,7 @@ class TestConsent:
 
         for name in ("", "persist;rm -rf /", "a b", "../x"):
             with pytest.raises(BackendError):
-                backend.set_prop(name, "1", consent=True)
+                backend.set_prop(name, "1", consent=_consent())
 
     def test_apply_display_records_previous_values(
         self, backend: WaydroidBackend, monkeypatch
@@ -264,7 +271,7 @@ class TestConsent:
             }
         )
         monkeypatch.setattr(proc, "run", fake.run)
-        steps = backend.apply_display(1920, 1080, 320)
+        steps = backend.apply_display(1920, 1080, 320, consent=_consent())
         assert any("1280 -> 1920" in step for step in steps)
         assert any("persist.waydroid.height" in step for step in steps)
         assert any("session start" in step or "restart" in step for step in steps)
@@ -511,3 +518,51 @@ class TestSessionLogLocation:
     def test_the_config_no_longer_offers_a_root_owned_state_dir(self) -> None:
         """A setting that can only fail is worse than no setting."""
         assert not hasattr(BackendConfig(), "state_dir")
+
+
+class TestConsentCannotBeFaked:
+    """The old signature took ``consent: bool = False``.
+
+    A caller passing ``True`` was indistinguishable from a caller that had
+    asked the user, so the guarantee lived in the discipline of four call
+    sites. ``apply_display`` did exactly that: it passed ``consent=True`` to
+    its own ``set_prop`` calls, which proves nothing at all.
+    """
+
+    def test_a_bare_true_is_not_consent(self, backend: WaydroidBackend) -> None:
+        """A bool must not satisfy the parameter, even a truthy one."""
+        with pytest.raises(BackendError):
+            backend.set_prop("persist.waydroid.width", "1280", consent=True)  # type: ignore[arg-type]
+
+    def test_apply_display_without_consent_writes_nothing(self, backend, monkeypatch) -> None:
+        calls: list[tuple[str, ...]] = []
+        monkeypatch.setattr(proc, "run", lambda argv, **kw: calls.append(tuple(argv)) or ok(""))
+        with pytest.raises(BackendError, match="consent"):
+            backend.apply_display(1920, 1080, 320)
+        assert calls == [], f"properties were written without consent: {calls}"
+
+    def test_apply_display_passes_the_consent_through(self, backend, monkeypatch) -> None:
+        """It must forward the user's agreement, not invent a new one."""
+        seen: list[Consent | None] = []
+        original = backend.set_prop
+
+        def spy(name, value, *, consent=None):
+            seen.append(consent)
+            return True
+
+        backend.set_prop = spy  # type: ignore[method-assign]
+        _ = original
+        monkeypatch.setattr(proc, "run", lambda argv, **kw: ok(""))
+        mine = _consent()
+        backend.apply_display(1920, 1080, 320, consent=mine)
+        assert seen, "set_prop was never called"
+        assert all(item is mine for item in seen), (
+            "apply_display used a different consent object than the caller's"
+        )
+
+    def test_consent_names_what_was_agreed_to(self) -> None:
+        from lynxdroid.backend.contract import user_consented
+
+        with pytest.raises(ValueError):
+            user_consented("   ")
+        assert "viewport" in user_consented("viewport to 1920x1080").describe()

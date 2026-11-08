@@ -54,7 +54,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lynxdroid.backend.contract import BackendCapabilities, BackendState, Snapshot
+from lynxdroid.backend.contract import (
+    BackendCapabilities,
+    BackendState,
+    Snapshot,
+    user_consented,
+)
 from lynxdroid.backend.waydroid import BackendConfig, FakeBackend, WaydroidBackend
 from lynxdroid.core.diagnostics import Report
 from lynxdroid.core.logging_setup import get
@@ -778,6 +783,12 @@ class MainWindow(QMainWindow):
         )
         if accepted != QMessageBox.StandardButton.Yes:
             return
+        # The Yes above is the agreement; this object is the proof of it, and
+        # it is created here so it cannot be created anywhere else.
+        consent = user_consented(
+            f"set Android to {request.width}x{request.height} @ {request.dpi} dpi",
+            "writes persist.waydroid.width/height and runs 'wm density'",
+        )
         self._surface.set_buffer(request.width, request.height)
         self._save_setting(
             buffer_width=request.width, buffer_height=request.height, dpi=request.dpi
@@ -787,6 +798,7 @@ class MainWindow(QMainWindow):
             request.width,
             request.height,
             request.dpi,
+            consent,
             on_done=self._on_display_applied,
             on_error=lambda message, detail: self._set_status(
                 f"display change failed: {message}", 15000

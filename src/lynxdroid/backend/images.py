@@ -24,6 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
 
+from lynxdroid.backend.contract import Consent
 from lynxdroid.core.errors import Blocked, DependencyMissing, LynxError
 from lynxdroid.core.logging_setup import get
 from lynxdroid.core.paths import free_space_bytes
@@ -182,16 +183,18 @@ def download(
     url: str,
     destination: Path,
     *,
-    consent: bool,
+    consent: Consent | None,
     expected_sha256: str | None = None,
     chunk_bytes: int = 1024 * 256,
     progress: Callable[[int], None] | None = None,
 ) -> FetchResult:
-    """Download one file. Requires ``consent=True``; never overwrites silently."""
-    if not consent:
+    """Download one file. Requires a :class:`Consent`; never overwrites silently."""
+    # isinstance rather than truthiness: a bare `True` says nothing about who
+    # agreed, which is the whole reason this parameter is an object.
+    if not isinstance(consent, Consent):
         raise Blocked(
             "downloading an Android image needs explicit consent",
-            hint="show the plan first, then call again with consent",
+            hint="show the plan first, then call again with what user_consented returned",
         )
     destination = Path(destination)
     if destination.exists():

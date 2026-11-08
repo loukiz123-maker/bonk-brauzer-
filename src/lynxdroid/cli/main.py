@@ -30,7 +30,7 @@ from pathlib import Path
 from lynxdroid import version as version_mod
 from lynxdroid.apps.catalog import inspect_apk, merge_apps
 from lynxdroid.backend import images
-from lynxdroid.backend.contract import AndroidBackend, BackendState
+from lynxdroid.backend.contract import AndroidBackend, BackendState, user_consented
 from lynxdroid.core import proc
 from lynxdroid.core.diagnostics import Status
 from lynxdroid.core.errors import Blocked, DependencyMissing, ExitCode, LynxError, UsageError
@@ -535,7 +535,12 @@ def cmd_display_set(args: argparse.Namespace, paths: AppPaths, store: SettingsSt
         )
         return int(ExitCode.BLOCKED)
     backend = _backend(args, store)
-    steps = backend.apply_display(request.width, request.height, request.dpi)
+    # --yes is the user's agreement, and this is where it becomes proof.
+    consent = user_consented(
+        f"set the Android viewport to {request.width}x{request.height}@{request.dpi}",
+        "writes persist.waydroid.width/height and runs 'wm density'",
+    )
+    steps = backend.apply_display(request.width, request.height, request.dpi, consent=consent)
     if args.json:
         print(json.dumps({"steps": steps}, indent=2))
     else:
@@ -716,6 +721,12 @@ def cmd_image_prepare(args: argparse.Namespace, paths: AppPaths, store: Settings
             "this channel publishes no checksum, so the download cannot be verified",
             hint="re-run with --allow-unverified if you accept a locally computed SHA-256",
         )
+    # Past this point the user has reviewed the plan and passed --yes, which
+    # is the agreement; the object records what it was about.
+    download_consent = user_consented(
+        f"download the {plan.channel} Android image",
+        f"{plan.estimated_bytes / 1024**3:.1f} GiB into {plan.target_dir}",
+    )
     metadata = images.fetch_ota_metadata(plan.system_url)
     results: list[images.FetchResult] = []
     for key in ("system", "vendor"):
@@ -731,7 +742,7 @@ def cmd_image_prepare(args: argparse.Namespace, paths: AppPaths, store: Settings
         if destination.exists():
             print(f"already present, skipped: {destination}")
             continue
-        result = images.download(url, destination, consent=True)
+        result = images.download(url, destination, consent=download_consent)
         results.append(result)
         print(f"downloaded {result.path.name} ({result.size_bytes} bytes)")
         print(f"  sha256 {result.sha256} (verified: {result.verified})")

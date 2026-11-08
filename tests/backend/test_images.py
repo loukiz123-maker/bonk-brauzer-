@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from lynxdroid.backend import images
+from lynxdroid.backend.contract import Consent
 from lynxdroid.core.errors import Blocked, LynxError
 
 
@@ -53,16 +54,36 @@ class TestSpace:
         assert images.required_space(1000) > 2000
 
 
+def _consent() -> Consent:
+    """A user who agreed; only the CLI can create one in the real app."""
+    from lynxdroid.backend.contract import Consent as _Consent
+    from lynxdroid.backend.contract import user_consented
+
+    consent: _Consent = user_consented("test: download an image")
+    return consent
+
+
 class TestDownload:
     def test_download_requires_consent(self, tmp_path: Path) -> None:
         with pytest.raises(Blocked, match="consent"):
-            images.download("https://example.invalid/x.zip", tmp_path / "x.zip", consent=False)
+            images.download("https://example.invalid/x.zip", tmp_path / "x.zip", consent=None)
+
+    def test_a_bare_true_is_not_consent(self, tmp_path: Path) -> None:
+        """Truthiness proved nothing: any caller can pass True.
+
+        The old parameter was a bool, so this is the exact call that used to
+        succeed without anyone having been asked.
+        """
+        target = tmp_path / "x.zip"
+        with pytest.raises(Blocked, match="consent"):
+            images.download("https://example.invalid/x.zip", target, consent=True)  # type: ignore[arg-type]
+        assert not target.exists()
 
     def test_refuses_to_overwrite(self, tmp_path: Path) -> None:
         target = tmp_path / "x.zip"
         target.write_bytes(b"existing")
         with pytest.raises(LynxError, match="already exists"):
-            images.download("https://example.invalid/x.zip", target, consent=True)
+            images.download("https://example.invalid/x.zip", target, consent=_consent())
         assert target.read_bytes() == b"existing"
 
     def test_checksum_mismatch_deletes_the_partial_file(self, tmp_path: Path, monkeypatch) -> None:
@@ -88,7 +109,7 @@ class TestDownload:
         target = tmp_path / "image.zip"
         with pytest.raises(LynxError, match="checksum mismatch"):
             images.download(
-                "https://example.invalid/x", target, consent=True, expected_sha256="0" * 64
+                "https://example.invalid/x", target, consent=_consent(), expected_sha256="0" * 64
             )
         assert not target.exists()
         assert not (tmp_path / "image.zip.part").exists()
@@ -118,7 +139,7 @@ class TestDownload:
         digest = hashlib.sha256(payload).hexdigest()
         target = tmp_path / "image.zip"
         result = images.download(
-            "https://example.invalid/x", target, consent=True, expected_sha256=digest
+            "https://example.invalid/x", target, consent=_consent(), expected_sha256=digest
         )
         assert result.verified
         assert result.path.read_bytes() == payload
@@ -170,7 +191,7 @@ class TestInterruptedDownload:
         target = tmp_path / "system.img"
 
         with pytest.raises(KeyboardInterrupt):
-            images.download("https://example.invalid/x", target, consent=True)
+            images.download("https://example.invalid/x", target, consent=_consent())
 
         leftovers = [p.name for p in tmp_path.iterdir() if p.name.startswith("system.img")]
         assert leftovers == [], f"an interrupted download left files behind: {leftovers}"
@@ -190,5 +211,5 @@ class TestInterruptedDownload:
 
         monkeypatch.setattr("urllib.request.urlopen", lambda *a, **k: Interrupted())
         with pytest.raises(KeyboardInterrupt):
-            images.download("https://example.invalid/x", tmp_path / "x.img", consent=True)
+            images.download("https://example.invalid/x", tmp_path / "x.img", consent=_consent())
         assert not (tmp_path / "x.img").exists()
