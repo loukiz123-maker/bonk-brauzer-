@@ -134,3 +134,75 @@ def test_every_p0_requirement_has_evidence() -> None:
         assert len(cells) >= 4, f"malformed row: {row}"
         evidence = cells[2]
         assert len(evidence) > 3, f"P0 row without evidence: {cells[0]}"
+
+
+# ---------------------------------------------------------------------------
+# The registry must also cover the code, not only name tests that exist.
+# Every doctor check declares the requirement it proves (`requirement="P0-..."`).
+# A check citing an id the registry never declares is untraceable: the registry
+# says "every requirement is covered", while a check points at nothing.
+# ---------------------------------------------------------------------------
+
+CHECKS_SRC = ROOT / "src" / "lynxdroid" / "doctor" / "checks.py"
+
+
+def _declared_ids() -> set[str]:
+    text = (DOCS / "REQUIREMENTS.md").read_text(encoding="utf-8")
+    return set(re.findall(r"^\| (P[01]-[A-Z0-9]+) \|", text, re.MULTILINE))
+
+
+def _cited_by_checks() -> set[str]:
+    text = CHECKS_SRC.read_text(encoding="utf-8")
+    return set(re.findall(r'requirement="([A-Z0-9-]+)"', text))
+
+
+class TestChecksAreTraceable:
+    def test_the_registry_declares_requirements(self) -> None:
+        assert len(_declared_ids()) > 20, "the registry lost its rows"
+
+    def test_every_requirement_a_check_cites_is_in_the_registry(self) -> None:
+        unknown = _cited_by_checks() - _declared_ids()
+        assert unknown == set(), (
+            "doctor checks cite requirement ids the registry does not declare: "
+            + ", ".join(sorted(unknown))
+        )
+
+    def test_the_checks_actually_cite_requirements(self) -> None:
+        """Otherwise the test above passes because nothing is cited."""
+        assert len(_cited_by_checks()) >= 15, (
+            f"only {len(_cited_by_checks())} checks carry a requirement id"
+        )
+
+    def test_no_check_id_is_reported_twice_in_one_report(self) -> None:
+        """An id may appear in two branches (found / not found), but a single
+        report must never carry it twice: `by_id` would silently pick one."""
+        import sys
+
+        sys.path.insert(0, str(ROOT / "src"))
+        from lynxdroid.doctor import checks
+
+        reports = [
+            checks.environment_report(),
+            checks.session_report(),
+            checks.kernel_report(),
+            checks.gpu_report(),
+            checks.waydroid_report(),
+            checks.storage_report(),
+        ]
+        for report in reports:
+            ids = [check.id for check in report.checks]
+            duplicates = {i for i in ids if ids.count(i) > 1}
+            assert duplicates == set(), (
+                f"report '{report.area}' carries duplicate ids: {sorted(duplicates)}"
+            )
+
+    def test_the_full_doctor_report_has_unique_ids(self) -> None:
+        import sys
+
+        sys.path.insert(0, str(ROOT / "src"))
+        from lynxdroid.doctor import checks
+
+        combined = checks.full_report()
+        ids = [check.id for check in combined.checks]
+        duplicates = {i for i in ids if ids.count(i) > 1}
+        assert duplicates == set(), f"duplicate check ids: {sorted(duplicates)}"

@@ -146,6 +146,7 @@ not trustworthy about anything else.
 | 48 | SECURITY.md claims `core/proc.py` is the only place a subprocess is created and that nothing sets `shell=True`, and nothing verified either | reading §3 against the tests | fixed, two static checks in `tests/test_layers.py` |
 | 49 | The Java touch agent and the Python client implement one protocol with nothing comparing them; the agent answered a refused handshake with `{ok: false}` while the client only expected a `protocol` field | writing the cross-implementation test | fixed on both sides, and `tests/input/test_agent_protocol.py` now holds them together |
 | 50 | A protocol refusal could print "the agent speaks protocol 1, this build speaks 1" - both halves naming us, which reads as if nothing were wrong, because the agent echoed the client's version back | the test above, which failed on exactly that string | fixed: each side reports its own version |
+| 51 | A `doctor` check cited requirement `P1-REALHOST`, which the registry never declared: the report said "every requirement is covered" while a check pointed at nothing | checking the registry against the code instead of against itself | fixed, the requirement is declared and the link is now enforced by a test |
 
 ## Environment issues that are not bugs
 

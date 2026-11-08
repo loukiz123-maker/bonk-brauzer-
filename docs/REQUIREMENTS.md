@@ -52,6 +52,7 @@ Columns: **ID** · **P** (priority) · **Requirement** · **Test / evidence** ·
 
 | ID | Requirement | Test / evidence | Status |
 |---|---|---|---|
+| P1-REALHOST | Say when the host is a container, because hardware and session results are then not representative | `session.container` check reports it with that wording | `ПРОВЕРЕН` in container: reported as a warning naming the limitation |
 | P1-OS | Warn on non-Arch distributions | `os.distro` check | `ПРОВЕРЕН` |
 | P1-PKG | Use the real package manager (pacman), verify names | `platform.package_manager()` | `ПРОВЕРЕН` (reports `apt` here, and says so) |
 | P1-KDE | KWin-specific window/embedding notes | `session.desktop`, `capabilities.notes` | `В РАБОТЕ` |
