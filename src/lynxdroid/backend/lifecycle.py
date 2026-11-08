@@ -147,10 +147,16 @@ class Lifecycle:
             return self._publish()
 
     def request_stop_during_start(self) -> None:
-        """User pressed Stop while starting: honour it once the start finishes."""
+        """User pressed Stop while starting: honour it once the start finishes.
+
+        The detail is changed, so observers are told: the caller returns this
+        snapshot directly, and a stop request that leaves the screen saying
+        "starting" looks like a button that did nothing.
+        """
         if self._state is BackendState.STARTING:
             self._stop_after_start = True
             self._detail = "stop requested; will stop after the start attempt finishes"
+            self._publish()
 
     def set_readiness(self, layer: str, value: Readiness) -> None:
         if self._readiness.get(layer) is not value:

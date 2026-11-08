@@ -132,6 +132,23 @@ class TestStopDuringStart:
         machine.transition(BackendState.RUNNING, "ready")
         assert not machine.stop_after_start  # cleared by RUNNING, caller then stops
 
+    def test_a_stop_request_is_visible_in_the_snapshot(self) -> None:
+        """Pressing Stop must not look like it did nothing.
+
+        The backend returns this snapshot straight to the caller, so the
+        explanation has to be in it.
+        """
+        machine = Lifecycle()
+        machine.transition(BackendState.STOPPED, "configured")
+        machine.transition(BackendState.STARTING, "start")
+        seen: list[str] = []
+        machine.subscribe(lambda snap: seen.append(snap.detail))
+        machine.request_stop_during_start()
+        assert "stop requested" in machine.snapshot().detail
+        assert any("stop requested" in detail for detail in seen), (
+            "observers were not told that the stop request was registered"
+        )
+
     def test_stop_request_ignored_when_not_starting(self) -> None:
         machine = running_lifecycle()
         machine.request_stop_during_start()
