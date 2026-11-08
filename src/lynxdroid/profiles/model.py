@@ -70,6 +70,14 @@ def utc_now() -> datetime:
 
 
 def isoformat(moment: datetime) -> str:
+    """Render a timestamp the way the stored format defines it.
+
+    ``timespec="seconds"`` is deliberate, not incidental: sub-second digits
+    would be preserved in Python but are noise in a file a human may read and
+    a future C++ reader must parse, so the format fixes the precision rather
+    than leaving it to whoever wrote the file. A round trip therefore drops
+    microseconds; tests/profiles/test_compat.py pins that.
+    """
     return moment.astimezone(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
 
 
