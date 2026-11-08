@@ -98,6 +98,9 @@ ignore = ["S603", "S607", "S310", "ARG001", "ARG002", "ARG005", "RUF001"]
 "tests/*" = ["S101", "S105", "S106", "ARG001", "ARG002"]
 "src/lynxdroid/cli/*" = ["T20"]
 "src/lynxdroid/gui/*" = ["T20"]
+# The atomic-replace call is named explicitly so failure-injection tests can
+# patch it; Path.replace() hides it behind a method call. See storage.py.
+"src/lynxdroid/core/storage.py" = ["PTH105"]
 
 [tool.mypy]
 python_version = "3.10"

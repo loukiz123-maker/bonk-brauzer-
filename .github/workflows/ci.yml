@@ -201,9 +201,16 @@ jobs:
           import json, subprocess, sys
           from lynxdroid.version import SCHEMA_VERSIONS, __version__
 
-          pyproject = open("pyproject.toml", encoding="utf-8").read()
-          assert f'version = "{__version__}"' in pyproject, (
-              f"pyproject and lynxdroid.version disagree about {__version__}")
+          import tomllib
+          pyproject = tomllib.loads(open("pyproject.toml", "rb").read().decode())
+          project = pyproject["project"]
+          # The version is dynamic on purpose: one source, read by the build.
+          assert "version" in project.get("dynamic", []), (
+              "pyproject should declare a dynamic version")
+          assert "version" not in project, (
+              "pyproject must not hardcode a version next to the dynamic one")
+          configured = pyproject["tool"]["setuptools"]["dynamic"]["version"]["attr"]
+          assert configured == "lynxdroid.version.__version__", configured
 
           reported = json.loads(
               subprocess.run([sys.executable, "-m", "lynxdroid", "version", "--json"],

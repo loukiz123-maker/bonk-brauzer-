@@ -66,7 +66,11 @@ def write_json(
             if fsync:
                 os.fsync(handle.fileno())
         tmp_path.chmod(mode)
-        tmp_path.replace(path)
+        # Explicit os.replace, not Path.replace: this call is the atomicity
+        # guarantee, and naming it makes it patchable in failure-injection
+        # tests (Path.replace wraps it in a way that defeats monkeypatching on
+        # some Python versions).
+        os.replace(tmp_path, path)
         if fsync:
             _fsync_dir(path.parent)
     except BaseException:
@@ -103,7 +107,7 @@ def patched_file(path: Path, *, mode: int = 0o600) -> Iterator[Path]:
     try:
         yield tmp
         tmp.chmod(mode)
-        tmp.replace(path)
+        os.replace(tmp, path)
     finally:
         with contextlib.suppress(FileNotFoundError):
             tmp.unlink()
