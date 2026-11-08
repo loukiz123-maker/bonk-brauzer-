@@ -142,6 +142,8 @@ not trustworthy about anything else.
 | 44 | `Poller.pause()`/`resume()` existed and nothing called them, while the docstring promised polling stops when the window is hidden | same audit | fixed, `hideEvent`/`showEvent` pause and resume it |
 | 45 | `BackendState.is_transitional()`, `Action.ends_contact()`, `AppEntry.initials()` and `Profile.with_reference()/with_target()` were never called | same audit | removed |
 | 46 | The schema-version claim ("profile JSON written by Python must load in C++ unchanged") was the stated gate for the C++ port and had no test; `migrate()` was never executed by anything | writing the gate tests | covered by `tests/profiles/test_compat.py`, which also pinned the deliberate whole-second timestamp precision |
+| 47 | The test counts in README/TESTING/ROADMAP had drifted again (four per-file rows and the total were stale); I had been fixing them by hand, which is why | writing a check for them | fixed, `tests/test_doc_counts.py` compares every quoted number with a real collection pass |
+| 48 | SECURITY.md claims `core/proc.py` is the only place a subprocess is created and that nothing sets `shell=True`, and nothing verified either | reading §3 against the tests | fixed, two static checks in `tests/test_layers.py` |
 
 ## Environment issues that are not bugs
 
