@@ -8,8 +8,10 @@ __version__ = "0.1.0"
 #: (docs/REQUIREMENTS.md) records a stage as verified.
 BUILD_STAGE = "stage 4 - architecture and backend contract (Python vertical slice)"
 
-#: Versions of every persisted or inter-process format. Bumping any of these
-#: requires a migration entry in ``profiles.migration`` plus a test.
+#: Versions of every persisted or inter-process format. Bumping one of these
+#: requires a migration step in ``profiles.codec.migrate`` plus a test; a
+#: reader that meets a newer file must say so rather than guess
+#: (``profiles.codec``, ``settings``).
 SCHEMA_VERSIONS: dict[str, int] = {
     "profile": 1,
     "settings": 1,

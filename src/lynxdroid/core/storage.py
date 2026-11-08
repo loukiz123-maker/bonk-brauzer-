@@ -6,6 +6,11 @@ Requirements that drive this module:
 * a failed save must never leave a half-written file behind;
 * a corrupt file must be reported, never silently replaced;
 * writes carry a schema version so migration is possible (stage 18).
+
+Only the two primitives the app actually uses live here: ``read_json`` and
+``write_json``. Two convenience wrappers (``patched_file``, ``atomic_update``)
+were removed after an audit showed no caller in ``src/`` or ``tests/``; the
+policy for unreferenced code is in ``docs/KNOWN_ISSUES.md`` #27 and #29.
 """
 
 from __future__ import annotations
@@ -14,7 +19,6 @@ import contextlib
 import json
 import os
 import tempfile
-from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any
 
@@ -90,41 +94,3 @@ def _fsync_dir(directory: Path) -> None:
         pass
     finally:
         os.close(dir_fd)
-
-
-@contextlib.contextmanager
-def patched_file(path: Path, *, mode: int = 0o600) -> Iterator[Path]:
-    """Yield a temp path that atomically replaces ``path`` on clean exit.
-
-    Used when a caller wants to run an arbitrary writer (e.g. a migration)
-    without exposing a partially-written target file.
-    """
-    path = Path(path)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_name = tempfile.mkstemp(dir=str(path.parent), prefix=f".{path.name}.")
-    os.close(fd)
-    tmp = Path(tmp_name)
-    try:
-        yield tmp
-        tmp.chmod(mode)
-        os.replace(tmp, path)
-    finally:
-        with contextlib.suppress(FileNotFoundError):
-            tmp.unlink()
-
-
-def atomic_update(
-    path: Path,
-    mutate: Callable[[dict[str, Any]], dict[str, Any]],
-    *,
-    default: dict[str, Any] | None = None,
-    mode: int = 0o600,
-) -> dict[str, Any]:
-    """Read-modify-write helper used by settings and profiles."""
-    try:
-        current = read_json(path)
-    except FileNotFoundError:
-        current = dict(default or {})
-    updated = mutate(current)
-    write_json(path, updated, mode=mode)
-    return updated

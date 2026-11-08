@@ -7,6 +7,7 @@ design rots: someone imports "just one" module across a boundary.
 from __future__ import annotations
 
 import ast
+import re
 from pathlib import Path
 
 import pytest
@@ -450,3 +451,122 @@ def _call_name(func: ast.expr) -> str:
     if isinstance(func, ast.Name):
         return func.id
     return ""
+
+
+# ---------------------------------------------------------------------------
+# Docstrings name other modules. A name that does not exist sends the reader
+# (and the next maintainer) looking for a file that was never written:
+# `version.py` told everyone that bumping a schema needs an entry in
+# `profiles.migration`, and there is no such module.
+# ---------------------------------------------------------------------------
+
+#: Dotted names in docstrings that belong to something other than this package.
+_NOT_OURS = {
+    "sys.boot_completed",
+    "dev.bootcomplete",
+    "persist.waydroid.width",
+    "persist.waydroid.height",
+    "persist.waydroid.multi_windows",
+    "os.replace",
+    "os.environ",
+    "os.fsync",
+    "os.access",
+    "os.open",
+    "os.close",
+    "os.putenv",
+    "subprocess.Popen",
+    "subprocess.run",
+    "json.dumps",
+    "json.loads",
+    "urllib.request",
+    "dataclasses.field",
+    "pathlib.Path",
+    "tempfile.mkstemp",
+    "contextlib.suppress",
+    "unittest.mock",
+}
+
+
+def _our_module_names() -> set[str]:
+    """Every dotted name that resolves to a module in this package."""
+    names: set[str] = set()
+    for path in SRC.rglob("*.py"):
+        parts = list(path.relative_to(SRC).with_suffix("").parts)
+        if parts[-1] == "__init__":
+            parts = parts[:-1]
+        for depth in range(1, len(parts) + 1):
+            names.add(".".join(parts[:depth]))
+    return names
+
+
+class TestDocstringModuleReferences:
+    def test_every_internal_module_a_docstring_names_resolves(self) -> None:
+        """Resolve the name the way a reader would: import it.
+
+        Importing is the only precise test of "this name exists": checking
+        membership in a set of file names cannot tell `profiles.codec.migrate`
+        (a function) from `profiles.migration` (a module that was never
+        written).
+        """
+        tops = {name.split(".")[0] for name in _our_module_names()}
+        broken: list[str] = []
+        for path in sorted(SRC.rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            for name in re.findall(r"``([a-z][a-z_]*(?:\.[a-z_][a-z_]*)+)``", source):
+                if name in _NOT_OURS or name.split(".")[0] not in tops:
+                    continue
+                if not _resolves(name):
+                    broken.append(f"{path.relative_to(SRC)} -> {name}")
+        assert broken == [], "docstrings name modules that do not exist: " + "; ".join(broken)
+
+    def test_the_scanner_finds_module_names_at_all(self) -> None:
+        """Otherwise the check above passes because it sees nothing."""
+        tops = {name.split(".")[0] for name in _our_module_names()}
+        found = 0
+        for path in sorted(SRC.rglob("*.py")):
+            source = path.read_text(encoding="utf-8")
+            for name in re.findall(r"``([a-z][a-z_]*(?:\.[a-z_][a-z_]*)+)``", source):
+                if name not in _NOT_OURS and name.split(".")[0] in tops:
+                    found += 1
+        assert found > 0, "no internal module references were found to check"
+
+
+def _resolves(dotted: str) -> bool:
+    """True when ``lynxdroid.<dotted>`` names something that exists.
+
+    A name is not missing just because importing it failed: the GUI modules
+    need PySide6, which a headless CI machine does not have, so importing
+    ``gui.overlay`` raises ImportError for libGL. The file's existence
+    answers the question the docstring raises; the attribute check covers
+    ``profiles.codec.migrate``.
+    """
+    import importlib
+
+    if _spec_exists(f"lynxdroid.{dotted}"):
+        return True
+    parts = dotted.split(".")
+    for split in range(len(parts) - 1, 0, -1):
+        module_name = ".".join(["lynxdroid", *parts[:split]])
+        if not _spec_exists(module_name):
+            continue
+        try:
+            module = importlib.import_module(module_name)
+        except Exception:
+            return True
+        return all(hasattr(module, name) for name in parts[split:])
+    return False
+
+
+def _spec_exists(module_name: str) -> bool:
+    """``find_spec`` for a name that may be an attribute, not a module.
+
+    ``find_spec("pkg.module.attribute")`` raises rather than returning None
+    when the parent is not a package, so a missing name must not be allowed
+    to look like a broken check.
+    """
+    import importlib.util
+
+    try:
+        return importlib.util.find_spec(module_name) is not None
+    except (AttributeError, ImportError, ValueError):
+        return False
