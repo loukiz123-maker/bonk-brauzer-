@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 
 from lynxdroid.core.errors import LynxError
 from lynxdroid.input.channels import Capabilities as ChannelCapabilities
-from lynxdroid.input.channels import Channel, select_channel
+from lynxdroid.input.channels import Channel, ChannelKind, select_channel
 from lynxdroid.input.events import FrameStats, TouchEvent
 
 
@@ -43,6 +43,28 @@ def format_latency_ms(value_ms: float) -> str:
     return f"{value_ms:.3f} ms"
 
 
+#: ``input_mode`` setting -> the channel the user asked for.
+#:
+#: ``auto`` is deliberately absent: it means "no preference", which the
+#: selector expresses as ``None`` and resolves by capability, not by order.
+INPUT_MODES: dict[str, ChannelKind | None] = {
+    "auto": None,
+    "agent": ChannelKind.AGENT,
+    "adb": ChannelKind.ADB_SHELL,
+    "none": ChannelKind.NULL,
+}
+
+
+def channel_for_mode(mode: str) -> ChannelKind | None:
+    """Translate an ``input_mode`` setting into a selector preference.
+
+    An unknown value is not guessed at: it buys ``auto`` and a warning, the
+    same treatment the rest of the settings get, because a typo in a config
+    file must not silently disable input.
+    """
+    return INPUT_MODES.get(mode)
+
+
 @dataclass
 class InputPipeline:
     """Delivers engine output to a channel and records what happened."""
@@ -61,9 +83,17 @@ class InputPipeline:
         self.notes.extend(notes)
         return channel.capabilities()
 
-    def choose(self, *, agent_socket: str | None = None) -> ChannelCapabilities:
-        """Pick a channel with the real selector, keeping its warnings."""
-        choice = select_channel(agent_socket=agent_socket)
+    def choose(
+        self, *, agent_socket: str | None = None, prefer: ChannelKind | None = None
+    ) -> ChannelCapabilities:
+        """Pick a channel with the real selector, keeping its warnings.
+
+        ``prefer`` comes from the ``input_mode`` setting. It used to be
+        accepted by ``select_channel`` and never passed by anyone, so the
+        setting had no effect: choosing "adb only" still tried the agent
+        first.
+        """
+        choice = select_channel(agent_socket=agent_socket, prefer=prefer)
         return self.attach(choice.channel, notes=tuple(choice.warnings))
 
     @property

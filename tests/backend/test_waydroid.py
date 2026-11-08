@@ -59,7 +59,17 @@ def ok(text: str = "") -> proc.RunResult:
 
 @pytest.fixture()
 def backend(monkeypatch) -> WaydroidBackend:
-    instance = WaydroidBackend(BackendConfig(binary="/usr/bin/waydroid"))
+    """A backend whose two opt-ins are ON, so each test states one thing.
+
+    The defaults are off - that is the product's promise - and the default
+    path has its own tests. Enabling them here keeps the other 40 tests about
+    parsing, not about consent.
+    """
+    instance = WaydroidBackend(
+        BackendConfig(
+            binary="/usr/bin/waydroid", allow_service_control=True, allow_prop_writes=True
+        )
+    )
     monkeypatch.setattr("lynxdroid.backend.waydroid.pf.waydroid_install", lambda: _install_stub())
     monkeypatch.setattr(
         "lynxdroid.backend.waydroid.pf.systemd_state", lambda _unit: ("active", "running")
@@ -566,3 +576,71 @@ class TestConsentCannotBeFaked:
         with pytest.raises(ValueError):
             user_consented("   ")
         assert "viewport" in user_consented("viewport to 1920x1080").describe()
+
+
+class TestOptInsAreOffByDefault:
+    """SECURITY.md promised opt-ins that the code never checked.
+
+    `allow_service_control` and `allow_prop_writes` were saved, clamped and
+    never read, so `systemctl start` ran and properties were written as long
+    as some caller passed consent. The settings said "off"; the code said
+    "yes, please".
+    """
+
+    def _strict(self) -> WaydroidBackend:
+        return WaydroidBackend(BackendConfig(binary="/usr/bin/waydroid"))
+
+    def test_starting_the_container_unit_requires_the_opt_in(self, monkeypatch) -> None:
+        backend = self._strict()
+        monkeypatch.setattr(
+            "lynxdroid.backend.waydroid.pf.waydroid_install", lambda: _install_stub()
+        )
+        monkeypatch.setattr(
+            "lynxdroid.backend.waydroid.pf.systemd_state", lambda _unit: ("inactive", "dead")
+        )
+        ran: list[tuple[str, ...]] = []
+        monkeypatch.setattr(
+            "lynxdroid.backend.waydroid.proc.run",
+            lambda argv, **kw: ran.append(tuple(argv)) or ok(""),
+        )
+
+        with pytest.raises(BackendError, match="needs root") as caught:
+            backend._ensure_container()
+
+        assert caught.value.code == "service-control-disabled"
+        assert "systemctl start waydroid-container.service" in (caught.value.hint or "")
+        assert ran == [], f"a root command was attempted without the opt-in: {ran}"
+
+    def test_writing_a_property_requires_the_opt_in(self, monkeypatch) -> None:
+        backend = self._strict()
+        ran: list[tuple[str, ...]] = []
+        monkeypatch.setattr(
+            "lynxdroid.backend.waydroid.proc.run",
+            lambda argv, **kw: ran.append(tuple(argv)) or ok(""),
+        )
+
+        with pytest.raises(BackendError) as caught:
+            backend.set_prop("persist.waydroid.width", "1280", consent=_consent())
+
+        assert caught.value.code == "prop-writes-disabled"
+        assert ran == [], f"a property was written without the opt-in: {ran}"
+
+    def test_the_defaults_match_what_the_settings_say(self) -> None:
+        """The two defaults must not drift apart again."""
+        from lynxdroid.backend.waydroid import config_for
+        from lynxdroid.settings import Settings
+
+        settings = Settings()
+        config = config_for(settings)
+        assert settings.allow_service_control is False
+        assert settings.allow_prop_writes is False
+        assert config.allow_service_control is settings.allow_service_control
+        assert config.allow_prop_writes is settings.allow_prop_writes
+
+    def test_turning_it_on_in_the_settings_reaches_the_backend(self) -> None:
+        from lynxdroid.backend.waydroid import config_for
+        from lynxdroid.settings import Settings
+
+        config = config_for(Settings(allow_service_control=True, allow_prop_writes=True))
+        assert config.allow_service_control is True
+        assert config.allow_prop_writes is True

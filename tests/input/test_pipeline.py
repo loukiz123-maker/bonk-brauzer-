@@ -11,9 +11,14 @@ from __future__ import annotations
 
 import pytest
 
-from lynxdroid.input.channels import NullChannel
+from lynxdroid.input.channels import ChannelKind, NullChannel
 from lynxdroid.input.events import Action, InputError, TouchEvent
-from lynxdroid.input.pipeline import InputPipeline, format_latency_ms
+from lynxdroid.input.pipeline import (
+    INPUT_MODES,
+    InputPipeline,
+    channel_for_mode,
+    format_latency_ms,
+)
 
 
 def events(*specs: tuple[str, int, float, float]) -> list[TouchEvent]:
@@ -273,3 +278,47 @@ class TestPerformanceIsNotOverclaimed:
     def test_stats_are_plain_counters(self, field: str) -> None:
         pipeline = InputPipeline()
         assert hasattr(pipeline.stats, field)
+
+
+class TestInputModeIsHonoured:
+    """`input_mode` was a setting with no reader.
+
+    Settings clamped it to auto|agent|adb|none, saved it, and handed it to
+    the GUI, which passed only the socket path to the selector. Choosing
+    "adb" therefore behaved exactly like "auto": the agent was tried first,
+    found, and used.
+    """
+
+    def test_every_documented_mode_has_a_translation(self) -> None:
+        assert set(INPUT_MODES) == {"auto", "agent", "adb", "none"}
+
+    def test_agent_means_agent_first(self) -> None:
+        assert channel_for_mode("agent") is ChannelKind.AGENT
+
+    def test_adb_means_the_adb_channel(self) -> None:
+        assert channel_for_mode("adb") is ChannelKind.ADB_SHELL
+
+    def test_none_means_the_silent_sink(self) -> None:
+        assert channel_for_mode("none") is ChannelKind.NULL
+
+    def test_auto_expresses_no_preference(self) -> None:
+        """Not "prefer agent": auto is resolved by capability, not by order."""
+        assert channel_for_mode("auto") is None
+
+    def test_an_unknown_mode_does_not_disable_input(self) -> None:
+        """A typo in a config file must not silently mute the overlay."""
+        assert channel_for_mode("adbb") is None
+
+    def test_the_pipeline_forwards_the_preference(self, monkeypatch) -> None:
+        """The setting must reach the selector, not stop at the pipeline."""
+        seen: list[ChannelKind | None] = []
+
+        def spy(**kwargs):
+            seen.append(kwargs.get("prefer"))
+            raise AssertionError("stop after recording the call")
+
+        monkeypatch.setattr("lynxdroid.input.pipeline.select_channel", spy)
+        pipeline = InputPipeline()
+        with pytest.raises(AssertionError):
+            pipeline.choose(prefer=ChannelKind.ADB_SHELL)
+        assert seen == [ChannelKind.ADB_SHELL]

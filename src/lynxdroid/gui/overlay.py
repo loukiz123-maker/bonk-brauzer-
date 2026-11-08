@@ -53,6 +53,9 @@ class GameSurface(QWidget):
     #: Aim mode started/stopped (locked to a mouse element or released).
     aim_active = Signal(bool)
 
+    #: Whether the letterbox size is drawn next to the surface.
+    _show_bar_labels: bool = True
+
     def __init__(self, palette: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._palette = palette
@@ -118,6 +121,17 @@ class GameSurface(QWidget):
             display_name=self._geometry.display_name,
         )
         self.update()
+
+    def set_bar_labels(self, enabled: bool) -> None:
+        """Show or hide the size of the letterbox bars.
+
+        `show_bar_thickness` was a setting nothing read. The bars themselves
+        stay: they are where touches are refused, so hiding them would hide
+        the boundary the user needs to see.
+        """
+        if enabled != self._show_bar_labels:
+            self._show_bar_labels = enabled
+            self.update()
 
     def set_fit_mode(self, fit: str) -> None:
         from lynxdroid.display.geometry import FitMode
@@ -194,6 +208,7 @@ class GameSurface(QWidget):
             selected_id=self._selected_id,
             grid=self._show_grid,
             editor_mode=self._editor_mode,
+            bar_labels=self._show_bar_labels,
         )
         painter.end()
 
@@ -300,6 +315,7 @@ def paint_surface(
     selected_id: str | None = None,
     grid: bool = False,
     editor_mode: bool = False,
+    bar_labels: bool = True,
 ) -> None:
     active = active_ids or set()
     content = geometry.content_rect()
@@ -317,6 +333,9 @@ def paint_surface(
     painter.fillRect(area, QColor(palette.surface))
     painter.setPen(QPen(QColor(palette.border), 1))
     painter.drawRect(area)
+
+    if bar_labels and geometry.has_bars():
+        _paint_bar_labels(painter, geometry, palette)
 
     if grid:
         _paint_grid(painter, area, palette)
@@ -338,6 +357,45 @@ def paint_surface(
 
     if not editor_mode:
         _paint_hint(painter, area, palette, profile)
+
+
+def _paint_bar_labels(painter: QPainter, geometry: ViewportGeometry, palette: Palette) -> None:
+    """Write each bar's thickness where that bar is, in logical pixels.
+
+    The bars are painted black on purpose: they mark the region where a press
+    is refused. Their size is the thing a user adjusts a fit mode to change,
+    and it was invisible until this setting was given a reader.
+    """
+    bars = geometry.bars()
+    painter.setPen(QColor(palette.text_muted))
+    font = painter.font()
+    font.setPointSizeF(max(7.0, font.pointSizeF() - 2))
+    painter.setFont(font)
+    surface = geometry.surface
+    if bars["top"] > 12:
+        painter.drawText(
+            QRectF(0, 0, surface.width, bars["top"]),
+            Qt.AlignmentFlag.AlignCenter,
+            f"top {bars['top']} px",
+        )
+    if bars["bottom"] > 12:
+        painter.drawText(
+            QRectF(0, surface.height - bars["bottom"], surface.width, bars["bottom"]),
+            Qt.AlignmentFlag.AlignCenter,
+            f"bottom {bars['bottom']} px",
+        )
+    if bars["left"] > 12:
+        painter.drawText(
+            QRectF(0, 0, bars["left"], surface.height),
+            Qt.AlignmentFlag.AlignCenter,
+            f"{bars['left']}",
+        )
+    if bars["right"] > 12:
+        painter.drawText(
+            QRectF(surface.width - bars["right"], 0, bars["right"], surface.height),
+            Qt.AlignmentFlag.AlignCenter,
+            f"{bars['right']}",
+        )
 
 
 def _paint_grid(painter: QPainter, area: QRectF, palette: Palette) -> None:

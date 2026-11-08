@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (659) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (708) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -114,7 +114,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 659 tests, no display needed
+pytest                               # 708 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -133,6 +133,17 @@ lynxdroid display presets        # 6. viewport options
 lynxdroid display set 1280 720 240 --yes
 lynxdroid gui                    # 7. the window
 ```
+
+To start the window from the application menu instead of a terminal:
+
+```bash
+./scripts/install-desktop-entry.sh          # user-level, no sudo
+./scripts/install-desktop-entry.sh --remove
+```
+
+The entry is written to `$XDG_DATA_HOME/applications` with an `Exec` line that
+names the interpreter which can actually import the package, so it keeps
+working from a session where no virtualenv is active.
 
 `lynxdroid start` waits for `sys.boot_completed=1` inside the guest. A running
 session process is **not** reported as "Android running" - see `Snapshot`
@@ -189,7 +200,7 @@ silently producing taps that make a game unplayable.
 | `lynxdroid profiles list/validate/export/rename/import/delete` | layout profiles, atomic writes |
 | `lynxdroid image plan/prepare` | OTA images: consent, checksum honesty, never writes `/var/lib` |
 | `lynxdroid perf` | times our own pipeline in µs; states what it did **not** measure |
-| `lynxdroid gui` | PySide6 shell |
+| `lynxdroid gui` | PySide6 shell (also installed as `lynxdroid-gui`) |
 | `lynxdroid version --json` | version and schema numbers |
 
 Exit codes are documented in `--help`: `0` ok, `1` failure, `2` usage,
@@ -215,6 +226,7 @@ threat model: [`docs/SECURITY.md`](docs/SECURITY.md).
 | [`docs/SECURITY.md`](docs/SECURITY.md) | trust boundaries, privileged paths, threat model |
 | [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | every limitation, honestly |
 | [`docs/CLI.md`](docs/CLI.md) | full command and exit-code reference |
+| [`docs/SETTINGS.md`](docs/SETTINGS.md) | every setting, its default, and the module that reads it |
 | [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | what was measured, in µs; what was not measured and why |
 | [`docs/ROADMAP.md`](docs/ROADMAP.md) | stage-by-stage state against the 20-stage plan |
 | [`android_agent/README.md`](android_agent/README.md) | the Android-side touch agent and its protocol |

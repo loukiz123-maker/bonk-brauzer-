@@ -57,9 +57,34 @@ class BackendConfig:
     binary: str | None = None
     service_unit: str = "waydroid-container.service"
     status_timeout_s: float = 10.0
-    #: Never used unless the user explicitly opts in (stage 4).
+    #: Starting our own *user* session is allowed by default: it runs as the
+    #: user and is the normal way a session comes up.
     allow_session_start: bool = True
+    #: Starting the root-owned container unit is **not** allowed by default.
+    #: Settings has promised this ("root actions require opt-in") since the
+    #: beginning while the code called `systemctl start` regardless.
+    allow_service_control: bool = False
+    #: Whether this process may write persistent Android properties at all.
+    #: Settings has promised a separate opt-in for this; a `Consent` says the
+    #: user agreed *now*, this says the feature is enabled *at all*.
+    allow_prop_writes: bool = False
     image_dir: Path = Path("/var/lib/waydroid/images")
+
+
+def config_for(settings: object) -> BackendConfig:
+    """Build the adapter configuration from the user's settings.
+
+    This lives in ``backend`` because the dependency rule forbids
+    ``settings`` from importing ``backend``. Keeping it here also means the
+    defaults in :class:`BackendConfig` and the fields in ``Settings`` are read
+    in one place instead of each call site inventing its own config - which
+    is how ``allow_service_control`` came to be saved and ignored.
+    """
+    return BackendConfig(
+        allow_service_control=bool(getattr(settings, "allow_service_control", False)),
+        allow_prop_writes=bool(getattr(settings, "allow_prop_writes", False)),
+        allow_session_start=bool(getattr(settings, "allow_session_start", True)),
+    )
 
 
 class WaydroidBackend(AndroidBackend):
@@ -426,8 +451,19 @@ class WaydroidBackend(AndroidBackend):
                 f"cannot determine container service state ({detail})",
                 code="service-unknown",
             )
-        # Starting the unit needs root. We do not escalate silently: we try the
-        # non-interactive path and report precisely why it failed.
+        # Starting the unit needs root, and the user has to have said yes:
+        # `allow_service_control` was a setting nothing read, so the promise
+        # in SECURITY.md ("root actions require opt-in") was not kept by the
+        # code. Without the opt-in the user is told the exact command instead.
+        if not self._config.allow_service_control:
+            raise BackendError(
+                f"container service is {state}; starting it needs root and is not enabled",
+                code="service-control-disabled",
+                hint=f"run 'systemctl start {self._config.service_unit}' yourself, "
+                "or enable allow_service_control in the settings",
+            )
+        # We do not escalate silently: we try the non-interactive path and
+        # report precisely why it failed.
         result = self._systemctl("start", self._config.service_unit)
         if result.ok:
             self._lifecycle.set_readiness("container", Readiness.READY)
@@ -675,6 +711,13 @@ class WaydroidBackend(AndroidBackend):
         # isinstance, not "is None": the annotation is not enforced at run
         # time, so a caller passing the old `consent=True` must still be
         # refused rather than silently believed.
+        if not self._config.allow_prop_writes:
+            raise BackendError(
+                f"writing {name} is disabled",
+                code="prop-writes-disabled",
+                hint="enable allow_prop_writes in the settings; a per-change "
+                "confirmation is not a substitute for enabling the feature",
+            )
         if not isinstance(consent, Consent):
             raise BackendError(
                 f"refusing to change {name} without explicit consent",

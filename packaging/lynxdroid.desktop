@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LynxDroid
+GenericName=Android on Linux
+Comment=Run Android apps in a Window, driven by Waydroid
+Exec=lynxdroid-gui
+Icon=lynxdroid
+Terminal=false
+Categories=System;Emulator;
+Keywords=android;waydroid;emulator;container;
+StartupNotify=true
+StartupWMClass=LynxDroid

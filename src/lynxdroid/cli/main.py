@@ -327,13 +327,13 @@ def cmd_doctor(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) 
 
 
 def _backend(args: argparse.Namespace, settings_store: SettingsStore) -> AndroidBackend:
-    from lynxdroid.backend.waydroid import BackendConfig, FakeBackend, WaydroidBackend
+    from lynxdroid.backend.waydroid import FakeBackend, WaydroidBackend, config_for
 
     settings, _ = settings_store.load()
     kind = getattr(args, "backend", None) or settings.backend
     if kind == "fake":
         return FakeBackend()
-    return WaydroidBackend(BackendConfig())
+    return WaydroidBackend(config_for(settings))
 
 
 def cmd_status(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

@@ -60,7 +60,7 @@ from lynxdroid.backend.contract import (
     Snapshot,
     user_consented,
 )
-from lynxdroid.backend.waydroid import BackendConfig, FakeBackend, WaydroidBackend
+from lynxdroid.backend.waydroid import FakeBackend, WaydroidBackend, config_for
 from lynxdroid.core.diagnostics import Report
 from lynxdroid.core.logging_setup import get
 from lynxdroid.core.paths import AppPaths
@@ -74,7 +74,7 @@ from lynxdroid.gui.workers import Poller, TaskRunner
 from lynxdroid.input.channels import Capabilities as ChannelCapabilities
 from lynxdroid.input.engine import InputEngine
 from lynxdroid.input.events import TouchEvent
-from lynxdroid.input.pipeline import InputPipeline
+from lynxdroid.input.pipeline import InputPipeline, channel_for_mode
 from lynxdroid.profiles.model import Profile, ReferenceResolution
 from lynxdroid.profiles.store import ProfileStore
 from lynxdroid.settings import SettingsStore
@@ -113,11 +113,14 @@ class MainWindow(QMainWindow):
         self._banner_widgets: list[QWidget] = []
 
         kind = backend_kind or self._settings.backend
-        self._backend = FakeBackend() if kind == "fake" else WaydroidBackend(BackendConfig())
+        self._backend = (
+            FakeBackend() if kind == "fake" else WaydroidBackend(config_for(self._settings))
+        )
 
         self.setWindowTitle(f"LynxDroid — {version_string()}")
         self.setMinimumSize(QSize(1000, 640))
         self._build_ui()
+        self._surface.set_bar_labels(self._settings.show_bar_thickness)
         self._apply_theme()
         self._load_profiles()
 
@@ -314,6 +317,13 @@ class MainWindow(QMainWindow):
         fit_row = QHBoxLayout()
         self._fit_combo = QComboBox()
         self._fit_combo.addItems(["contain", "fill", "integer"])
+        # The saved value was never restored: the box always started at
+        # "contain", so a user who chose "integer" got it back as "contain"
+        # on the next launch while the file still said "integer".
+        saved_fit = self._settings.fit_mode
+        if saved_fit in {"contain", "fill", "integer"}:
+            self._fit_combo.setCurrentText(saved_fit)
+            self._surface.set_fit_mode(saved_fit)
         self._fit_combo.currentTextChanged.connect(self._on_fit_changed)
         fit_row.addWidget(QLabel("scale"))
         fit_row.addWidget(self._fit_combo, 1)
@@ -626,7 +636,13 @@ class MainWindow(QMainWindow):
         """Open the touch transport once, and report honestly what we got."""
         if self._pipeline.channel is not None:
             return
-        self._channel_caps = self._pipeline.choose(agent_socket=self._agent_socket_path())
+        # The `input_mode` setting was written by Settings, clamped, saved and
+        # never read: choosing "adb only" still tried the agent first. It is
+        # passed to the selector now, so the setting does what it says.
+        self._channel_caps = self._pipeline.choose(
+            agent_socket=self._agent_socket_path(),
+            prefer=channel_for_mode(self._settings.input_mode),
+        )
         for warning in self._pipeline.notes:
             self._append_log(warning)
         self._status_channel.setText(f"input: {self._channel_caps.describe()}")
@@ -718,6 +734,10 @@ class MainWindow(QMainWindow):
         super().hideEvent(event)
 
     def showEvent(self, event: QShowEvent) -> None:
+        if self._settings.fullscreen and not self.isFullScreen():
+            # Restored once, on first show: calling showFullScreen before the
+            # window is realised is a no-op on some compositors.
+            self.showFullScreen()
         # Only resume if something is actually worth watching; a stopped
         # backend needs no polling.
         if self._snapshot.state.is_active:
@@ -725,10 +745,18 @@ class MainWindow(QMainWindow):
         super().showEvent(event)
 
     def _toggle_fullscreen(self) -> None:
+        """Toggle full screen and remember the choice.
+
+        The window had a working F11 toggle that forgot itself: the
+        `fullscreen` setting could never be set by the only code that knows,
+        so it was always false and always ignored.
+        """
         if self.isFullScreen():
             self.showNormal()
+            self._save_setting(fullscreen=False)
         else:
             self.showFullScreen()
+            self._save_setting(fullscreen=True)
 
     # ==================================================================
     # display
@@ -955,12 +983,23 @@ class MainWindow(QMainWindow):
             self._surface.set_aim_mode(False)
             return
         active = self._engine.aim_active
-        self._engine.set_realtime_capture(active)
+        # `capture_pointer` is the user's permission for the pointer grab that
+        # aim mode performs. It defaults to off, and aim mode still works -
+        # the pointer is simply not hidden and not captured, so the crosshair
+        # stops at the window edge instead of being warped back.
+        capture_allowed = self._settings.capture_pointer
+        self._engine.set_realtime_capture(active and capture_allowed)
         if active and not self._surface.aim_mode:
             self._set_status(
                 "aim mode: move the mouse to look around, the exit key releases it", 4000
             )
-        self._surface.set_aim_mode(active)
+        self._surface.set_aim_mode(active and capture_allowed)
+        if active and not capture_allowed:
+            self._set_status(
+                "aim mode without pointer capture: enable capture_pointer in the "
+                "settings to keep the pointer inside the window",
+                6000,
+            )
 
     def _discard_unsaved(self) -> None:
         """Ask before silently dropping a moved key when the user switches."""
