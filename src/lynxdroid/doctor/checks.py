@@ -232,6 +232,7 @@ def kernel_report() -> Report:
     devices = pf.binder_devices()
     binderfs = pf.binderfs_mounted()
     module = pf.binder_module_loaded()
+    fs_lists_binder = pf.binder_supported_in_filesystems()
 
     config_android = config.get("CONFIG_ANDROID")
     config_binder_ipc = config.get("CONFIG_ANDROID_BINDER_IPC")
@@ -291,12 +292,22 @@ def kernel_report() -> Report:
     )
 
     # binderfs as a distinct capability: needed by Waydroid's preferred setup.
+    # /proc/filesystems is a second, independent source: distributions often
+    # ship a kernel with no readable config (CONFIG_IKCONFIG unset), and this
+    # file still says whether binderfs is built in.
     if config_binderfs in {"y", "m"}:
         fs_status = Status.OK
         fs_detail = "binderfs available" + (" and mounted" if binderfs else ", not mounted yet")
     elif config_binderfs == "n" and config.source:
         fs_status = Status.WARNING
         fs_detail = "classic /dev/binder devices without binderfs"
+    elif config.source is None and fs_lists_binder:
+        fs_status = Status.OK
+        fs_detail = (
+            "binderfs is in /proc/filesystems"
+            + (" and mounted" if binderfs else ", not mounted yet")
+            + " (kernel config not readable)"
+        )
     elif config.source is None:
         fs_status = Status.UNKNOWN
         fs_detail = "cannot read kernel config; binderfs state unknown"
@@ -310,7 +321,10 @@ def kernel_report() -> Report:
             title="binderfs filesystem",
             status=fs_status,
             detail=fs_detail,
-            observed=f"CONFIG_ANDROID_BINDERFS={config_binderfs or 'unknown'} mounted={binderfs}",
+            observed=(
+                f"CONFIG_ANDROID_BINDERFS={config_binderfs or 'unknown'} "
+                f"in /proc/filesystems={fs_lists_binder} mounted={binderfs}"
+            ),
             next_step=""
             if fs_status is Status.OK
             else "binderfs lets each container get private binder devices; without it the"

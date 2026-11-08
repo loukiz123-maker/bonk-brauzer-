@@ -129,6 +129,8 @@ not trustworthy about anything else.
 | 31 | The status bar's `latency: —` label was created and never updated, so it stayed empty forever | reading the widget list during the same audit | fixed, duplicate label removed |
 | 32 | Choosing a row in the element list did not select the key on the canvas, though clicking the key did select the row | tracing `set_selected`, which nothing called | fixed, both directions now agree |
 | 33 | A test asserted a measured send takes under a microsecond; it passed locally and failed on a loaded CI runner (and on 3.10, where the clock resolves to 1 µs) | the 3.10 CI job | fixed, rendering moved to the pure `format_latency_ms()` |
+| 34 | `binder_supported_in_filesystems()` was never called: on a kernel whose config is unreadable, `doctor` said "cannot tell" while `/proc/filesystems` could have answered | same audit | fixed, the doctor uses it as a second source |
+| 35 | `kernel_report()` - the check that decides whether Android can boot at all on this kernel - had no tests | adding the `/proc/filesystems` branch | covered by `tests/doctor/test_kernel_checks.py` |
 
 ## Environment issues that are not bugs
 
