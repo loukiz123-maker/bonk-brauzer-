@@ -259,3 +259,64 @@ def test_core_modules_import_without_qt(module: str) -> None:
 
     imported = importlib.import_module(module)
     assert imported.__name__ == module
+
+
+# ---------------------------------------------------------------------------
+# SECURITY.md makes claims that are checkable. A claim nobody checks is a
+# comment, and the section on command execution is the one that matters most.
+# ---------------------------------------------------------------------------
+
+PROCESS_APIS = {"Popen", "run", "call", "check_call", "check_output", "SystemExit"}
+
+
+def _calls_in_source() -> dict[str, list[tuple[str, int]]]:
+    """Find real subprocess/os-level process creation, not type annotations."""
+    found: dict[str, list[tuple[str, int]]] = {}
+    for path in sorted(SRC.rglob("*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        for node in ast.walk(tree):
+            # subprocess.Popen(...) / subprocess.run(...)
+            if not isinstance(node, ast.Call):
+                continue
+            func = node.func
+            if not (isinstance(func, ast.Attribute) and isinstance(func.value, ast.Name)):
+                continue
+            module, attr = func.value.id, func.attr
+            if module == "subprocess" and attr in PROCESS_APIS:
+                found.setdefault(str(path.relative_to(SRC)), []).append((attr, node.lineno))
+            # os.system / os.exec* / os.spawn*
+            if module == "os" and (attr.startswith(("exec", "spawn")) or attr == "system"):
+                found.setdefault(str(path.relative_to(SRC)), []).append((f"os.{attr}", node.lineno))
+    return found
+
+
+class TestProcessCreationHasOneHome:
+    def test_only_core_proc_creates_processes(self) -> None:
+        """SECURITY.md §3: ``core/proc.py`` is the only place a subprocess is
+        created. Everything else goes through it, so the argv validation,
+        the environment scrubbing and the timeout apply everywhere."""
+        calls = _calls_in_source()
+        offenders = {path: where for path, where in calls.items() if path != "core/proc.py"}
+        assert offenders == {}, "process creation outside core/proc.py: " + ", ".join(
+            f"{p}:{loc[0][1]}" for p, loc in offenders.items()
+        )
+
+    def test_core_proc_does_create_processes(self) -> None:
+        """The previous test would pass if the scanner were broken."""
+        assert "core/proc.py" in _calls_in_source()
+
+    def test_no_module_uses_shell_true(self) -> None:
+        """A shell would turn every validated argv back into a string to be
+        re-parsed, which is how injection bugs come back."""
+        for path in sorted(SRC.rglob("*.py")):
+            text = path.read_text(encoding="utf-8")
+            tree = ast.parse(text)
+            for node in ast.walk(tree):
+                if isinstance(node, ast.Call):
+                    for keyword in node.keywords:
+                        if keyword.arg == "shell" and not (
+                            isinstance(keyword.value, ast.Constant) and keyword.value.value is False
+                        ):
+                            pytest.fail(
+                                f"{path.name}:{node.lineno} passes shell={ast.dump(keyword.value)}"
+                            )
