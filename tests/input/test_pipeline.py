@@ -262,7 +262,11 @@ class TestPerformanceIsNotOverclaimed:
         pipeline.deliver(events(("down", 1, 0.5, 0.5)))
         text = pipeline.summary()
         assert "0.000 ms" not in text
-        assert "µs" in text or "timer resolution" in text
+        # Deliberately no assertion about which unit appears: on a coarse
+        # clock a single deliver can legitimately measure exactly 1 us and be
+        # rendered as "0.001 ms", which is also honest. Only the forbidden
+        # claim is checked here; the unit choice is pinned by the pure
+        # format_latency_ms() tests above, where it is deterministic.
         assert text.endswith("(not end-to-end)")
 
     @pytest.mark.parametrize("field", ["produced", "latencies_ms"])

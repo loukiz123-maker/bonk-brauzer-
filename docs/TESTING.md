@@ -65,6 +65,25 @@ These are the negative paths from stages 5, 13 and 15:
 * stop requested during start → honoured after the start finishes;
 * writing a property without consent → `BackendError`.
 
+### Nothing in tier 1 may depend on how fast the machine is
+
+Two tests were written against a real measurement and both passed locally
+while failing on a loaded CI runner: one assumed a single `deliver()` takes
+under a microsecond, the other assumed it does not round to exactly 1 µs. The
+clock decides that, not the code.
+
+The rule that came out of it:
+
+* formatting and rounding decisions belong in pure functions
+  (`format_latency_ms`, `perf.percentile`) and are pinned there with literal
+  inputs;
+* a test on the integration path may assert only what is true regardless of
+  speed — that a value exists, that the forbidden `0.000 ms` string never
+  appears, that the line ends with its caveat;
+* a bound on wall-clock time is allowed only with generous slack and only to
+  prove something did *not* happen (a dry run did not sleep 2 s), never to
+  prove how fast something was.
+
 ## Tier 2 — integration on the target laptop
 
 Run on CachyOS with Waydroid installed, in a KDE Plasma **Wayland** session.
