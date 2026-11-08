@@ -164,7 +164,10 @@ class InputEngine:
         if element.type is ElementType.DPAD:
             return [key for key in element.dpad_keys if key]
         if element.type is ElementType.MOUSE:
-            return [element.exit_key] if element.exit_key else []
+            # The grab key (``keys``) starts aim mode; the exit key ends it.
+            # key_conflicts() already counts both, so the engine must too, or
+            # a profile can warn about a conflict the engine cannot produce.
+            return [*element.keys, element.exit_key] if element.exit_key else list(element.keys)
         raise AssertionError(f"unhandled element type {element.type!r}")
 
     @property
@@ -300,12 +303,28 @@ class InputEngine:
         return [event]
 
     def _move(self, binding: _Binding, timestamp: int) -> list[TouchEvent]:
-        contact = self._contact_for(binding, create=True, timestamp=timestamp)
+        # Whether the contact already existed decides the first action: a new
+        # one must open with DOWN. _contact_for() emits that DOWN, so it has to
+        # be returned here as well - callers deliver the returned list, and a
+        # DOWN left behind in the queue never reaches Android.
+        contact = self._contact_for(binding)
+        opening: TouchEvent | None = None
         if contact is None:
-            return []
+            contact = self._contact_for(binding, create=True)
+            if contact is None:
+                return []
+            opening = self._emit(
+                Action.DOWN,
+                contact.pointer,
+                contact.x,
+                contact.y,
+                timestamp,
+                binding.element.id,
+            )
         x, y = self._mouse_point(binding)
         contact.x, contact.y = x, y
-        return [self._emit(Action.MOVE, contact.pointer, x, y, timestamp, binding.element.id)]
+        events = [self._emit(Action.MOVE, contact.pointer, x, y, timestamp, binding.element.id)]
+        return [opening, *events] if opening is not None else events
 
     def _dpad_key(
         self,
@@ -538,6 +557,15 @@ class InputEngine:
     @property
     def realtime_capture(self) -> bool:
         return self._realtime_capture
+
+    @property
+    def aim_active(self) -> bool:
+        """True while a mouse element is holding the pointer.
+
+        The GUI asks this before capturing the pointer: capturing on a guess
+        would hide the cursor and swallow motion for a key that only taps.
+        """
+        return any(b.mouse_active for b in self._bindings.values())
 
     # ------------------------------------------------------------------
     # Diagnostics

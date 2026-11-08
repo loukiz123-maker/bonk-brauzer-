@@ -48,6 +48,10 @@ class GameSurface(QWidget):
     element_selected = Signal(str)
     #: Editor mode: an element was dragged to a new normalised position.
     element_moved = Signal(str, float, float)
+    #: Aim mode: raw relative motion while the pointer is captured.
+    pointer_moved_by = Signal(float, float)
+    #: Aim mode started/stopped (locked to a mouse element or released).
+    aim_active = Signal(bool)
 
     def __init__(self, palette: Palette, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -56,6 +60,9 @@ class GameSurface(QWidget):
         self._profile: Profile | None = None
         self._active_ids: set[str] = set()
         self._selected_id: str | None = None
+        #: Aim mode: the pointer is hidden, captured and reported relatively.
+        self._aim = False
+        self._aim_last = QPointF()
         self._show_grid = False
         self._editor_mode = False
         self._drawing = False
@@ -142,6 +149,33 @@ class GameSurface(QWidget):
         self._editor_mode = enabled
         self.update()
 
+    def set_aim_mode(self, enabled: bool) -> None:
+        """Capture the pointer for aim mode, or hand it back.
+
+        Capture is what makes relative motion usable: without it the pointer
+        leaves the window and the aim stops. It is also a promise to the user,
+        so the cursor is hidden only while captured and every exit path - the
+        exit key, lost focus, a profile switch - must call this with False.
+        """
+        if enabled == self._aim:
+            return
+        self._aim = enabled
+        if enabled:
+            self._aim_last = QPointF(self.rect().center())
+            self.setCursor(Qt.CursorShape.BlankCursor)
+            self.grabMouse()
+            # Park the pointer in the middle so the next motion has room in
+            # every direction instead of hitting a window edge.
+            self.cursor().setPos(self.mapToGlobal(self.rect().center()))
+        else:
+            self.releaseMouse()
+            self.unsetCursor()
+        self.aim_active.emit(enabled)
+
+    @property
+    def aim_mode(self) -> bool:
+        return self._aim
+
     def set_show_grid(self, enabled: bool) -> None:
         self._show_grid = enabled
         self.update()
@@ -208,6 +242,15 @@ class GameSurface(QWidget):
                         if updated is not None:
                             self.element_moved.emit(updated.id, updated.x, updated.y)
                         self.update()
+            return
+        if self._aim:
+            # Captured: the cursor is invisible and parked; only the motion
+            # between two positions means anything to the game.
+            dx = point.x() - self._aim_last.x()
+            dy = point.y() - self._aim_last.y()
+            self._aim_last = point
+            if dx or dy:
+                self.pointer_moved_by.emit(dx, dy)
             return
         mapped = self._geometry.widget_to_android(point.x(), point.y())
         self.setCursor(Qt.CursorShape.CrossCursor if mapped else Qt.CursorShape.ArrowCursor)

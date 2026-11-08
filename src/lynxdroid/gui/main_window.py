@@ -139,6 +139,7 @@ class MainWindow(QMainWindow):
         self._surface = GameSurface(palette_for(self._settings.theme))
         self._surface.element_selected.connect(self._on_element_selected)
         self._surface.element_moved.connect(self._on_element_moved)
+        self._surface.pointer_moved_by.connect(self._on_pointer_moved)
         self._surface.touch_pressed.connect(self._on_touch_pressed)
         self._surface.touch_moved.connect(self._on_touch_moved)
         self._surface.touch_released.connect(self._on_touch_released)
@@ -609,7 +610,14 @@ class MainWindow(QMainWindow):
         return str(candidate) if candidate.exists() else None
 
     def _deliver(self, events: list[TouchEvent]) -> None:
-        """Send engine output to Android through the tested pipeline."""
+        """Send engine output to Android through the tested pipeline.
+
+        The aim capture is re-checked here because every path that starts or
+        ends a mouse hold goes through this method - the engine has just
+        updated its state, so this is the one place that sees all of them.
+        """
+        if self._engine is not None:
+            self._sync_aim_mode()
         if self._pipeline.channel is None:
             self._ensure_channel()
         if not events:
@@ -662,6 +670,8 @@ class MainWindow(QMainWindow):
         if self._settings.release_on_focus_loss and self._engine is not None:
             released = self._engine.focus_lost()
             self._surface.set_active_elements(set())
+            # A captured pointer must never survive the window losing focus.
+            self._sync_aim_mode()
             if released:
                 log.info("released %d contact(s) on focus loss", len(released))
         super().focusOutEvent(event)
@@ -855,6 +865,33 @@ class MainWindow(QMainWindow):
         self._render_elements()
         self._save_profile_button.setEnabled(self._editor.dirty)
         self._set_status(f"{element_id}: {x:.3f}, {y:.3f} (unsaved)", 4000)
+
+    def _on_pointer_moved(self, dx: float, dy: float) -> None:
+        """Aim mode: hand relative motion to the engine, which owns the maths."""
+        if self._engine is None or not self._surface.aim_mode:
+            return
+        events = self._engine.mouse_delta(dx, dy)
+        if events:
+            self._deliver(events)
+
+    def _sync_aim_mode(self) -> None:
+        """Captured exactly while a mouse element is held, never otherwise.
+
+        Capture is intrusive - the pointer is hidden and every motion goes to
+        the game - so it must end for every reason the hold can end: the exit
+        key, focus loss, a profile change, a stop. The engine is the one
+        authority on whether a hold is in progress.
+        """
+        if self._engine is None:
+            self._surface.set_aim_mode(False)
+            return
+        active = self._engine.aim_active
+        self._engine.set_realtime_capture(active)
+        if active and not self._surface.aim_mode:
+            self._set_status(
+                "aim mode: move the mouse to look around, the exit key releases it", 4000
+            )
+        self._surface.set_aim_mode(active)
 
     def _discard_unsaved(self) -> None:
         """Ask before silently dropping a moved key when the user switches."""

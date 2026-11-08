@@ -101,12 +101,12 @@ high-speed camera or a photodiode and is not claimed.
 | 12 | `doctor` on a non-Arch distro reports `pkgmanager=apt` and warns | none, it is honest | ignore on Arch/CachyOS |
 | 13 | `Poller` keeps polling every 2 s while stopped | negligible CPU, one small subprocess every 2 s | none needed |
 | 14 | Overlay is drawn over the reference plate, not over live Android video | keys appear on our plate while Android shows in its own window | use the plate for positioning, verify in-game |
-| 15 | Drag-and-drop, selection and reset exist in `gui/editor.py` (37 tests) but have **never been exercised by a real mouse** — no Qt here | a drag may still behave differently under a real compositor | first thing to try on the laptop |
+| 15 | Drag-and-drop, selection and reset exist in `gui/editor.py` (40 tests) but have **never been exercised by a real mouse** — no Qt here | a drag may still behave differently under a real compositor | first thing to try on the laptop |
 | 16 | D-pad analog mode (`analog_dpad`) has no GUI control | only keyboard-driven d-pad in the UI | API only |
-| 17 | Mouse aim mode is implemented in the engine but not exposed in the UI | unusable for now | API only |
-| 19 | The layout editor writes nothing until you press Save, and asks before discarding | one extra click | intended, but untested with a human |
-| 20 | `realtime_capture` is never called: the window never requests pointer capture | aim mode cannot work even if exposed | needs stage 8 work on the laptop |
+| 17 | Mouse aim mode is wired end to end (key grabs, motion is delivered, exit key releases) but has **never been tried with a real mouse or against a real game** | relative-motion scaling under a compositor is guesswork until measured | first thing to try on the laptop |
 | 18 | `FakeBackend` is selectable with `--backend fake` in the GUI | could confuse a first-time user | it is labelled "test backend" everywhere |
+| 19 | The layout editor writes nothing until you press Save, and asks before discarding | one extra click | intended, but untested with a human |
+| 20 | Pointer capture (`grabMouse`) is requested from the canvas and released on focus loss, exit key and profile switch — but only Qt's behaviour on the target compositor can confirm it really captures | if capture fails, the cursor will leave the window mid-aim | verify on the laptop |
 
 ## Defects found during development, kept on the record
 
@@ -128,10 +128,12 @@ not trustworthy about anything else.
 | 30 | Every profile command printed a Python traceback when the id named nothing | the rename tests, which used a wrong id | fixed, `ProfileNotFound` is reported as a sentence |
 | 31 | The status bar's `latency: —` label was created and never updated, so it stayed empty forever | reading the widget list during the same audit | fixed, duplicate label removed |
 | 32 | Choosing a row in the element list did not select the key on the canvas, though clicking the key did select the row | tracing `set_selected`, which nothing called | fixed, both directions now agree |
-| 36 | `request_stop_during_start()` changed the detail but published no snapshot, so pressing Stop while STARTING left the screen saying "starting" | tracing `set_detail`, which nothing called on this path | fixed, observers are now told |
 | 33 | A test asserted a measured send takes under a microsecond; it passed locally and failed on a loaded CI runner (and on 3.10, where the clock resolves to 1 µs) | the 3.10 CI job | fixed, rendering moved to the pure `format_latency_ms()` |
 | 34 | `binder_supported_in_filesystems()` was never called: on a kernel whose config is unreadable, `doctor` said "cannot tell" while `/proc/filesystems` could have answered | same audit | fixed, the doctor uses it as a second source |
 | 35 | `kernel_report()` - the check that decides whether Android can boot at all on this kernel - had no tests | adding the `/proc/filesystems` branch | covered by `tests/doctor/test_kernel_checks.py` |
+| 36 | `request_stop_during_start()` changed the detail but published no snapshot, so pressing Stop while STARTING left the screen saying "starting" | tracing `set_detail`, which nothing called on this path | fixed, observers are now told |
+| 37 | Aim mode's first contact opened with MOVE, not DOWN: `_move()` let `_contact_for()` emit the DOWN into the queue but did not return it, and the window delivers only what is returned | writing the aim-mode tests | fixed, Android now sees the touch begin |
+| 38 | The grab key of a mouse element was ignored by the engine while `key_conflicts()` counted it, so a profile could warn about a conflict that could never happen | same tests | fixed, `keys` and `exit_key` are both bound |
 
 ## Environment issues that are not bugs
 

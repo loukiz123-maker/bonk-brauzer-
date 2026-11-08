@@ -408,3 +408,82 @@ def test_unknown_element_type_in_engine_is_safe(profile, geo, clock) -> None:
     engine.analog_dpad("no-such-element", 0.5, 0.5)
     engine.mouse_delta(10, 10)
     assert engine.active_pointers == {}
+
+
+class TestMouseAimMode:
+    """The engine half of aim mode; the pointer capture itself needs Qt."""
+
+    @pytest.fixture()
+    def aim_profile(self, target):
+        mouse = Element(
+            id="aim",
+            type=ElementType.MOUSE,
+            label="Aim",
+            x=0.5,
+            y=0.5,
+            keys=("k",),
+            sensitivity=2.0,
+            exit_key="Escape",
+        )
+        return Profile.new("Aim", target, elements=(mouse,))
+
+    def test_pressing_the_key_starts_a_contact_and_reports_aim(
+        self, aim_profile, geo, clock
+    ) -> None:
+        engine = build(aim_profile, geo, clock)
+        assert engine.aim_active is False
+        events = engine.key_down("k")
+        # DOWN opens the contact; the MOVE that follows puts it where the aim
+        # cursor rests. Android needs the DOWN first or it never sees a touch.
+        assert actions(events) == [("down", 1), ("move", 1)]
+        # The window asks this before it may capture the pointer.
+        assert engine.aim_active is True
+
+    def test_motion_moves_the_contact_that_is_already_down(self, aim_profile, geo, clock) -> None:
+        engine = build(aim_profile, geo, clock)
+        engine.key_down("k")
+        # active_pointers hands out the live contact, so read the numbers now:
+        # holding the object would make "before" change with "after".
+        before = (engine.active_pointers[1].x, engine.active_pointers[1].y)
+        assert engine.mouse_delta(10.0, 0.0)  # returns the MOVE it produced
+        after = engine.active_pointers[1]
+        # sensitivity 2.0: 10 px of mouse travel is 20 px of aim.
+        assert after.x == pytest.approx(before[0] + 20.0)
+        assert after.y == pytest.approx(before[1])
+
+    def test_motion_before_the_key_does_nothing(self, aim_profile, geo, clock) -> None:
+        engine = build(aim_profile, geo, clock)
+        assert engine.mouse_delta(50.0, 50.0) == []
+        assert engine.aim_active is False
+
+    def test_the_exit_key_releases_the_contact_and_the_capture(
+        self, aim_profile, geo, clock
+    ) -> None:
+        engine = build(aim_profile, geo, clock)
+        engine.key_down("k")
+        events = engine.key_down("Escape")
+        assert actions(events) == [("up", 1)]
+        assert engine.aim_active is False
+
+    def test_losing_focus_ends_aim_mode(self, aim_profile, geo, clock) -> None:
+        """A captured pointer must never outlive the window's focus."""
+        engine = build(aim_profile, geo, clock)
+        engine.key_down("k")
+        engine.focus_lost("window lost focus")
+        assert engine.aim_active is False
+        assert engine.active_pointers == {}
+
+    def test_switching_profile_ends_aim_mode(self, aim_profile, geo, clock, target) -> None:
+        engine = build(aim_profile, geo, clock)
+        engine.key_down("k")
+        engine.set_profile(Profile.new("Other", target))
+        assert engine.aim_active is False
+
+    def test_capture_flag_is_remembered_not_assumed(self, aim_profile, geo, clock) -> None:
+        engine = build(aim_profile, geo, clock)
+        assert engine.realtime_capture is False
+        engine.set_realtime_capture(True)
+        assert engine.realtime_capture is True
+        engine.set_realtime_capture(False)
+        assert engine.realtime_capture is False
+        assert engine.aim_active is False
