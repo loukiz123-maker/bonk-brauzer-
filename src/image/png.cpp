@@ -1,10 +1,14 @@
 #include <cstring>
 #include <fstream>
+#include <limits>
 
 #include "bonk/image/image.hpp"
 
 namespace bonk::image {
 namespace {
+
+constexpr std::size_t kMaxPngInflatedBytes = 256u * 1024u * 1024u;
+constexpr std::size_t kMaxPngRgbaBytes = 256u * 1024u * 1024u;
 
 std::uint32_t read_u32(std::string_view data, std::size_t offset) {
   if (offset + 3 >= data.size()) return 0;
@@ -185,8 +189,52 @@ void expand_pass(const std::string& raw, std::size_t row_bytes, std::uint32_t pa
 
 // Adam7 pass geometry: x_start, y_start, x_step, y_step.
 constexpr std::uint32_t kAdam7[7][4] = {
-    {0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2},
+    {0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 2}, {1, 0, 2, 2}, {0, 1, 1, 2},
 };
+
+bool valid_bit_depth(std::uint8_t color_type, std::uint8_t bit_depth) {
+  switch (color_type) {
+    case 0:
+      return bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8 || bit_depth == 16;
+    case 2:
+    case 4:
+    case 6:
+      return bit_depth == 8 || bit_depth == 16;
+    case 3:
+      return bit_depth == 1 || bit_depth == 2 || bit_depth == 4 || bit_depth == 8;
+    default:
+      return false;
+  }
+}
+
+bool add_pass_bytes(std::uint64_t width, std::uint64_t height, std::uint64_t bits_per_pixel,
+                    std::uint64_t& total) {
+  if (width == 0 || height == 0) return true;
+  const std::uint64_t row_bytes = (width * bits_per_pixel + 7) / 8;
+  const std::uint64_t pass_bytes = (row_bytes + 1) * height;
+  if (pass_bytes > std::numeric_limits<std::uint64_t>::max() - total) return false;
+  total += pass_bytes;
+  return true;
+}
+
+bool expected_filtered_bytes(const Header& header, std::uint64_t& result) {
+  result = 0;
+  const std::uint64_t bits_per_pixel = static_cast<std::uint64_t>(channels_for(header.color_type)) * header.bit_depth;
+  if (header.interlace == 0) {
+    return add_pass_bytes(header.width, header.height, bits_per_pixel, result);
+  }
+  for (const auto& pass : kAdam7) {
+    const std::uint32_t x_start = pass[0];
+    const std::uint32_t y_start = pass[1];
+    const std::uint32_t x_step = pass[2];
+    const std::uint32_t y_step = pass[3];
+    if (x_start >= header.width || y_start >= header.height) continue;
+    const std::uint64_t pass_width = (header.width - x_start + x_step - 1) / x_step;
+    const std::uint64_t pass_height = (header.height - y_start + y_step - 1) / y_step;
+    if (!add_pass_bytes(pass_width, pass_height, bits_per_pixel, result)) return false;
+  }
+  return true;
+}
 
 }  // namespace
 
@@ -197,6 +245,10 @@ std::uint8_t Image::sample(int x, int y, int channel) const {
 }
 
 Result<Image> decode_png(std::string_view bytes) {
+  return decode_png(bytes, static_cast<std::size_t>(16384) * 16384);
+}
+
+Result<Image> decode_png(std::string_view bytes, std::size_t max_pixels) {
   static const char kSignature[8] = {'\x89', 'P', 'N', 'G', '\r', '\n', '\x1a', '\n'};
   if (bytes.size() < 8 || std::memcmp(bytes.data(), kSignature, 8) != 0) {
     return Result<Image>::failure(png_error("not a PNG file (bad signature)"));
@@ -216,7 +268,8 @@ Result<Image> decode_png(std::string_view bytes) {
     const std::string_view payload = bytes.substr(data_start, length);
 
     if (type == "IHDR") {
-      if (length < 13) return Result<Image>::failure(png_error("truncated IHDR"));
+      if (header_seen) return Result<Image>::failure(png_error("duplicate IHDR"));
+      if (length != 13) return Result<Image>::failure(png_error("IHDR must contain exactly 13 bytes"));
       header.width = read_u32(payload, 0);
       header.height = read_u32(payload, 4);
       header.bit_depth = static_cast<std::uint8_t>(payload[8]);
@@ -232,9 +285,11 @@ Result<Image> decode_png(std::string_view bytes) {
       if (channels_for(header.color_type) == 0) {
         return Result<Image>::failure(png_error("unsupported colour type"));
       }
-      if (header.bit_depth != 1 && header.bit_depth != 2 && header.bit_depth != 4 && header.bit_depth != 8 &&
-          header.bit_depth != 16) {
-        return Result<Image>::failure(png_error("unsupported bit depth"));
+      if (!valid_bit_depth(header.color_type, header.bit_depth)) {
+        return Result<Image>::failure(png_error("unsupported bit depth for colour type"));
+      }
+      if (static_cast<std::uint8_t>(payload[10]) != 0 || static_cast<std::uint8_t>(payload[11]) != 0) {
+        return Result<Image>::failure(png_error("unsupported compression or filter method"));
       }
       if (header.interlace > 1) return Result<Image>::failure(png_error("unsupported interlace method"));
     } else if (type == "PLTE") {
@@ -250,13 +305,33 @@ Result<Image> decode_png(std::string_view bytes) {
   if (!header_seen) return Result<Image>::failure(png_error("missing IHDR"));
   if (compressed.empty()) return Result<Image>::failure(png_error("no image data (IDAT)"));
 
-  Result<std::string> raw = inflate_zlib(compressed);
+  const std::uint64_t pixel_count = static_cast<std::uint64_t>(header.width) * header.height;
+  if (pixel_count > max_pixels) return Result<Image>::failure(png_error("image exceeds the configured pixel limit"));
+  if (pixel_count > std::numeric_limits<std::size_t>::max() / 4) {
+    return Result<Image>::failure(png_error("RGBA image size exceeds the host address space"));
+  }
+  if (pixel_count > kMaxPngRgbaBytes / 4) {
+    return Result<Image>::failure(png_error("RGBA image exceeds the 256 MiB safety limit"));
+  }
+  std::uint64_t expected_raw_bytes = 0;
+  if (!expected_filtered_bytes(header, expected_raw_bytes) ||
+      expected_raw_bytes > std::numeric_limits<std::size_t>::max()) {
+    return Result<Image>::failure(png_error("filtered image data size exceeds the host address space"));
+  }
+  if (expected_raw_bytes > kMaxPngInflatedBytes) {
+    return Result<Image>::failure(png_error("inflated PNG data exceeds the 256 MiB safety limit"));
+  }
+
+  Result<std::string> raw = inflate_zlib(compressed, static_cast<std::size_t>(expected_raw_bytes));
   if (raw.is_error()) return Result<Image>::failure(raw.error());
+  if (raw.value().size() != expected_raw_bytes) {
+    return Result<Image>::failure(png_error("decompressed scanline data has an unexpected length"));
+  }
 
   Image image;
   image.width = static_cast<int>(header.width);
   image.height = static_cast<int>(header.height);
-  image.rgba.assign(static_cast<std::size_t>(image.width) * static_cast<std::size_t>(image.height) * 4, 0);
+  image.rgba.assign(static_cast<std::size_t>(pixel_count) * 4, 0);
 
   const int channels = channels_for(header.color_type);
   const std::size_t bits_per_pixel = static_cast<std::size_t>(channels) * static_cast<std::size_t>(header.bit_depth);

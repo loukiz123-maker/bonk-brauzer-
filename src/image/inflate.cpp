@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <array>
 #include <cstdint>
 
@@ -100,7 +101,7 @@ Error inflate_error(std::string_view message) { return Error::make("image.inflat
 
 }  // namespace
 
-Result<std::string> inflate_raw(std::string_view deflate_stream) {
+Result<std::string> inflate_raw(std::string_view deflate_stream, std::size_t max_output_bytes) {
   static const std::uint16_t kLengthBase[29] = {3,  4,  5,  6,  7,  8,  9,  10, 11,  13,  15,  17,  19,  23, 27,
                                                 31, 35, 43, 51, 59, 67, 83, 99, 115, 131, 163, 195, 227, 258};
   static const std::uint8_t kLengthExtra[29] = {0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2,
@@ -113,7 +114,7 @@ Result<std::string> inflate_raw(std::string_view deflate_stream) {
 
   BitReader reader(deflate_stream);
   std::string out;
-  out.reserve(deflate_stream.size() * 2);
+  out.reserve(std::min(deflate_stream.size(), max_output_bytes));
 
   for (;;) {
     const std::uint32_t final_block = reader.bits(1);
@@ -138,6 +139,9 @@ Result<std::string> inflate_raw(std::string_view deflate_stream) {
       const std::size_t data_start = start + 4;
       if (data_start + length > deflate_stream.size()) {
         return Result<std::string>::failure(inflate_error("stored block runs past the input"));
+      }
+      if (length > max_output_bytes - out.size()) {
+        return Result<std::string>::failure(inflate_error("output exceeds the configured limit"));
       }
       out.append(deflate_stream.substr(data_start, length));
       reader.reset(deflate_stream.substr(data_start + length));
@@ -203,6 +207,9 @@ Result<std::string> inflate_raw(std::string_view deflate_stream) {
         const int symbol = literal_codes.decode(reader);
         if (symbol < 0) return Result<std::string>::failure(inflate_error("bad literal symbol"));
         if (symbol < 256) {
+          if (out.size() >= max_output_bytes) {
+            return Result<std::string>::failure(inflate_error("output exceeds the configured limit"));
+          }
           out.push_back(static_cast<char>(symbol));
           continue;
         }
@@ -225,11 +232,11 @@ Result<std::string> inflate_raw(std::string_view deflate_stream) {
         if (distance > out.size()) {
           return Result<std::string>::failure(inflate_error("distance exceeds output"));
         }
+        if (length > max_output_bytes - out.size()) {
+          return Result<std::string>::failure(inflate_error("output exceeds the configured limit"));
+        }
         const std::size_t start = out.size() - distance;
         for (std::size_t i = 0; i < length; ++i) out.push_back(out[start + i]);
-        if (out.size() > 256u * 1024u * 1024u) {
-          return Result<std::string>::failure(inflate_error("output exceeds 256 MiB"));
-        }
       }
     } else {
       return Result<std::string>::failure(inflate_error("invalid deflate block type 3"));
@@ -242,7 +249,7 @@ Result<std::string> inflate_raw(std::string_view deflate_stream) {
   return Result<std::string>::success(std::move(out));
 }
 
-Result<std::string> inflate_zlib(std::string_view zlib_stream) {
+Result<std::string> inflate_zlib(std::string_view zlib_stream, std::size_t max_output_bytes) {
   if (zlib_stream.size() < 6) return Result<std::string>::failure(Error::make("image.zlib", "stream is too small"));
   const auto cmf = static_cast<std::uint8_t>(zlib_stream[0]);
   const auto flg = static_cast<std::uint8_t>(zlib_stream[1]);
@@ -254,7 +261,7 @@ Result<std::string> inflate_zlib(std::string_view zlib_stream) {
     return Result<std::string>::failure(Error::make("image.zlib", "preset dictionaries are not supported"));
   }
 
-  Result<std::string> inflated = inflate_raw(zlib_stream.substr(2, zlib_stream.size() - 6));
+  Result<std::string> inflated = inflate_raw(zlib_stream.substr(2, zlib_stream.size() - 6), max_output_bytes);
   if (inflated.is_error()) return inflated;
 
   // Adler-32 of the uncompressed data, stored big-endian at the end.
