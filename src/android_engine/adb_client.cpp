@@ -286,22 +286,27 @@ Status inspect_adb_install_output(std::string_view output) {
   return Status::success();
 }
 
+Status validate_adb_command_output(const CommandOutput& output, std::size_t max_capture_bytes) {
+  if (output.timed_out) {
+    return Status::failure(Error::make("android.adb_timeout", "ADB command timed out"));
+  }
+  if (output.stdout_truncated || output.stderr_truncated) {
+    return Status::failure(Error::make(
+        "android.adb_output_truncated",
+        "ADB command output exceeded the " + std::to_string(max_capture_bytes) + " byte per-stream safety limit"));
+  }
+  if (!output.exit_code.has_value() || *output.exit_code != 0) {
+    return Status::failure(Error::make("android.adb_command_failed", command_failure_message(output)));
+  }
+  return Status::success();
+}
+
 Result<CommandOutput> run_adb(const RuntimeCommand& command, std::chrono::milliseconds timeout,
                               std::size_t max_capture_bytes = kDefaultAdbCaptureBytes) {
   const Result<CommandOutput> result = run_command(command, timeout, max_capture_bytes);
   if (result.is_error()) return Result<CommandOutput>::failure(result.error());
-  if (result.value().timed_out) {
-    return Result<CommandOutput>::failure(Error::make("android.adb_timeout", "ADB command timed out"));
-  }
-  if (result.value().stdout_truncated || result.value().stderr_truncated) {
-    return Result<CommandOutput>::failure(Error::make(
-        "android.adb_output_truncated",
-        "ADB command output exceeded the " + std::to_string(max_capture_bytes) + " byte per-stream safety limit"));
-  }
-  if (!result.value().exit_code.has_value() || *result.value().exit_code != 0) {
-    return Result<CommandOutput>::failure(
-        Error::make("android.adb_command_failed", command_failure_message(result.value())));
-  }
+  const Status valid = validate_adb_command_output(result.value(), max_capture_bytes);
+  if (valid.is_error()) return Result<CommandOutput>::failure(valid.error());
   return result;
 }
 
@@ -541,13 +546,13 @@ Status launch_installed_package(const AdbConfig& config, std::string_view packag
   if (command.is_error()) return Status::failure(command.error());
   const Status consent = require_server_consent(config);
   if (consent.is_error()) return consent;
-  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  const Result<CommandOutput> output = run_command(command.value(), command_timeout, kDefaultAdbCaptureBytes);
   if (output.is_error()) return Status::failure(output.error());
   const Status launch_stdout_result = inspect_am_start_output(output.value().stdout_data);
   if (launch_stdout_result.is_error()) return launch_stdout_result;
   const Status launch_stderr_result = inspect_am_start_output(output.value().stderr_data);
   if (launch_stderr_result.is_error()) return launch_stderr_result;
-  return Status::success();
+  return validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
 }
 
 Status install_selected_apk(const AdbConfig& config, const std::filesystem::path& apk_path,
@@ -573,13 +578,13 @@ Status install_selected_apk(const AdbConfig& config, const std::filesystem::path
     return Status::failure(Error::make("android.apk_unreadable", "selected APK file is not readable"));
   }
 
-  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  const Result<CommandOutput> output = run_command(command.value(), command_timeout, kDefaultAdbCaptureBytes);
   if (output.is_error()) return Status::failure(output.error());
   const Status install_stdout_result = inspect_adb_install_output(output.value().stdout_data);
   if (install_stdout_result.is_error()) return install_stdout_result;
   const Status install_stderr_result = inspect_adb_install_output(output.value().stderr_data);
   if (install_stderr_result.is_error()) return install_stderr_result;
-  return Status::success();
+  return validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
 }
 
 Result<GuestStatus> query_guest_status(const AdbConfig& config, std::chrono::milliseconds command_timeout) {

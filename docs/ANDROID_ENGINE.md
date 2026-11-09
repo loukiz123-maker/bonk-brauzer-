@@ -112,8 +112,8 @@ Preflight не запускает найденные executable, не загру
 
 - `make_adb_launch_package_command()` формирует `adb -s SERIAL shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p PACKAGE`.
 - `launch_installed_package()` проверяет dot-separated Android package ID, требует ADB consent и ограничивает timeout 60 секундами. Используется только package ID, предоставленный/подтверждённый вызывающей стороной; имя APK не используется для догадки.
-- Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. Она распознаёт явный `Error:` и `Status:` не `ok` в stdout/stderr `am start -W`, но если таких строк нет, ориентируется только на exit code. Даже `Status: ok` не доказывает готовность приложения или игры.
-- Fake ADB проверяет argv, consent gating и явные launch failure строки, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
+- Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. Явный `Error:` или `Status:` не `ok` из stdout/stderr `am start -W` имеет приоритет и возвращает `android.app_launch_reported_failure`, даже если ADB завершился с ненулевым кодом; при отсутствии таких строк проверяется обычный exit status. Даже `Status: ok` не доказывает готовность приложения или игры.
+- Fake ADB проверяет argv, consent gating, явные launch failure строки в обоих потоках и их приоритет над ненулевым exit code, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
 
 Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
 
@@ -128,8 +128,8 @@ Preflight не запускает найденные executable, не загру
 
 - `install_selected_apk()` принимает только явно указанный абсолютный путь к существующему читаемому обычному файлу. Команда `adb -s SERIAL install PATH` передаёт путь отдельным argv без shell и без флагов replace/downgrade.
 - Для каждой установки вызывающий код обязан передать `user_confirmed_install=true` только после отдельного подтверждения пользователем именно этого файла. Дополнительно требуется `allow_adb_server_autostart=true`; два согласия независимы. В текущем checkout нет UI, который собирает эти подтверждения.
-- Функция не скачивает APK, не выводит package ID из имени, не проверяет содержимое/подпись заранее и не запускает установленное приложение. Явный `Failure...` в stdout/stderr превращается в ошибку даже при нулевом exit code; Android Package Manager выполняет собственную проверку при установке, live-установка здесь не проверялась.
-- Тестовый APK payload и Fake ADB проверяют только валидацию пути, argv, consent gates и распознавание явного failure; синтетический payload не является устанавливаемым APK.
+- Функция не скачивает APK, не выводит package ID из имени, не проверяет содержимое/подпись заранее и не запускает установленное приложение. Явный `Failure...` в stdout/stderr получает `android.apk_install_reported_failure` независимо от exit code; если маркера нет, применяется обычная проверка процесса. Android Package Manager выполняет собственную проверку при установке, live-установка здесь не проверялась.
+- Тестовый APK payload и Fake ADB проверяют только валидацию пути, argv, consent gates и распознавание явного failure в обоих потоках до обработки ненулевого exit code; синтетический payload не является устанавливаемым APK.
 
 ## Зависимости, лицензии и происхождение
 
@@ -187,6 +187,6 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **313 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 38/38. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка: `make -j2 verify` — **314 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 39/39. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
 
 Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.

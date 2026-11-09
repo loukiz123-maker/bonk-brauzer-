@@ -64,7 +64,8 @@ std::string shell_quote(std::string_view value) {
 class FakeAdb final {
  public:
   explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok",
-                   std::string_view install_output = "Success")
+                   std::string_view install_output = "Success", int exit_code = 0,
+                   std::string_view launch_stderr_output = {}, std::string_view install_stderr_output = {})
       : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
@@ -103,11 +104,23 @@ fi
       script << R"(if [ "${3-}" = "exec-out" ]; then exec /bin/cat )" << shell_quote(fixture.string())
              << R"(; fi)" << std::endl;
     }
-    script << R"(if [ "${4-}" = "am" ]; then printf '%s\n' )" << shell_quote(launch_output) << R"(; fi)"
-           << std::endl;
-    script << R"(if [ "${3-}" = "install" ]; then printf '%s\n' )" << shell_quote(install_output) << R"(; fi)"
-           << std::endl;
-    script << "exit 0" << std::endl;
+    script << R"(if [ "${4-}" = "am" ]; then)" << std::endl;
+    if (!launch_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(launch_output) << std::endl;
+    }
+    if (!launch_stderr_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(launch_stderr_output) << " >&2" << std::endl;
+    }
+    script << "fi" << std::endl;
+    script << R"(if [ "${3-}" = "install" ]; then)" << std::endl;
+    if (!install_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(install_output) << std::endl;
+    }
+    if (!install_stderr_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(install_stderr_output) << " >&2" << std::endl;
+    }
+    script << "fi" << std::endl;
+    script << "exit " << exit_code << std::endl;
     script.close();
     if (!script || ::chmod(executable_.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) != 0) return;
     ready_ = true;
@@ -424,6 +437,61 @@ BONK_TEST(android_adb, reports_explicit_apk_install_failure_even_when_adb_exits_
   REQUIRE(install.is_error());
   CHECK_EQ(install.error().code, std::string("android.apk_install_reported_failure"));
   CHECK(install.error().message.find("INSTALL_FAILED_INVALID_APK") != std::string::npos);
+}
+
+BONK_TEST(android_adb, reports_explicit_install_and_launch_failures_before_nonzero_exit_errors) {
+  FakeAdb install_stdout{false, "Status: ok", "Failure [INSTALL_FAILED_INVALID_APK]", 23};
+  REQUIRE(install_stdout.ready());
+  const std::filesystem::path stdout_apk_path = install_stdout.selected_apk_path();
+  std::ofstream stdout_apk{stdout_apk_path, std::ios::binary};
+  REQUIRE(static_cast<bool>(stdout_apk));
+  stdout_apk << "synthetic APK test payload";
+  stdout_apk.close();
+  REQUIRE(static_cast<bool>(stdout_apk));
+
+  const Status stdout_install = android::install_selected_apk(
+      install_stdout.config(), stdout_apk_path, true, std::chrono::seconds{1});
+  REQUIRE(stdout_install.is_error());
+  CHECK_EQ(stdout_install.error().code, std::string("android.apk_install_reported_failure"));
+  CHECK(stdout_install.error().message.find("INSTALL_FAILED_INVALID_APK") != std::string::npos);
+
+  FakeAdb install_stderr{false, "Status: ok", "Success", 23, {}, "Failure [INSTALL_FAILED_VERSION_DOWNGRADE]"};
+  REQUIRE(install_stderr.ready());
+  const std::filesystem::path stderr_apk_path = install_stderr.selected_apk_path();
+  std::ofstream stderr_apk{stderr_apk_path, std::ios::binary};
+  REQUIRE(static_cast<bool>(stderr_apk));
+  stderr_apk << "synthetic APK test payload";
+  stderr_apk.close();
+  REQUIRE(static_cast<bool>(stderr_apk));
+
+  const Status stderr_install = android::install_selected_apk(
+      install_stderr.config(), stderr_apk_path, true, std::chrono::seconds{1});
+  REQUIRE(stderr_install.is_error());
+  CHECK_EQ(stderr_install.error().code, std::string("android.apk_install_reported_failure"));
+  CHECK(stderr_install.error().message.find("INSTALL_FAILED_VERSION_DOWNGRADE") != std::string::npos);
+
+  FakeAdb launch_stdout{false, "Error: Activity not started, unable to resolve Intent", "Success", 23};
+  REQUIRE(launch_stdout.ready());
+  const Status stdout_launch = android::launch_installed_package(
+      launch_stdout.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(stdout_launch.is_error());
+  CHECK_EQ(stdout_launch.error().code, std::string("android.app_launch_reported_failure"));
+  CHECK(stdout_launch.error().message.find("unable to resolve Intent") != std::string::npos);
+
+  FakeAdb launch_stderr{false, "Status: ok", "Success", 23, "Error: Activity not started, permission denied"};
+  REQUIRE(launch_stderr.ready());
+  const Status stderr_launch = android::launch_installed_package(
+      launch_stderr.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(stderr_launch.is_error());
+  CHECK_EQ(stderr_launch.error().code, std::string("android.app_launch_reported_failure"));
+  CHECK(stderr_launch.error().message.find("permission denied") != std::string::npos);
+
+  FakeAdb unexplained_exit{false, "Status: ok", "Success", 23};
+  REQUIRE(unexplained_exit.ready());
+  const Status generic_failure = android::launch_installed_package(
+      unexplained_exit.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(generic_failure.is_error());
+  CHECK_EQ(generic_failure.error().code, std::string("android.adb_command_failed"));
 }
 
 BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_starts) {

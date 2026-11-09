@@ -91,6 +91,9 @@ struct PixelPoint {
 
 /// Starts the launchable activity for an already-installed package. This does
 /// not install an APK, and a successful `am start` is not an app-readiness check.
+/// Explicit `Error:` or non-`ok` `Status:` output in either stream is reported
+/// as a launch failure even when ADB exits nonzero; otherwise the exit status is
+/// checked normally.
 [[nodiscard]] Status launch_installed_package(
     const AdbConfig& config, std::string_view package_name,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
@@ -98,6 +101,8 @@ struct PixelPoint {
 /// Installs exactly the caller-selected APK. `user_confirmed_install` must be
 /// true only after explicit confirmation for this path. No replace/downgrade
 /// flag is passed. Requires ADB server consent as well; does not launch the app.
+/// A `Failure...` line in either output stream is reported as an install failure
+/// even when ADB exits nonzero; otherwise the exit status is checked normally.
 [[nodiscard]] Status install_selected_apk(
     const AdbConfig& config, const std::filesystem::path& apk_path, bool user_confirmed_install,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{60000});
