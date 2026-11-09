@@ -669,3 +669,37 @@ def test_control_list_selects_overlapping_items_and_tracks_edits(window, qt_app,
     editor.reload_profile()
     assert editor.control_list.count() == 2 and "H" in editor.control_list.item(0).text()
     shiboken6.delete(editor)
+
+
+def test_keyboard_nudge_clamps_and_supports_undo(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    path = tmp_path / "controls.json"
+    editor = ControlEditor(path, window)
+    editor.kind.setCurrentText("Огонь")
+    editor.place(0.98, 0.5)
+    editor.toggle_live_test()
+    engine = editor.test_engine
+    assert engine is not None
+    editor.live_key("f", down=True)
+    assert engine.active_pointers
+    QTest.keyClick(editor.control_list, Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier)
+    assert editor.controls[0]["x"] == 0.99
+    assert editor.test_engine is None and not engine.active_pointers
+    QTest.keyClick(
+        editor.control_list,
+        Qt.Key.Key_Right,
+        Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.ShiftModifier,
+    )
+    assert editor.controls[0]["x"] == 1.0
+    QTest.keyClick(editor.control_list, Qt.Key.Key_Right, Qt.KeyboardModifier.AltModifier)
+    assert editor.controls[0]["x"] == 1.0
+    editor.undo()
+    assert editor.controls[0]["x"] == 0.99
+    assert "99%, 50%" in editor.control_list.item(0).text()
+    assert not path.exists()
+    shiboken6.delete(editor)

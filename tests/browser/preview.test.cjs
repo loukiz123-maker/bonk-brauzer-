@@ -405,3 +405,22 @@ test('control list selects overlapping markers and stays in sync with edits', as
     assert.match(await page.locator('#control-list option').first().textContent(), /H/);
   } finally { await context.close(); }
 });
+
+test('keyboard nudge uses small and large steps, clamps and undoes', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    const draft = {schema: 1, controls: [{kind: 'Огонь', key: 'F', x: 0.98, y: 0.5}]};
+    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
+    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+    await page.selectOption('#control-list', '0');
+    await page.locator('#control-list').press('Alt+ArrowRight');
+    assert.match(await page.locator('#control-list option').first().textContent(), /99%, 50%/);
+    await page.locator('#control-list').press('Alt+Shift+ArrowRight');
+    assert.match(await page.locator('#control-list option').first().textContent(), /100%, 50%/);
+    await page.locator('#control-list').press('Alt+ArrowRight'); // no-op at the edge
+    await page.click('#undo-control');
+    assert.match(await page.locator('#control-list option').first().textContent(), /99%, 50%/);
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
+  } finally { await context.close(); }
+});

@@ -99,6 +99,35 @@ class BindingCapture(QPushButton):
         super().focusOutEvent(event)
 
 
+class ControlList(QListWidget):
+    """List navigation remains ordinary; Alt+arrows nudge the selected marker."""
+
+    def __init__(self, editor: ControlEditor) -> None:
+        super().__init__()
+        self.editor = editor
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        directions: dict[int, tuple[int, int]] = {
+            Qt.Key.Key_Left: (-1, 0),
+            Qt.Key.Key_Right: (1, 0),
+            Qt.Key.Key_Up: (0, -1),
+            Qt.Key.Key_Down: (0, 1),
+        }
+        mods = event.modifiers()
+        if (
+            self.editor.selected is not None
+            and event.key() in directions
+            and mods & Qt.KeyboardModifier.AltModifier
+            and not mods & (Qt.KeyboardModifier.ControlModifier | Qt.KeyboardModifier.MetaModifier)
+        ):
+            step = 0.05 if mods & Qt.KeyboardModifier.ShiftModifier else 0.01
+            dx, dy = directions[event.key()]
+            self.editor.nudge_selected(dx * step, dy * step)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+
 class Canvas(QWidget):
     def __init__(self, editor: ControlEditor) -> None:
         super().__init__()
@@ -299,7 +328,7 @@ class ControlEditor(QDialog):
         note.setWordWrap(True)
         side.addWidget(note)
         side.addWidget(QLabel("Элементы раскладки"))
-        self.control_list = QListWidget()
+        self.control_list = ControlList(self)
         self.control_list.setAccessibleName("Элементы раскладки")
         self.control_list.setMaximumHeight(128)
         self.control_list.setMaximumWidth(250)
@@ -307,6 +336,9 @@ class ControlEditor(QDialog):
             lambda row: self.select(row if row >= 0 else None)
         )
         side.addWidget(self.control_list)
+        move_hint = QLabel("В списке: Alt + стрелки — 1%; Alt + Shift + стрелки — 5%.")
+        move_hint.setWordWrap(True)
+        side.addWidget(move_hint)
         self.kind = QComboBox()
         self.kind.addItems(KINDS)
         side.addWidget(self.kind)
@@ -531,6 +563,14 @@ class ControlEditor(QDialog):
         self.status.setText("Элемент перемещён • не сохранено")
         self.canvas.update()
         return True
+
+    def nudge_selected(self, dx: float, dy: float) -> None:
+        if self.selected is None:
+            return
+        item = self.controls[self.selected]
+        x = round(item["x"] + dx, 6) if dx else item["x"]
+        y = round(item["y"] + dy, 6) if dy else item["y"]
+        self.move_selected(x, y)
 
     def apply_selected(self) -> None:
         if self.selected is None:

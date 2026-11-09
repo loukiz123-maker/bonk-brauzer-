@@ -16,6 +16,8 @@ empty until an Android runtime exists. The editor opens
 beside its canvas, and can save a layout draft,
 including a fire marker. Markers can be selected, dragged, edited and deleted.
 A list of controls makes overlapping markers selectable and editable.
+With the list focused, Alt+arrow moves a marker by 1% and Alt+Shift+arrow by 5%;
+movements are clamped to the canvas and can be undone.
 Undo and redo support the most recent 50 changes in the current editor session.
 Layouts can be exported to and imported from bounded JSON files. Import changes
 the current draft but does not overwrite the game profile until explicitly saved.
@@ -76,7 +78,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (938) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (939) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -153,7 +155,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 938 collected; Qt tests may skip without native libraries
+pytest                               # 939 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

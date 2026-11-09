@@ -356,6 +356,19 @@ function selectControl(index) {
   if (index !== null) { $('#control-kind').value = controls[index].kind; syncCaptureKind(); $('#control-key').value = controls[index].key; }
   renderControls();
 }
+$('#control-list').addEventListener('keydown', event => {
+  const directions = {ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1]};
+  if (selectedControl === null || !event.altKey || event.ctrlKey || event.metaKey || !directions[event.key]) return;
+  event.preventDefault();
+  const step = event.shiftKey ? 0.05 : 0.01;
+  const [dx, dy] = directions[event.key], item = controls[selectedControl];
+  const clamp = value => Math.max(0, Math.min(1, Math.round(value * 1000000) / 1000000));
+  const x = dx ? clamp(item.x + dx * step) : item.x;
+  const y = dy ? clamp(item.y + dy * step) : item.y;
+  if (item.x === x && item.y === y) return;
+  recordChange(); Object.assign(item, {x, y});
+  $('#editor-status').textContent = 'Элемент перемещён • не сохранено'; renderControls();
+});
 $('#control-list').addEventListener('change', event => {
   const index = event.target.selectedIndex;
   selectControl(index < 0 ? null : index);
