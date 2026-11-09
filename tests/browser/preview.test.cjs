@@ -34,7 +34,7 @@ async function freshPages(count = 1) {
   await Promise.all(pages.map(page => page.goto(url)));
   return {context, pages};
 }
-const pagesSnapshot = pages => pages.map(page => page.evaluate(() => ({stored: localStorage.getItem('lynxdroid-preview-library-v1'), message: document.querySelector('#message').textContent, note: document.querySelector('#library-note').textContent, locks: !!navigator.locks})));
+const pagesSnapshot = pages => pages.map(page => page.evaluate(() => ({stored: localStorage.getItem('lynxdroid-preview-library-v1'), message: document.querySelector('#message').textContent, note: document.querySelector('#library-note').textContent, locks: !!navigator.locks, changes: window.debugChanges})));
 const apk = name => ({name, mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from([0x50, 0x4b, 3, 4, 0])});
 async function addMarker(page, x = 200) {
   await page.locator('#canvas').click({position: {x, y: 150}});
@@ -44,12 +44,15 @@ async function addMarker(page, x = 200) {
 test('concurrent APK additions in two tabs do not overwrite one another', async () => {
   const {context, pages: [first, second]} = await freshPages(2);
   try {
+    const errors = [];
+    for (const page of [first, second]) page.on('pageerror', error => errors.push(error.message));
+    for (const page of [first, second]) await page.evaluate(() => { window.debugChanges = []; document.querySelector('#file').addEventListener('change', event => window.debugChanges.push([...event.target.files].map(f => f.name)), true); });
     await Promise.all([first.locator('#file').setInputFiles(apk('Alpha.apk')), second.locator('#file').setInputFiles(apk('Beta.apk'))]);
     try {
       await first.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2, null, {timeout: 8000});
     } catch (error) {
       const state = await Promise.all(pagesSnapshot([first, second]));
-      throw new Error(`Library did not contain both files: ${JSON.stringify(state)}; ${error.message}`);
+      throw new Error(`Library did not contain both files: ${JSON.stringify(state)}; errors: ${JSON.stringify(errors)}; ${error.message}`);
     }
     await second.waitForFunction(() => document.querySelectorAll('#list .list-item').length === 2);
     const items = await first.evaluate(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1')));
