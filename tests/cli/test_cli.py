@@ -646,8 +646,8 @@ class TestGameCommand:
     def test_it_recognises_the_root_refusal(self, capsys, root: Path) -> None:
         code, out, _ = run(capsys, ["game", "explain", self.STANDOFF], root)
         assert "root" in out.lower()
-        assert "lynxdroid game fix hide-root" in out
-        assert code == 0
+        assert "game fix hide-root" not in out
+        assert code == 5
 
     def test_it_recognises_the_network_refusal(self, capsys, root: Path) -> None:
         _code, out, _ = run(capsys, ["game", "explain", self.FREE_FIRE], root)
@@ -671,8 +671,8 @@ class TestGameCommand:
         _code, out, _ = run(capsys, ["game", "explain", self.STANDOFF, "--json"], root)
         payload = json.loads(out)
         assert payload["match"] == "root-detected"
-        assert payload["support"] == "fixable"
-        assert payload["fix"] == "hide-root"
+        assert payload["support"] == "unknown"
+        assert payload["fix"] is None
 
     def test_fix_without_yes_is_refused(self, capsys, root: Path) -> None:
         code, _out, err = run(capsys, ["game", "fix", "hide-root"], root)
@@ -688,3 +688,23 @@ class TestGameCommand:
         code, _out, err = run(capsys, ["game", "revert"], root)
         assert code != 0
         assert "--yes" in err
+
+    def test_disabled_fix_exits_blocked_even_in_json(self, capsys, root: Path) -> None:
+        import json
+
+        code, out, _ = run(
+            capsys, ["game", "fix", "hide-root", "--yes", "--backend", "fake", "--json"], root
+        )
+        assert code == 6
+        assert json.loads(out)[0]["outcome"] == "unavailable"
+
+    def test_revert_exits_blocked_even_in_json(self, capsys, root: Path) -> None:
+        import json
+
+        code, out, _ = run(capsys, ["game", "revert", "--yes", "--backend", "fake", "--json"], root)
+        assert code == 6
+        assert json.loads(out)["outcome"] == "unavailable"
+
+    def test_unknown_json_exits_unsupported(self, capsys, root: Path) -> None:
+        code, _, _ = run(capsys, ["game", "explain", "unrecognised", "--json"], root)
+        assert code == 5

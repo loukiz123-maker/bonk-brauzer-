@@ -1,50 +1,12 @@
-"""Why a game refuses to run, and what can honestly be done about it.
+"""Best-effort matching of game errors and non-destructive network probes.
 
-The screenshots that started this module show two different failures on a
-machine where the emulator itself was working: the game launched, rendered,
-and then closed itself with its own message. That distinction is the whole
-point of this file. "The emulator is broken" and "the application checked
-something and refused" are different problems with different answers, and the
-application is the only party that can make the second one impossible to fix.
-
-So this module does not promise that any game will run. It does three things:
-
-* names the checks a game performs, as :class:`Signature` objects, so the
-  failure is matched to a known cause instead of guessed at;
-* offers :class:`Fix` objects that change something we are allowed to change;
-* says out loud when a failure is **not fixable by us** - a game that forbids
-  emulators or root by policy is out of our reach, and pretending otherwise
-  would send the user to a forum thread instead of the truth.
-
-Three fixes exist because three are honest:
-
-``hide-root``
-    Waydroid's session runs as root and the image is a ``test-keys`` build.
-    Setting the three properties that expose this to ``0`` makes the ordinary
-    checks pass. It does **not** defeat a Play Integrity check, which attests
-    the whole boot chain and cannot be satisfied by a property write. Games
-    that ask that question are reported as unfixable rather than "try again".
-``egl-fallback``
-    The container renders through the host GPU. Without a working DRM node the
-    surface comes up black or the process dies while creating its context, and
-    games that probe GLES extensions fall over. Forcing a software-friendly
-    renderer path is a trade - lower frame rate for a picture at all - so it
-    is a separate fix the user can undo, never a default.
-``network``
-    Waydroid's own NAT is the usual reason a game reaches its title screen and
-    then cannot open a socket. The check is a real TCP connect from *inside*
-    Android, not a ping from the host, because the host's connectivity says
-    nothing about the container's.
-
-Every fix records what it did to the system, so ``revert`` can undo it and a
-user who does not like the result is never stuck.
+A textual match is a hypothesis, not proof of the underlying cause.
 """
 
 from __future__ import annotations
 
 import logging
-import re
-from collections.abc import Callable, Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 from typing import Protocol
@@ -109,12 +71,11 @@ SIGNATURES: tuple[Signature, ...] = (
             "superuser",
             "su binary",
         ),
-        fix="hide-root",
-        support=Support.FIXABLE,
+        fix=None,
+        support=Support.UNKNOWN,
         explanation=(
-            "Waydroid runs Android as root and the image is signed with test keys, "
-            "so the game's ordinary root check succeeds. Hiding it makes the common "
-            "checks pass without deceiving a hardware attestation."
+            "The game reports root detection; the exact check is unknown. "
+            "Property changes have not been verified to resolve it. Consult the game vendor."
         ),
     ),
     Signature(
@@ -179,12 +140,11 @@ SIGNATURES: tuple[Signature, ...] = (
             "gralloc",
             "vulkan",
         ),
-        fix="egl-fallback",
-        support=Support.FIXABLE,
+        fix=None,
+        support=Support.UNKNOWN,
         explanation=(
-            "Without a usable GPU node the container falls back to a path some "
-            "engines cannot initialise. A software-friendly renderer is slower but "
-            "boots; it is a change you can undo."
+            "A graphics-related term was found; the cause is not confirmed. "
+            "Run lynxdroid doctor and inspect Waydroid logs."
         ),
     ),
     Signature(
@@ -202,9 +162,8 @@ SIGNATURES: tuple[Signature, ...] = (
         fix="network",
         support=Support.FIXABLE,
         explanation=(
-            "The title screen appeared, then a socket failed. Usually Waydroid's "
-            "NAT or DNS inside the container, which is testable from inside Android "
-            "rather than from the host."
+            "The game reports a connection error. Its cause is unknown; "
+            "check connectivity inside Android and consult the game vendor."
         ),
     ),
 )
@@ -218,38 +177,11 @@ def match_failure(message: str) -> Signature | None:
     honest one - telling a user to hide root when the game asks for a signed
     boot chain wastes their evening.
     """
-    for signature in SIGNATURES:
+    ordered = sorted(SIGNATURES, key=lambda s: s.id != "integrity-attestation")
+    for signature in ordered:
         if signature.matches(message):
             return signature
     return None
-
-
-# ---------------------------------------------------------------------------
-# The properties that make Android look rooted, and the values that stop it
-# ---------------------------------------------------------------------------
-
-#: (property, clean value, why this one). Each is checked by the game's own
-#: `Build`/`SystemProperties` lookups, not by us.
-ROOT_PROPERTIES: tuple[tuple[str, str, str], ...] = (
-    (
-        "ro.debuggable",
-        "0",
-        "the image is built debuggable, which alone tells a game it is unlocked",
-    ),
-    (
-        "ro.secure",
-        "1",
-        "0 here means adb runs as root without asking",
-    ),
-    (
-        "ro.build.tags",
-        "release-keys",
-        "test-keys is the signature every check looks for first",
-    ),
-)
-
-#: Written as one string into Android's own property store.
-ROOT_PROPERTY_NAMES: tuple[str, ...] = tuple(name for name, _v, _w in ROOT_PROPERTIES)
 
 
 @dataclass
@@ -312,33 +244,6 @@ class CompatTarget(Protocol):
         raise NotImplementedError
 
 
-def _set_many(
-    target: CompatTarget,
-    values: Mapping[str, str],
-    *,
-    consent: Consent,
-    result: FixResult,
-) -> bool:
-    """Write *values*, remembering what was there. False if any write failed."""
-    ok = True
-    for name, value in values.items():
-        previous = target.get_prop(name)
-        result.restore[name] = previous
-        if previous == value:
-            result.steps.append(Step(f"{name} = {value}", False, "already set"))
-            continue
-        wrote = target.set_prop(name, value, consent=consent)
-        result.steps.append(
-            Step(
-                f"{name} = {value}",
-                wrote,
-                f"was {previous or '<unset>'}" if wrote else "the backend refused the write",
-            )
-        )
-        ok = ok and wrote
-    return ok
-
-
 class CompatFixes:
     """The fixes, and the judgement about what is worth trying.
 
@@ -358,116 +263,52 @@ class CompatFixes:
 
     # -- individual fixes ---------------------------------------------------
     def hide_root(self) -> FixResult:
-        """Make the ordinary root checks come up clean.
-
-        Only the three properties that expose the build are touched. Nothing
-        here interferes with Play Integrity, and the docstring says so - a fix
-        that oversells itself is how a user ends up blaming the emulator for a
-        vendor policy.
-        """
-        result = FixResult("hide-root", Outcome.APPLIED)
-        ok = _set_many(
-            self._target,
-            {name: value for name, value, _why in ROOT_PROPERTIES},
-            consent=self._consent,
-            result=result,
+        """Disabled: property changes and their reversal were not verified."""
+        return FixResult(
+            "hide-root",
+            Outcome.UNAVAILABLE,
+            message="Disabled: root detection cannot be reliably fixed by these properties. "
+            "No changes made; consult the game vendor.",
         )
-        if not ok:
-            result.outcome = Outcome.FAILED
-            result.message = (
-                "some properties could not be written; enable allow_prop_writes and retry"
-            )
-            return result
-        if not result.changed:
-            result.outcome = Outcome.ALREADY
-            result.message = "root indicators were already hidden"
-            return result
-        result.message = (
-            "root indicators are now hidden from ordinary checks; "
-            "a Play Integrity attestation is not affected and not fooled"
-        )
-        return result
 
     def revert_hide_root(self) -> FixResult:
-        """Put back whatever :meth:`hide_root` found."""
-        result = FixResult("hide-root", Outcome.APPLIED)
-        previous = {name: self._target.get_prop(name) for name in ROOT_PROPERTY_NAMES}
-        restore: dict[str, str] = {}
-        for name, clean, _why in ROOT_PROPERTIES:
-            original = _ORIGINAL_DEFAULTS.get(name)
-            current = previous[name]
-            if current == clean and original is not None:
-                restore[name] = original
-            elif current is not None:
-                restore[name] = current
-        if not restore:
-            result.outcome = Outcome.ALREADY
-            result.message = "nothing to restore"
-            return result
-        ok = _set_many(self._target, restore, consent=self._consent, result=result)
-        if not ok:
-            result.outcome = Outcome.FAILED
-            result.message = "could not restore every property; the values are listed above"
-            return result
-        if not result.changed:
-            # Everything already held the stock value, so the revert is a
-            # no-op. Reporting APPLIED here would tell the user something was
-            # undone when nothing was, which is the same lie in the other
-            # direction as claiming a fix worked when it did not.
-            result.outcome = Outcome.ALREADY
-            result.message = "nothing to restore: the build already looks stock"
-            return result
-        result.message = "the properties that marked the build as unlocked are back"
-        return result
+        """Never guess previous values; older versions did not save them."""
+        return FixResult(
+            "hide-root",
+            Outcome.UNAVAILABLE,
+            message="Cannot restore automatically: earlier versions did not save original values. "
+            "No changes made. Check your Waydroid configuration and original values manually.",
+        )
 
     def egl_fallback(self) -> FixResult:
-        """Ask the container for the software-friendly renderer path.
-
-        The real lever is ``persist.waydroid.renderer``; older versions ignore
-        it, which is why the step is marked not-done rather than reported as a
-        success we cannot see.
-        """
-        result = FixResult("egl-fallback", Outcome.APPLIED)
-        wanted = {"persist.waydroid.renderer": "swiftshader"}
-        ok = _set_many(self._target, wanted, consent=self._consent, result=result)
-        if not ok:
-            result.outcome = Outcome.FAILED
-            result.message = "the renderer property was refused by this Waydroid version"
-            return result
-        result.message = (
-            "software rendering is requested; the frame rate will drop and the "
-            "change takes effect on the next session start"
+        return FixResult(
+            "egl-fallback",
+            Outcome.UNAVAILABLE,
+            message="Disabled: this renderer property was not verified on Waydroid. "
+            "No changes made; run lynxdroid doctor.",
         )
-        return result
 
     def network_diagnosis(self) -> FixResult:
-        """Test the container's own egress, without changing anything.
-
-        A fix that silently rewrites DNS inside Android is not something we can
-        verify here, so this returns evidence instead of an action: the user's
-        own failure is almost always visible in the first line.
-        """
-        result = FixResult("network", Outcome.APPLIED)
+        """Collect limited network evidence without changing settings."""
+        result = FixResult("network", Outcome.UNAVAILABLE)
         for label, command in (
-            ("dns", ["ping", "-c", "1", "-W", "2", "1.1.1.1"]),
-            ("route", ["ip", "route"]),
+            ("ICMP to 1.1.1.1", ["ping", "-c", "1", "-W", "2", "1.1.1.1"]),
+            ("routes", ["ip", "route"]),
         ):
             code, output = self._target.shell_probe(command)
-            result.steps.append(
-                Step(label, code == 0, (output.strip().splitlines() or [""])[0][:120])
-            )
-        dns_ok = bool(result.steps and result.steps[0].done)
-        if dns_ok:
+            result.steps.append(Step(label, code == 0, output.strip()[:500]))
+        if result.steps[0].done:
+            result.outcome = Outcome.ALREADY
             result.message = (
-                "the container reaches the network; the game's own servers may be "
-                "geo-blocked or the title may check something else"
+                "ICMP to 1.1.1.1 succeeded. This does not verify DNS, "
+                "TCP, or the game's server; no settings changed."
             )
         else:
             result.message = (
-                "the container has no working egress; Waydroid's NAT or DNS needs "
-                "attention before the game can reach its server"
+                "ICMP to 1.1.1.1 failed; ICMP may be blocked. "
+                "This alone does not prove network or DNS failure; "
+                "check routes and consult the game vendor."
             )
-            result.outcome = Outcome.UNAVAILABLE
         return result
 
     # -- the judgement ------------------------------------------------------
@@ -508,25 +349,10 @@ class CompatFixes:
                 continue
             outcome = action()
             results.append(outcome)
-            if outcome.outcome is Outcome.FAILED:
+            if outcome.outcome in (Outcome.FAILED, Outcome.REFUSED, Outcome.UNAVAILABLE):
                 break
         return results
 
 
-# What a stock Waydroid image has, used when reverting rather than guessing.
-_ORIGINAL_DEFAULTS = {
-    "ro.debuggable": "1",
-    "ro.secure": "0",
-    "ro.build.tags": "test-keys",
-}
-
-#: Fix ids, in the order they are worth trying.
+#: Legacy command names remain accepted but unsafe operations are disabled.
 FIX_IDS: tuple[str, ...] = ("hide-root", "egl-fallback", "network")
-
-#: Names that are safe to write as a property (guards ``restore``).
-_PROP_NAME_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,64}$")
-
-
-def is_prop_name(name: str) -> bool:
-    """True for a name we are willing to write back."""
-    return bool(_PROP_NAME_RE.match(name))

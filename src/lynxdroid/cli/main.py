@@ -426,22 +426,22 @@ def cmd_game_explain(args: argparse.Namespace, paths: AppPaths, store: SettingsS
 
     if args.json:
         print(json.dumps(advice, indent=2, ensure_ascii=False))
-        return int(ExitCode.OK)
+        return int(ExitCode.OK if advice["fix"] else ExitCode.UNSUPPORTED)
 
     if advice["match"] is None:
         print("this is not a failure we recognise")
         print(f"  {advice['advice']}")
         return int(ExitCode.UNSUPPORTED)
 
-    print(f"diagnosis  {advice['title']}")
+    print(f"possible match  {advice['title']}")
     print(f"  {advice['advice']}")
     if advice["support"] == "not-fixable":
         print("\n  this one is not ours to fix: the game itself forbids it.")
-        print("  no setting in this container changes its mind.")
+        print("  check the game vendor’s device requirements.")
         return int(ExitCode.UNSUPPORTED)
     if advice["fix"]:
         print(f"\n  try: lynxdroid game fix {advice['fix']} --yes")
-    return int(ExitCode.OK)
+    return int(ExitCode.OK if advice["fix"] else ExitCode.UNSUPPORTED)
 
 
 def cmd_game_fix(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
@@ -467,14 +467,18 @@ def cmd_game_fix(args: argparse.Namespace, paths: AppPaths, store: SettingsStore
 
     if args.json:
         print(json.dumps([r.as_dict() for r in results], indent=2, ensure_ascii=False))
-        return int(ExitCode.OK)
+        return int(
+            ExitCode.BLOCKED
+            if any(r.outcome.value in ("failed", "refused", "unavailable") for r in results)
+            else ExitCode.OK
+        )
 
     for result in results:
         print(f"{result.fix}: {result.outcome.value} - {result.message}")
         for step in result.steps:
             mark = "done" if step.done else "not "
             print(f"  [{mark}] {step.action}" + (f"  ({step.detail})" if step.detail else ""))
-    failed = any(r.outcome.value in ("failed", "refused") for r in results)
+    failed = any(r.outcome.value in ("failed", "refused", "unavailable") for r in results)
     return int(ExitCode.BLOCKED if failed else ExitCode.OK)
 
 
@@ -485,7 +489,7 @@ def cmd_game_revert(args: argparse.Namespace, paths: AppPaths, store: SettingsSt
 
     if not args.yes:
         raise LynxError(
-            "reverting writes the stock values back",
+            "automatic revert is unavailable; no original values were saved",
             hint="add --yes to confirm",
         )
     backend = _backend(args, store)
@@ -493,12 +497,18 @@ def cmd_game_revert(args: argparse.Namespace, paths: AppPaths, store: SettingsSt
     result = fixes.revert_hide_root()
     if args.json:
         print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
-        return int(ExitCode.OK)
+        return int(
+            ExitCode.OK
+            if result.outcome.value in ("applied", "already-in-place")
+            else ExitCode.BLOCKED
+        )
     print(f"{result.fix}: {result.outcome.value} - {result.message}")
     for step in result.steps:
         mark = "done" if step.done else "not "
         print(f"  [{mark}] {step.action}" + (f"  ({step.detail})" if step.detail else ""))
-    return int(ExitCode.OK if result.outcome.value != "failed" else ExitCode.BLOCKED)
+    return int(
+        ExitCode.OK if result.outcome.value in ("applied", "already-in-place") else ExitCode.BLOCKED
+    )
 
 
 def cmd_status(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
