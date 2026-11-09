@@ -46,13 +46,22 @@ function render() {
 document.querySelectorAll('[data-page], [data-go]').forEach((button) => button.addEventListener('click', () => page(button.dataset.page || button.dataset.go)));
 document.querySelectorAll('.add-apk').forEach((button) => button.addEventListener('click', () => $('#file').click()));
 $('#file').addEventListener('change', async (event) => {
-  const file = event.target.files[0]; event.target.value = '';
-  if (!file) return;
-  const bytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
-  if (!/\.apk$/i.test(file.name) || bytes.length !== 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 3 || bytes[3] !== 4) { message('Выберите APK с заголовком ZIP.'); return; }
-  if (entries.includes(file.name)) { message('Название уже есть в библиотеке предпросмотра.'); page('library'); return; }
-  if (entries.length >= 500) { message('В библиотеке уже 500 файлов.'); return; }
-  if (persist([...entries, file.name])) { selected = null; render(); page('library'); }
+  const files = Array.from(event.target.files); event.target.value = '';
+  if (!files.length) return;
+  const next = [...entries];
+  const failures = [];
+  for (const file of files) {
+    try {
+      const bytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
+      if (!/\.apk$/i.test(file.name) || bytes.length !== 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 3 || bytes[3] !== 4) { failures.push(`${file.name}: неверный заголовок APK`); continue; }
+      if (next.includes(file.name)) { failures.push(`${file.name}: название уже есть в библиотеке`); continue; }
+      if (next.length >= 500) { failures.push(`${file.name}: лимит 500 файлов`); continue; }
+      next.push(file.name);
+    } catch { failures.push(`${file.name}: не удалось прочитать файл`); }
+  }
+  if (next.length !== entries.length && !persist(next)) return;
+  selected = null; render(); page('library');
+  if (failures.length) message(`Некоторые файлы не добавлены: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? `; ещё ${failures.length - 3}` : ''}`);
 });
 $('#search').addEventListener('input', () => { selected = null; render(); });
 $('#refresh').addEventListener('click', () => { selected = null; render(); message('Предпросмотр обновлён. Браузер не проверяет наличие файлов.'); });

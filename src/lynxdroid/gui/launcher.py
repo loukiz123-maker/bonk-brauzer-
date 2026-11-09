@@ -321,17 +321,25 @@ class LauncherWindow(QMainWindow):
             )
 
     def add_apk(self) -> None:
-        path, _ = QFileDialog.getOpenFileName(self, "Выберите APK", "", "APK (*.apk *.APK)")
-        if not path:
+        paths, _ = QFileDialog.getOpenFileNames(self, "Выберите APK", "", "APK (*.apk *.APK)")
+        if not paths:
             return
-        try:
-            self.entries = self.library.add(Path(path))
-            self._library_error = ""
-        except (OSError, ValueError, LynxError) as exc:
-            QMessageBox.warning(self, "Не удалось добавить APK", str(exc))
-            return
-        self._render_library()
+        failures: list[str] = []
+        for path in paths:
+            try:
+                self.entries = self.library.add(Path(path))
+            except (OSError, ValueError, LynxError) as exc:
+                failures.append(f"{Path(path).name}: {exc}")
+        # Reload even after partial failure so the view reflects what was saved.
+        self._reload()
         self._show_page(1)
+        if failures:
+            details = "\n".join(failures[:10])
+            if len(failures) > 10:
+                details += f"\nИ ещё ошибок: {len(failures) - 10}"
+            QMessageBox.warning(
+                self, "Не все APK добавлены", f"Некоторые файлы не добавлены:\n{details}"
+            )
 
     def remove_selected(self) -> None:
         item = cast("QListWidgetItem | None", self.list.currentItem())

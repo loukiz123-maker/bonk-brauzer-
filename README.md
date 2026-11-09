@@ -7,7 +7,7 @@ The current application is a launcher prototype, not an Android emulator yet.
 
 The desktop entry and `lynxdroid gui` now open the **standalone launcher**,
 without starting or contacting Waydroid. It can show a local APK library,
-filter it, add or remove file references, copy a file path, open its folder,
+filter it, add one or several APK file references, remove references, copy a file path, open its folder,
 and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
 The independent Android runtime, game compatibility, performance and actual

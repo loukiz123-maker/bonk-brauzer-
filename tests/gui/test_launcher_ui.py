@@ -60,10 +60,19 @@ def test_import_search_and_remove_without_deleting_file(
 
     apk = tmp_path / "MyGame.apk"
     apk.write_bytes(b"PK\x03\x04test")
-    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *a: (str(apk), ""))
+    other = tmp_path / "Other.apk"
+    other.write_bytes(b"PK\x03\x04test")
+    invalid = tmp_path / "Broken.apk"
+    invalid.write_bytes(b"not an apk")
+    warnings = []
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames", lambda *a: ([str(apk), str(other), str(invalid)], "")
+    )
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
     window.add_apk()
     assert window.pages.currentIndex() == 1
-    assert window.list.count() == 1
+    assert window.list.count() == 2
+    assert len(warnings) == 1 and "Broken.apk" in warnings[0]
     window.search.setText("missing")
     assert window.list.count() == 0
     window.search.setText("mygame")
@@ -73,6 +82,8 @@ def test_import_search_and_remove_without_deleting_file(
     monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
     window.remove_button.click()
     assert window.list.count() == 0 and apk.exists()
+    window.search.clear()
+    assert window.list.count() == 1 and other.exists()
 
 
 def test_fullscreen_and_escape(window, qt_app) -> None:
