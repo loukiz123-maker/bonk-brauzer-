@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 801 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 806 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 801 passed
+pytest                                    # 806 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `801 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `806 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -55,7 +55,7 @@ Expected: `801 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/gui/test_editor.py` | 40 | drag/clamp/reset state machine, hit-testing, portrait↔landscape transpose |
 | `tests/gui/test_viewmodel.py` | 68 | disabled-with-reason, banner logic, WCAG contrast |
 | `tests/doctor/test_host_profile.py` | 26 | platform facts vs verdict, worst-verdict rule, unknown is not ready, agreement with `doctor` |
-| `tests/cli/test_cli.py` | 69 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |
+| `tests/cli/test_cli.py` | 74 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |
 | `tests/test_requirements_registry.py` | 10 | the registry cites only tests and files that exist, and its counts are real |
 | `tests/test_perf.py` | 20 | the timing tool measures real events and never reports an end-to-end figure |
 | `tests/core/*` | 39 | XDG paths, symlink safety, no shell, timeouts |

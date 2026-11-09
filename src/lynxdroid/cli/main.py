@@ -161,6 +161,12 @@ def build_parser() -> argparse.ArgumentParser:
     p_fix.add_argument("--backend", choices=["waydroid", "fake"], default=None)
     p_fix.set_defaults(func=cmd_game_fix)
 
+    p_network_report = game_sub.add_parser(
+        "network-report", help="review manually captured network probe output from stdin"
+    )
+    p_network_report.add_argument("--json", action="store_true")
+    p_network_report.set_defaults(func=cmd_game_network_report)
+
     p_revert = game_sub.add_parser("revert", help="undo the root-hiding fix")
     p_revert.add_argument("--yes", action="store_true")
     p_revert.add_argument("--json", action="store_true")
@@ -442,6 +448,40 @@ def cmd_game_explain(args: argparse.Namespace, paths: AppPaths, store: SettingsS
     if advice["fix"]:
         print(f"\n  try: lynxdroid game fix {advice['fix']} --yes")
     return int(ExitCode.OK if advice["fix"] else ExitCode.UNSUPPORTED)
+
+
+def cmd_game_network_report(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Review manually captured output, without claiming independent verification."""
+    from lynxdroid.backend.compat import parse_manual_network_output
+
+    limit = 1_000_000
+    text = sys.stdin.read(limit + 1)
+    if len(text) > limit:
+        raise UsageError("network output exceeds the 1,000,000 character limit")
+    rows = parse_manual_network_output(text)
+    complete_success = all(status == "command reported success" for _, status in rows)
+    note = (
+        "User-supplied output is not independently verified. A failed ping is inconclusive; "
+        "successful probes do not verify the game server or prove a usable route."
+    )
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "source": "user-supplied",
+                    "verified": False,
+                    "note": note,
+                    "probes": [{"name": name, "status": status} for name, status in rows],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(note)
+        for name, status in rows:
+            print(f"{name}: {status}")
+    return int(ExitCode.OK if complete_success else ExitCode.BLOCKED)
 
 
 def cmd_game_fix(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

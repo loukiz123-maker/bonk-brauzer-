@@ -22,6 +22,9 @@ its complete terminal output and select **Review pasted output**. LynxDroid
 reads each guest exit marker, reporting missing or duplicate markers as unknown.
 Pasted output is user-supplied and cannot be independently authenticated;
 command success is not a guarantee that the game server is reachable.
+For headless use, redirect the manual command’s full output to a file and run
+`lynxdroid game network-report --json < network.txt`; the report returns 6 if
+any marker is missing, ambiguous or nonzero.
 
 ## In the desktop application
 

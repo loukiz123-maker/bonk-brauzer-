@@ -719,3 +719,55 @@ class TestGameCommand:
         assert code == 6 and result["outcome"] == "unavailable"
         assert "sudo waydroid shell -- /system/bin/sh -c" in result["message"]
         assert not result["changed"]
+
+
+class TestManualNetworkReport:
+    def test_complete_output_is_reviewed_as_user_supplied(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr(
+            "sys.stdin", io.StringIO("LYNX_NET_IP:0\nLYNX_NET_NAME:0\nLYNX_NET_ROUTE:0\n")
+        )
+        code, out, _ = run(capsys, ["game", "network-report", "--json"], root)
+        payload = json.loads(out)
+        assert code == ExitCode.OK
+        assert payload["source"] == "user-supplied" and payload["verified"] is False
+        assert len(payload["probes"]) == 3
+        assert "do not verify the game server" in payload["note"]
+
+    def test_missing_marker_does_not_report_success(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("LYNX_NET_IP:0\n"))
+        code, out, _ = run(capsys, ["game", "network-report"], root)
+        assert code == ExitCode.BLOCKED
+        assert "Hostname ping: unknown" in out
+
+    def test_failure_returns_blocked_in_json(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr(
+            "sys.stdin", io.StringIO("LYNX_NET_IP:0\nLYNX_NET_NAME:1\nLYNX_NET_ROUTE:0\n")
+        )
+        code, out, _ = run(capsys, ["game", "network-report", "--json"], root)
+        assert code == ExitCode.BLOCKED
+        assert "failure (exit 1)" in json.loads(out)["probes"][1]["status"]
+
+    def test_duplicate_markers_are_rejected(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr(
+            "sys.stdin",
+            io.StringIO("LYNX_NET_IP:0\nLYNX_NET_IP:0\nLYNX_NET_NAME:0\nLYNX_NET_ROUTE:0\n"),
+        )
+        code, out, _ = run(capsys, ["game", "network-report"], root)
+        assert code == ExitCode.BLOCKED
+        assert "IP ping: unknown" in out
+
+    def test_input_size_is_limited(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("x" * 1_000_001))
+        code, out, _ = run(capsys, ["game", "network-report", "--json"], root)
+        assert code != ExitCode.OK
+        assert "limit" in json.loads(out)["error"]["message"]

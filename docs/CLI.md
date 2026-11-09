@@ -149,6 +149,7 @@ only looks like a hang.
 ```text
 lynxdroid game explain MESSAGE [--json]
 lynxdroid game fix NAME [--yes] [--json]
+lynxdroid game network-report [--json] < network.txt
 lynxdroid game revert [--yes] [--json]
 ```
 
@@ -160,6 +161,13 @@ shell normally requires root: if unavailable, read the displayed commands and
 run the command yourself and paste its complete output into Game help to review
 the reported guest exit statuses. Pasted output is not independently verified. Legacy `hide-root`, `egl-fallback`, and `game revert` are
 disabled because their effectiveness and safe restoration were not verified.
+For a headless review, save the complete output of the displayed manual command
+(including stderr) to `network.txt`, then run `lynxdroid game network-report
+--json < network.txt`. The report consumes at most one million characters from
+standard input. It returns 0 only when all three guest commands reported zero;
+6 means failed or missing markers, not proof the network is broken. This is
+user-supplied evidence, not independently authenticated.
+
 See `docs/COMPATIBILITY.md` for limitations and recovery guidance.
 
 ## apps
