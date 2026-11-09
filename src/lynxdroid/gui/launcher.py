@@ -150,6 +150,12 @@ class LauncherWindow(QMainWindow):
         self.controls_tool.setAccessibleName("Редактор управления")
         self.controls_tool.clicked.connect(self.open_controls)
         tools_layout.addWidget(self.controls_tool)
+        self.add_tool = QPushButton("＋")
+        self.add_tool.setObjectName("tool")
+        self.add_tool.setToolTip("Добавить APK")
+        self.add_tool.setAccessibleName("Добавить APK")
+        self.add_tool.clicked.connect(self.add_apk)
+        tools_layout.addWidget(self.add_tool)
         tools_layout.addStretch()
         self.settings_tool = QPushButton("⚙")
         self.settings_tool.setObjectName("tool")
@@ -166,25 +172,6 @@ class LauncherWindow(QMainWindow):
         image = (Path(__file__).resolve().parents[1] / "data" / "desktop-bg.jpg").as_posix()
         page.setObjectName("desktop")
         page.setStyleSheet(f"QWidget#desktop {{ border-image: url('{image}'); }}")
-        box = QVBoxLayout(page)
-        box.setContentsMargins(34, 30, 34, 24)
-        status = label("LYNXDROID  •  ДВИЖОК В РАЗРАБОТКЕ", "heroText")
-        box.addWidget(status)
-        row = QHBoxLayout()
-        for text, callback in (
-            ("▦\nБиблиотека", lambda: self._show_page(1)),
-            ("＋\nДобавить APK", self.add_apk),
-        ):
-            button = QPushButton(text)
-            button.setMinimumSize(130, 100)
-            button.clicked.connect(callback)
-            row.addWidget(button)
-        row.addStretch()
-        box.addSpacing(26)
-        box.addLayout(row)
-        box.addStretch()
-        self.summary = label("", "heroText")
-        box.addWidget(self.summary)
         return page
 
     def open_settings(self) -> None:
@@ -311,9 +298,6 @@ class LauncherWindow(QMainWindow):
             item = QListWidgetItem(f"{entry.title}\n{status}  ·  {entry.path}")
             item.setData(Qt.ItemDataRole.UserRole, str(entry.path))
             self.list.addItem(item)
-        self.summary.setText(
-            f"APK в библиотеке: {len(self.entries)}\nЗапуск станет доступен после создания движка."
-        )
         self.library_note.setText(
             self._library_error
             or (

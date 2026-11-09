@@ -28,7 +28,6 @@ function page(name) {
   document.querySelectorAll('.nav').forEach((el) => { el.classList.toggle('active', el.dataset.page === name); });
 }
 function render() {
-  $('#count').textContent = `APK в библиотеке: ${entries.length}`;
   const list = $('#list'); list.replaceChildren();
   const query = $('#search').value.trim().toLocaleLowerCase();
   entries.forEach((name, index) => {

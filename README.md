@@ -11,7 +11,8 @@ filter it, add one or several APK file references, remove references, copy a fil
 and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
 The left-hand sidebar is removed; the right-hand toolbar provides navigation,
-settings and the control editor. The editor opens
+settings, APK import and the control editor. The central desktop is intentionally
+empty until an Android runtime exists. The editor opens
 beside its canvas, and can save a layout draft,
 including a fire marker. Unsaved edits are discarded on leaving the editor.
 The draft does not inject input into games. Engine

@@ -16,14 +16,7 @@
   </header>
   <div class="body">
     <main>
-      <section id="home" class="desktop page">
-        <div class="desktop-status">LYNXDROID &nbsp;•&nbsp; ДВИЖОК В РАЗРАБОТКЕ</div>
-        <div class="desktop-icons">
-          <button class="desktop-icon" data-go="library"><span>▦</span>Библиотека</button>
-          <button class="desktop-icon add-apk"><span>＋</span>Добавить APK</button>
-        </div>
-        <div class="desktop-summary muted"><span id="count">APK в библиотеке: 0</span><br>Запуск станет доступен после создания движка.</div>
-      </section>
+      <section id="home" class="desktop page" aria-label="Рабочий стол"></section>
       <section id="library" class="page" hidden>
         <h1>Библиотека</h1><p class="muted description">Здесь хранятся названия выбранных APK. Это не установка игр.</p>
         <div class="preview-note">Веб-предпросмотр: отдельная библиотека браузера. Файлы не загружаются на сервер и не добавляются в настольный лаунчер.</div>
@@ -49,6 +42,7 @@
       <button class="nav" data-page="library" title="Библиотека" aria-label="Библиотека">▦</button>
       <button class="nav" data-page="about" title="О проекте" aria-label="О проекте">ⓘ</button>
       <button id="open-controls" title="Редактор управления" aria-label="Редактор управления">⌨</button>
+      <button class="add-apk" title="Добавить APK" aria-label="Добавить APK">＋</button>
       <div class="tool-spacer"></div>
       <button id="open-settings" title="Настройки" aria-label="Настройки">⚙</button>
     </aside>

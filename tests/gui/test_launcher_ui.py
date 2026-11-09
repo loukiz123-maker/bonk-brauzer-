@@ -97,7 +97,8 @@ def test_import_search_and_remove_without_deleting_file(
         QFileDialog, "getOpenFileNames", lambda *a: ([str(apk), str(other), str(invalid)], "")
     )
     monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
-    window.add_apk()
+    assert window.add_tool.parentWidget() is window.controls_tool.parentWidget()
+    window.add_tool.click()
     assert window.pages.currentIndex() == 1
     assert window.list.count() == 2
     assert len(warnings) == 1 and "Broken.apk" in warnings[0]
