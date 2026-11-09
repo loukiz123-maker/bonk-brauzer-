@@ -8,6 +8,7 @@
 #include <filesystem>
 #include <string>
 #include <string_view>
+#include <vector>
 
 #include "bonk/android/engine_session.hpp"
 #include "bonk/core/result.hpp"
@@ -33,7 +34,8 @@ struct GuestStatus {
   std::string detail;
 };
 
-/// Command builders are pure; they never invoke ADB.
+/// Command builders are pure; they never invoke ADB. Device enumeration does
+/// not need a selected serial, so make_adb_devices_command() ignores config.serial.
 [[nodiscard]] Result<RuntimeCommand> make_adb_devices_command(const AdbConfig& config);
 [[nodiscard]] Result<RuntimeCommand> make_adb_boot_property_command(const AdbConfig& config);
 [[nodiscard]] Result<RuntimeCommand> make_adb_screenshot_command(const AdbConfig& config);
@@ -52,6 +54,8 @@ struct GuestStatus {
 /// Screenshot decoding accepts at most 32 MiB of PNG and 16,777,216 pixels; chunk
 /// lengths, CRCs, image format, and terminal IEND are checked before decoding.
 [[nodiscard]] GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view output);
+/// Parses selectable device rows from `adb devices -l`; duplicate serials are marked Unknown.
+[[nodiscard]] std::vector<GuestStatus> parse_adb_devices_list_output(std::string_view output);
 [[nodiscard]] GuestState parse_boot_completed_property(std::string_view output) noexcept;
 [[nodiscard]] Result<image::Image> decode_screenshot_png(std::string_view png_bytes);
 
@@ -106,6 +110,13 @@ struct PixelPoint {
 [[nodiscard]] Status install_selected_apk(
     const AdbConfig& config, const std::filesystem::path& apk_path, bool user_confirmed_install,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{60000});
+
+/// Lists ADB transports without requiring a selected serial. The serial field
+/// in config is ignored; callers can present the returned rows for explicit
+/// selection. This does not query guest boot state. Requires ADB server consent.
+[[nodiscard]] Result<std::vector<GuestStatus>> list_adb_devices(
+    const AdbConfig& config,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 
 /// Checks the selected ADB transport, then queries sys.boot_completed only if
 /// that serial is online. The timeout applies independently to each command.

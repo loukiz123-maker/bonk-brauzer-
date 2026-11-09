@@ -65,7 +65,8 @@ class FakeAdb final {
  public:
   explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok",
                    std::string_view install_output = "Success", int exit_code = 0,
-                   std::string_view launch_stderr_output = {}, std::string_view install_stderr_output = {})
+                   std::string_view launch_stderr_output = {}, std::string_view install_stderr_output = {},
+                   bool include_devices_output = false)
       : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
@@ -101,6 +102,12 @@ elif [ "${4-}" = "getprop" ]; then
 fi
 )";
     } else {
+      if (include_devices_output) {
+        script << R"(if [ "${1-}" = "devices" ]; then
+  printf 'List of devices attached\nemulator-5554\tdevice product:sdk_gphone64_x86_64 model:Pixel_8\nusb-serial-1\toffline transport_id:4\nunauthorized-serial\tunauthorized\n'
+fi
+)";
+      }
       script << R"(if [ "${3-}" = "exec-out" ]; then exec /bin/cat )" << shell_quote(fixture.string())
              << R"(; fi)" << std::endl;
     }
@@ -249,8 +256,9 @@ BONK_TEST(android_adb, builds_install_argv_from_an_explicit_absolute_apk_path) {
 
 BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_range_key_code) {
   CHECK(android::make_adb_devices_command({"adb", "emulator-5554"}).is_error());
-  CHECK(android::make_adb_devices_command({"/sdk/platform-tools/adb", ""}).is_error());
-  CHECK(android::make_adb_devices_command({"/sdk/platform-tools/adb", "-s;bad"}).is_error());
+  CHECK(android::make_adb_devices_command({"/sdk/platform-tools/adb", ""}).is_ok());
+  CHECK(android::make_adb_boot_property_command({"/sdk/platform-tools/adb", ""}).is_error());
+  CHECK(android::make_adb_boot_property_command({"/sdk/platform-tools/adb", "-s;bad"}).is_error());
   CHECK(android::make_adb_key_command({"/sdk/platform-tools/adb", "emulator-5554"}, 0).is_error());
   CHECK(android::make_adb_key_command({"/sdk/platform-tools/adb", "emulator-5554"}, 65536).is_error());
   CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com..game").is_error());
@@ -269,6 +277,29 @@ unauthorized-serial	unauthorized
   CHECK(android::parse_adb_devices_output("usb-serial-1", output).state == android::GuestState::Offline);
   CHECK(android::parse_adb_devices_output("unauthorized-serial", output).state == android::GuestState::Unauthorized);
   CHECK(android::parse_adb_devices_output("missing-serial", output).state == android::GuestState::NotConnected);
+}
+
+BONK_TEST(android_adb, parses_full_devices_list_for_explicit_selection) {
+  constexpr std::string_view output =
+      "List of devices attached\n"
+      "emulator-5554\tdevice product:sdk_gphone64_x86_64 model:Pixel_8\n"
+      "usb-serial-1\toffline transport_id:4\n"
+      "unauthorized-serial\tunauthorized\n"
+      "permission-serial\tno permissions (user in plugdev group; are your udev rules wrong?)\n";
+  const std::vector<android::GuestStatus> devices = android::parse_adb_devices_list_output(output);
+  REQUIRE(devices.size() == 4);
+  CHECK_EQ(devices[0].serial, std::string("emulator-5554"));
+  CHECK(devices[0].state == android::GuestState::AdbOnline);
+  CHECK(devices[1].state == android::GuestState::Offline);
+  CHECK(devices[2].state == android::GuestState::Unauthorized);
+  CHECK(devices[3].state == android::GuestState::Unknown);
+
+  CHECK(android::parse_adb_devices_list_output("List of devices attached\n").empty());
+  const std::vector<android::GuestStatus> duplicate = android::parse_adb_devices_list_output(
+      "List of devices attached\nserial-1\tdevice\nserial-1\toffline\n");
+  REQUIRE(duplicate.size() == 1);
+  CHECK(duplicate[0].state == android::GuestState::Unknown);
+  CHECK(duplicate[0].detail.find("more than once") != std::string::npos);
 }
 
 BONK_TEST(android_adb, handles_ambiguous_or_unrecognized_device_rows) {
@@ -311,7 +342,7 @@ BONK_TEST(android_adb, times_out_with_last_guest_state_when_boot_does_not_comple
   REQUIRE(fake.ready());
 
   const Result<android::GuestStatus> status = android::wait_for_guest_boot(
-      fake.config(), std::chrono::milliseconds{100}, std::chrono::milliseconds{5}, std::chrono::milliseconds{1000});
+      fake.config(), std::chrono::milliseconds{2000}, std::chrono::milliseconds{5}, std::chrono::milliseconds{2000});
   REQUIRE(status.is_error());
   CHECK_EQ(status.error().code, std::string("android.guest_boot_timeout"));
   CHECK(status.error().message.find("not-connected") != std::string::npos);
@@ -567,6 +598,30 @@ BONK_TEST(android_adb, reports_explicit_am_start_failures_even_when_adb_exits_ze
   CHECK(unresolved.error().message.find("unable to resolve Intent") != std::string::npos);
 }
 
+BONK_TEST(android_adb, lists_transports_without_a_selected_serial) {
+  FakeAdb fake{false, "Status: ok", "Success", 0, {}, {}, true};
+  REQUIRE(fake.ready());
+  android::AdbConfig config = fake.config();
+  config.serial.clear();
+
+  const Result<std::vector<android::GuestStatus>> devices =
+      android::list_adb_devices(config, std::chrono::seconds{1});
+  REQUIRE(devices.is_ok());
+  REQUIRE(devices.value().size() == 3);
+  CHECK_EQ(devices.value()[0].serial, std::string("emulator-5554"));
+  CHECK(devices.value()[0].state == android::GuestState::AdbOnline);
+  CHECK(devices.value()[1].state == android::GuestState::Offline);
+  CHECK(devices.value()[2].state == android::GuestState::Unauthorized);
+  CHECK_EQ(fake.arguments(), std::string("devices -l "));
+
+  const android::AdbConfig no_consent{config.executable, "", false};
+  const Result<std::vector<android::GuestStatus>> blocked =
+      android::list_adb_devices(no_consent, std::chrono::seconds{1});
+  REQUIRE(blocked.is_error());
+  CHECK_EQ(blocked.error().code, std::string("android.adb_server_consent_required"));
+  CHECK_EQ(fake.arguments(), std::string("devices -l "));
+}
+
 BONK_TEST(android_adb, requires_explicit_consent_before_any_adb_process_is_started) {
   const android::AdbConfig config{"/definitely/missing/adb", "emulator-5554"};
   const Result<android::GuestStatus> result = android::query_guest_status(config, std::chrono::milliseconds{100});
@@ -577,6 +632,11 @@ BONK_TEST(android_adb, requires_explicit_consent_before_any_adb_process_is_start
       config, std::chrono::seconds{1}, std::chrono::milliseconds{100}, std::chrono::milliseconds{100});
   REQUIRE(waited.is_error());
   CHECK_EQ(waited.error().code, std::string("android.adb_server_consent_required"));
+
+  const android::AdbConfig invalid_serial{"/definitely/missing/adb", "bad;serial", true};
+  const Result<android::GuestStatus> invalid = android::query_guest_status(invalid_serial, std::chrono::milliseconds{100});
+  REQUIRE(invalid.is_error());
+  CHECK_EQ(invalid.error().code, std::string("android.invalid_adb_config"));
 }
 
 BONK_TEST(android_adb, reports_missing_adb_after_consent_without_faking_a_guest_state) {

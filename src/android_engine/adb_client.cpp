@@ -10,7 +10,9 @@
 #include <string>
 #include <string_view>
 #include <thread>
+#include <unordered_map>
 #include <utility>
+#include <vector>
 
 #include "bonk/android/engine_session.hpp"
 #include "bonk/android/process_runner.hpp"
@@ -65,10 +67,16 @@ bool valid_serial(std::string_view serial) {
 
 bool has_nul(const std::filesystem::path& path) { return path.native().find('\0') != std::filesystem::path::string_type::npos; }
 
-Status validate_config(const AdbConfig& config) {
+Status validate_adb_executable(const AdbConfig& config) {
   if (config.executable.empty() || has_nul(config.executable) || !config.executable.is_absolute()) {
     return Status::failure(Error::make("android.invalid_adb_config", "ADB executable must be an explicit absolute path"));
   }
+  return Status::success();
+}
+
+Status validate_config(const AdbConfig& config) {
+  const Status executable_valid = validate_adb_executable(config);
+  if (executable_valid.is_error()) return executable_valid;
   if (!valid_serial(config.serial) || config.serial.find('\0') != std::string::npos) {
     return Status::failure(Error::make("android.invalid_adb_config", "ADB serial is empty or contains unsupported characters"));
   }
@@ -348,7 +356,7 @@ std::string_view to_string(GuestState state) noexcept {
 }
 
 Result<RuntimeCommand> make_adb_devices_command(const AdbConfig& config) {
-  const Status valid = validate_config(config);
+  const Status valid = validate_adb_executable(config);
   if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
   return Result<RuntimeCommand>::success({config.executable.string(), {"devices", "-l"}});
 }
@@ -443,6 +451,48 @@ GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view o
     return {GuestState::Unauthorized, std::string(serial), "ADB reports the device is unauthorized"};
   }
   return {GuestState::Unknown, std::string(serial), "unrecognized ADB device state: " + device_state};
+}
+
+std::vector<GuestStatus> parse_adb_devices_list_output(std::string_view output) {
+  std::vector<GuestStatus> devices;
+  std::unordered_map<std::string, std::size_t> index_by_serial;
+  std::istringstream lines{std::string(output)};
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::string_view trimmed = trim_ascii(line);
+    if (trimmed.empty() || trimmed == "List of devices attached") continue;
+
+    std::istringstream fields{line};
+    std::string serial;
+    std::string device_state;
+    if (!(fields >> serial >> device_state) || !valid_serial(serial)) continue;
+
+    const auto previous = index_by_serial.find(serial);
+    if (previous != index_by_serial.end()) {
+      devices[previous->second] =
+          {GuestState::Unknown, serial, "ADB listed this serial more than once"};
+      continue;
+    }
+
+    GuestStatus status;
+    status.serial = serial;
+    if (device_state == "device") {
+      status.state = GuestState::AdbOnline;
+      status.detail = "ADB transport is online";
+    } else if (device_state == "offline") {
+      status.state = GuestState::Offline;
+      status.detail = "ADB reports the device offline";
+    } else if (device_state == "unauthorized") {
+      status.state = GuestState::Unauthorized;
+      status.detail = "ADB reports the device is unauthorized";
+    } else {
+      status.state = GuestState::Unknown;
+      status.detail = "unrecognized ADB device state: " + device_state;
+    }
+    index_by_serial.emplace(serial, devices.size());
+    devices.push_back(std::move(status));
+  }
+  return devices;
 }
 
 GuestState parse_boot_completed_property(std::string_view output) noexcept {
@@ -587,9 +637,26 @@ Status install_selected_apk(const AdbConfig& config, const std::filesystem::path
   return validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
 }
 
+Result<std::vector<GuestStatus>> list_adb_devices(const AdbConfig& config,
+                                                  std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return Result<std::vector<GuestStatus>>::failure(timeout_valid.error());
+
+  const Result<RuntimeCommand> command = make_adb_devices_command(config);
+  if (command.is_error()) return Result<std::vector<GuestStatus>>::failure(command.error());
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return Result<std::vector<GuestStatus>>::failure(consent.error());
+
+  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  if (output.is_error()) return Result<std::vector<GuestStatus>>::failure(output.error());
+  return Result<std::vector<GuestStatus>>::success(parse_adb_devices_list_output(output.value().stdout_data));
+}
+
 Result<GuestStatus> query_guest_status(const AdbConfig& config, std::chrono::milliseconds command_timeout) {
   const Status timeout_valid = validate_timeout(command_timeout);
   if (timeout_valid.is_error()) return Result<GuestStatus>::failure(timeout_valid.error());
+  const Status config_valid = validate_config(config);
+  if (config_valid.is_error()) return Result<GuestStatus>::failure(config_valid.error());
 
   const Result<RuntimeCommand> devices_command = make_adb_devices_command(config);
   if (devices_command.is_error()) return Result<GuestStatus>::failure(devices_command.error());

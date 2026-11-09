@@ -1,6 +1,6 @@
 # Android-движок: архитектура и проверяемые этапы
 
-**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, ADB guest-state probe и bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe, запрос запуска установленного приложения и установка явно выбранного APK по подтверждению вызывающего кода. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и управления произвольным состоянием pointer/key нет.
+**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, перечисление ADB-транспортов и guest-state probe с bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe, запрос запуска установленного приложения и установка явно выбранного APK по подтверждению вызывающего кода. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и управления произвольным состоянием pointer/key нет.
 
 ## Исходное состояние репозитория
 
@@ -37,7 +37,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 Пользовательский Android SDK Emulator + AVD
 ```
 
-`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
 
 ## Контракт лаунчера
 
@@ -86,10 +86,10 @@ Preflight не запускает найденные executable, не загру
 Добавлены:
 
 - `include/bonk/android/process_runner.hpp` и `src/android_engine/process_runner.cpp` — запуск коротких host-команд через `posix_spawn` по абсолютному пути, без shell/PATH-поиска, с раздельным stdout/stderr, лимитом до 64 MiB на поток, таймаутом и завершением/сбором дочернего процесса.
-- `include/bonk/android/adb_client.hpp` и `src/android_engine/adb_client.cpp` — pure argv builders, parser для `adb devices -l` и `sys.boot_completed`, а также `query_guest_status()`.
+- `include/bonk/android/adb_client.hpp` и `src/android_engine/adb_client.cpp` — pure argv builders, parsers для полной выдачи `adb devices -l` и выбранного serial, parser `sys.boot_completed`, `list_adb_devices()` и `query_guest_status()`.
 - `tests/android_engine/process_runner_test.cpp` и `tests/android_engine/adb_client_test.cpp`.
 
-`query_guest_status()` при явном вызове проверяет выбранный serial через `adb devices -l`; только для состояния `device` читает `adb -s SERIAL shell getprop sys.boot_completed`. Ответы различают `NotConnected`, `Offline`, `Unauthorized`, `AdbOnline`, `Booting`, `BootComplete` и `Unknown`. `BootComplete` значит только, что свойство Android равно `1`; это не готовность приложения или игры. Эти текстовые ADB-запросы ограничены 64 KiB вывода на поток и таймаутом не более 60 секунд на команду.
+`list_adb_devices()` не требует выбранного serial: он возвращает строки `adb devices -l` с состояниями, а повторяющийся serial маркирует как `Unknown`, чтобы вызывающий код мог запросить однозначный выбор. `query_guest_status()` отдельно проверяет переданный serial через `adb devices -l`; только для состояния `device` читает `adb -s SERIAL shell getprop sys.boot_completed`. Ответы различают `NotConnected`, `Offline`, `Unauthorized`, `AdbOnline`, `Booting`, `BootComplete` и `Unknown`. `BootComplete` значит только, что свойство Android равно `1`; это не готовность приложения или игры. Эти текстовые ADB-запросы ограничены 64 KiB вывода на поток и таймаутом не более 60 секунд на команду.
 
 Запуск `adb` может автоматически поднять пользовательский ADB server и создать `~/.android/adbkey`. Поэтому `AdbConfig::allow_adb_server_autostart` по умолчанию `false`; каждый API, запускающий ADB, откажет до процесса, пока вызывающий код не выставит `true` после явного согласия пользователя. На этом этапе реальные ADB/AVD отсутствовали.
 
@@ -187,6 +187,6 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **314 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 39/39. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка: `make -j2 verify` — **316 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 41/41. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
 
 Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.
