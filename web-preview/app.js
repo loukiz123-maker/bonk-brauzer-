@@ -144,7 +144,24 @@ function renderControls() {
   $('#redo-control').disabled = redoStack.length === 0;
 }
 function activeTouchCount() { return controls.filter(c => controlKeys(c).some(k => liveHeld.has(k))).length; }
-$('#control-kind').addEventListener('change', () => { if ($('#control-kind').value === 'Джойстик' && $('#control-key').value.trim() === 'F') $('#control-key').value = 'W,D,S,A'; });
+let capturingKey = false;
+let ignoreCaptureClick = false;
+function cancelCapture() { capturingKey = false; $('#capture-key').textContent = 'Назначить нажатием'; }
+function syncCaptureKind() { cancelCapture(); $('#capture-key').disabled = $('#control-kind').value === 'Джойстик'; }
+$('#control-kind').addEventListener('change', () => { syncCaptureKind(); if ($('#control-kind').value === 'Джойстик' && $('#control-key').value.trim() === 'F') $('#control-key').value = 'W,D,S,A'; });
+$('#capture-key').addEventListener('click', () => { if (ignoreCaptureClick) { ignoreCaptureClick = false; return; } if (!capturingKey) { capturingKey = true; $('#capture-key').textContent = 'Нажмите клавишу или кнопку мыши здесь • Esc — отмена'; $('#capture-key').focus(); } });
+$('#capture-key').addEventListener('keydown', event => {
+  if (!capturingKey) return;
+  event.preventDefault();
+  if (event.key === 'Escape') cancelCapture();
+  else if (/^[a-z0-9]$/i.test(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey) { $('#control-key').value = event.key.toUpperCase(); cancelCapture(); }
+});
+$('#capture-key').addEventListener('mousedown', event => {
+  if (!capturingKey || ![0, 2].includes(event.button)) return;
+  event.preventDefault(); if (event.button === 0) { ignoreCaptureClick = true; setTimeout(() => { ignoreCaptureClick = false; }, 1000); } $('#control-key').value = event.button === 0 ? 'Mouse1' : 'Mouse2'; cancelCapture();
+});
+$('#capture-key').addEventListener('contextmenu', event => event.preventDefault());
+$('#capture-key').addEventListener('blur', cancelCapture);
 $('#open-settings').addEventListener('click', () => $('#settings-dialog').showModal());
 function canDiscard() {
   return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
@@ -181,7 +198,7 @@ function recordChange() {
 }
 function selectControl(index) {
   selectedControl = index;
-  if (index !== null) { $('#control-kind').value = controls[index].kind; $('#control-key').value = controls[index].key; }
+  if (index !== null) { $('#control-kind').value = controls[index].kind; syncCaptureKind(); $('#control-key').value = controls[index].key; }
   renderControls();
 }
 function canvasPosition(event) {

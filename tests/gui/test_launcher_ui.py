@@ -442,3 +442,34 @@ def test_live_mouse_fire_press_and_release(window, qt_app, tmp_path) -> None:
     editor.end_live_test()
     editor.close()
     shiboken6.delete(editor)
+
+
+def test_binding_capture_is_explicit_and_cancellable(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    button = editor.capture_button
+    button.click()
+    QTest.keyClick(button, Qt.Key.Key_G)
+    assert editor.key.text() == "G" and not button.armed
+    button.click()
+    QTest.keyClick(button, Qt.Key.Key_Escape)
+    assert editor.key.text() == "G" and not button.armed
+    button.click()
+    QTest.mouseClick(button, Qt.MouseButton.RightButton)
+    assert editor.key.text() == "Mouse2" and not button.armed
+    button.click()
+    editor.key.setFocus()
+    qt_app.processEvents()
+    assert not button.armed
+    editor.kind.setCurrentText("Джойстик")
+    assert not button.isEnabled()
+    assert not editor.controls
+    editor.close()
+    shiboken6.delete(editor)

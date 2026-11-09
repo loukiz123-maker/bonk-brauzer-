@@ -38,6 +38,60 @@ def load_controls(path: Path) -> list[dict[str, Any]]:
         return []
 
 
+class BindingCapture(QPushButton):
+    """Capture one supported binding without globally intercepting input."""
+
+    def __init__(self, field: QLineEdit) -> None:
+        super().__init__("Назначить нажатием")
+        self.field = field
+        self.armed = False
+        self.clicked.connect(self.arm)
+
+    def arm(self) -> None:
+        self.armed = True
+        self.setText("Нажмите клавишу или кнопку мыши здесь • Esc — отмена")
+        self.setFocus(Qt.FocusReason.OtherFocusReason)
+
+    def cancel(self) -> None:
+        self.armed = False
+        self.setText("Назначить нажатием")
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if not self.armed:
+            super().keyPressEvent(event)
+            return
+        if event.key() == Qt.Key.Key_Escape:
+            self.cancel()
+        elif (
+            not event.modifiers()
+            & (
+                Qt.KeyboardModifier.ControlModifier
+                | Qt.KeyboardModifier.AltModifier
+                | Qt.KeyboardModifier.MetaModifier
+            )
+            and len(event.text()) == 1
+            and event.text().isascii()
+            and event.text().isalnum()
+        ):
+            self.field.setText(event.text().upper())
+            self.cancel()
+        event.accept()
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if not self.armed:
+            super().mousePressEvent(event)
+            return
+        key = Canvas._mouse_key(event.button())
+        if key:
+            self.field.setText("Mouse1" if key == "mouse1" else "Mouse2")
+            self.cancel()
+        event.accept()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        self.cancel()
+        super().focusOutEvent(event)
+
+
 class Canvas(QWidget):
     def __init__(self, editor: ControlEditor) -> None:
         super().__init__()
@@ -209,6 +263,8 @@ class ControlEditor(QDialog):
         self.key.setMaxLength(16)
         self.key.setPlaceholderText("Клавиша, например F")
         side.addWidget(self.key)
+        self.capture_button = BindingCapture(self.key)
+        side.addWidget(self.capture_button)
         key_hint = QLabel("Джойстик: W,D,S,A. Мышь: Mouse1 — левая, Mouse2 — правая.")
         key_hint.setWordWrap(True)
         side.addWidget(key_hint)
@@ -263,6 +319,8 @@ class ControlEditor(QDialog):
         self.profile_choice.currentIndexChanged.connect(self.change_profile)
 
     def _kind_changed(self, kind: str) -> None:
+        self.capture_button.cancel()
+        self.capture_button.setEnabled(kind != "Джойстик")
         if kind == "Джойстик" and self.key.text().strip() == "F":
             self.key.setText("W,D,S,A")
 
