@@ -116,7 +116,7 @@ def test_import_search_and_remove_without_deleting_file(
 
 
 def test_fullscreen_and_escape(window, qt_app) -> None:
-    assert window.fullscreen_button.parentWidget() is window.controls_tool.parentWidget()
+    assert window.fullscreen_button.parentWidget().objectName() == "header"
     assert window.fullscreen_button.text() == "⛶"
     window.fullscreen_button.click()
     qt_app.processEvents()
