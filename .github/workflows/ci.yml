@@ -322,7 +322,9 @@ jobs:
                   raise SystemExit('screenshot failed')
               screenshot.scaled(640, 400).save('launcher-small.jpg', quality=55)
               import base64
-              print('::notice title=launcher-preview::' + base64.b64encode(Path('launcher-small.jpg').read_bytes()).decode())
+              encoded = base64.b64encode(Path('launcher-small.jpg').read_bytes()).decode()
+              for i in range(0, len(encoded), 3000):
+                  print(f'::notice title=preview-{i // 3000:03d}::' + encoded[i:i+3000])
               import shiboken6
               shiboken6.delete(window)
           PY
