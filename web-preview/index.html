@@ -28,10 +28,11 @@
       <section id="about" class="page" hidden><h1>О проекте</h1><div class="about-card"><h2>LynxDroid · самостоятельный лаунчер</h2><p class="muted">Лаунчер не использует Waydroid. Сейчас доступны библиотека APK, поиск и управление окном. Запуск Android-приложений ещё не реализован.</p><p class="muted">Полный экран: F11 &nbsp;•&nbsp; Выход из полного экрана: Esc</p><p class="muted">Это браузерная копия для просмотра дизайна. Системные действия доступны только в настольной версии.</p></div></section>
       <section id="editor" class="editor-page page" hidden>
   <div class="dialog-title"><strong>⌨ &nbsp;Редактор управления — шаблон</strong><button id="close-editor" aria-label="Закрыть редактор">✕</button></div>
-  <div class="editor-layout"><div id="canvas" class="canvas" aria-label="Поле раскладки"><div class="canvas-hint">Нажмите на поле, чтобы разместить элемент</div></div>
-    <div class="editor-side"><h2>РЕДАКТОР УПРАВЛЕНИЯ</h2><p class="muted">Выберите тип и клавишу, затем нажмите на поле. Это шаблон: ввод в игры пока не работает. Канал scrcpy подготовлен, но не подключён.</p>
+  <div class="editor-layout"><div id="canvas" class="canvas" aria-label="Поле раскладки"><div class="canvas-hint">Нажмите на поле для добавления; перетащите элемент для перемещения</div></div>
+    <div class="editor-side"><h2>РЕДАКТОР УПРАВЛЕНИЯ</h2><p class="muted">Нажмите на поле для добавления, перетащите элемент для перемещения. Это шаблон: ввод в игры пока не работает. Канал scrcpy подготовлен, но не подключён.</p>
       <label>Тип элемента<select id="control-kind"><option>Нажатие</option><option>Двойное нажатие</option><option>Мультитач</option><option>Джойстик</option><option>Камера</option><option>Перетаскивание</option><option>Огонь</option></select></label>
       <label>Клавиша<input id="control-key" value="F" maxlength="16" placeholder="Например F"></label>
+      <button id="apply-control" disabled>Изменить выбранный</button><button id="delete-control" disabled>Удалить выбранный</button>
       <label>Клавиша для проверки<input id="test-key" maxlength="1" placeholder="Например F"></label><button id="test-mapping">Проверить без Android</button>
       <p id="editor-status" class="muted"></p><div class="editor-spacer"></div><button id="undo-control">Убрать последний</button><button id="reset-controls">Очистить</button><button id="save-controls" class="primary">Сохранить шаблон</button>
     </div>

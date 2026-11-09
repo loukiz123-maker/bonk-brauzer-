@@ -9,3 +9,5 @@
 
 /* White button labels, including the right-hand toolbar. Disabled actions remain muted. */
 button:enabled{color:#fff}.primary:enabled{color:#fff;background:#146d70;border-color:#146d70}.primary:hover:enabled{background:#20848a}.tool-rail button:enabled,.tool-rail button:hover:enabled,.tool-rail .nav.active{color:#fff}
+
+.canvas{touch-action:none}.marker.selected{background:#367382;border-color:#fff}.editor-side{overflow-y:auto}

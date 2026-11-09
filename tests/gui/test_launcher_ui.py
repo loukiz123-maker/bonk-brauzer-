@@ -190,3 +190,38 @@ def test_control_editor_saves_layout_and_refuses_corrupt_data(window, qt_app, tm
     editor.save()
     assert path.read_text() == "broken"
     shiboken6.delete(editor)
+
+
+def test_control_editor_select_drag_edit_and_delete(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor, load_controls
+
+    path = tmp_path / "editor.json"
+    editor = ControlEditor(path, window)
+    editor.show()
+    qt_app.processEvents()
+    editor.place(0.25, 0.25)
+    canvas = editor.canvas
+    start = QPoint(round(canvas.width() * 0.25), round(canvas.height() * 0.25))
+    end = QPoint(round(canvas.width() * 0.7), round(canvas.height() * 0.6))
+    QTest.mousePress(canvas, Qt.MouseButton.LeftButton, pos=start)
+    QTest.mouseMove(canvas, end)
+    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
+    assert len(editor.controls) == 1
+    assert editor.controls[0]["x"] == pytest.approx(0.7, abs=0.01)
+    assert editor.controls[0]["y"] == pytest.approx(0.6, abs=0.01)
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("G")
+    editor.apply_button.click()
+    editor.save_button.click()
+    assert load_controls(path)[0]["kind"] == "Огонь"
+    assert load_controls(path)[0]["key"] == "G"
+    editor.delete_button.click()
+    assert not editor.controls and not editor.delete_button.isEnabled()
+    editor.save_button.click()
+    assert load_controls(path) == []
+    editor.close()
+    shiboken6.delete(editor)

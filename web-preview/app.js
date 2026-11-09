@@ -87,6 +87,8 @@ const controlStorageKey = 'lynxdroid-preview-controls-v1';
 const kinds = ['Нажатие', 'Двойное нажатие', 'Мультитач', 'Джойстик', 'Камера', 'Перетаскивание', 'Огонь'];
 let controls = [];
 let controlsValid = true;
+let selectedControl = null;
+let dragging = false;
 function readControls() {
   const data = JSON.parse(localStorage.getItem(controlStorageKey) || '{"schema":1,"controls":[]}');
   if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
@@ -94,22 +96,59 @@ function readControls() {
 }
 function renderControls() {
   const canvas = $('#canvas'); canvas.querySelectorAll('.marker').forEach(m => m.remove());
-  controls.forEach(c => { const marker = document.createElement('div'); marker.className = 'marker'; marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
+  controls.forEach((c, index) => { const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
+  $('#apply-control').disabled = selectedControl === null;
+  $('#delete-control').disabled = selectedControl === null;
 }
 $('#open-settings').addEventListener('click', () => $('#settings-dialog').showModal());
 $('#open-controls').addEventListener('click', () => {
   try { controls = readControls(); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Библиотека шаблона повреждена или недоступна. Сохранение отключено.'; }
-  $('#save-controls').disabled = !controlsValid; renderControls(); page('editor');
+  selectedControl = null; dragging = false; $('#save-controls').disabled = !controlsValid; renderControls(); page('editor');
 });
 $('#close-editor').addEventListener('click', () => page('home'));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
-$('#canvas').addEventListener('click', event => {
+function selectControl(index) {
+  selectedControl = index;
+  if (index !== null) { $('#control-kind').value = controls[index].kind; $('#control-key').value = controls[index].key; }
+  renderControls();
+}
+function canvasPosition(event) {
+  const rect = $('#canvas').getBoundingClientRect();
+  return {x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))};
+}
+$('#canvas').addEventListener('pointerdown', event => {
+  if (event.button !== 0) return;
+  const rect = $('#canvas').getBoundingClientRect();
+  const x = event.clientX - rect.left, y = event.clientY - rect.top;
+  let hit = null;
+  for (let i = controls.length - 1; i >= 0; i--) {
+    if (Math.hypot(x - controls[i].x * rect.width, y - controls[i].y * rect.height) <= 22) { hit = i; break; }
+  }
+  if (hit !== null) { selectControl(hit); dragging = true; $('#canvas').setPointerCapture(event.pointerId); return; }
   const key = $('#control-key').value.trim();
   if (!key || controls.length >= 100) { $('#editor-status').textContent = 'Укажите клавишу; максимум 100 элементов.'; return; }
-  const rect = $('#canvas').getBoundingClientRect();
-  controls.push({kind: $('#control-kind').value, key, x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))});
-  $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls();
+  controls.push({kind: $('#control-kind').value, key, ...canvasPosition(event)});
+  selectControl(controls.length - 1); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
+});
+$('#canvas').addEventListener('pointermove', event => {
+  if (!dragging || selectedControl === null) return;
+  Object.assign(controls[selectedControl], canvasPosition(event));
+  $('#editor-status').textContent = 'Элемент перемещён • не сохранено'; renderControls();
+});
+$('#canvas').addEventListener('pointerup', () => { dragging = false; });
+$('#canvas').addEventListener('pointercancel', () => { dragging = false; });
+$('#apply-control').addEventListener('click', () => {
+  if (selectedControl === null) return;
+  const key = $('#control-key').value.trim();
+  if (!key) { $('#editor-status').textContent = 'Укажите клавишу'; return; }
+  Object.assign(controls[selectedControl], {kind: $('#control-kind').value, key});
+  $('#editor-status').textContent = 'Элемент изменён • не сохранено'; renderControls();
+});
+$('#delete-control').addEventListener('click', () => {
+  if (selectedControl === null) return;
+  controls.splice(selectedControl, 1); selectControl(null);
+  $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
 });
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
@@ -123,8 +162,8 @@ $('#test-mapping').addEventListener('click', () => {
   const y = Math.min(1079, Math.floor(control.y * 1080));
   status.textContent = `Демо без Android: 2 события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
 });
-$('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
-$('#reset-controls').addEventListener('click', () => { controls = []; $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
+$('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); selectControl(null); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
+$('#reset-controls').addEventListener('click', () => { controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
 $('#save-controls').addEventListener('click', () => {
   if (!controlsValid) return;
   try { readControls(); localStorage.setItem(controlStorageKey, JSON.stringify({schema:1, controls})); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }

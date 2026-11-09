@@ -14,7 +14,8 @@ The left-hand sidebar is removed; the right-hand toolbar provides navigation,
 settings, APK import and the control editor. The central desktop is intentionally
 empty until an Android runtime exists. The editor opens
 beside its canvas, and can save a layout draft,
-including a fire marker. Unsaved edits are discarded on leaving the editor.
+including a fire marker. Markers can be selected, dragged, edited and deleted.
+Unsaved edits are discarded on leaving the editor.
 The draft does not inject input into games. A local dry-run connects supported
 single-key tap and fire drafts to the existing input engine and encodes touch
 messages using the scrcpy v5 protocol, without opening a connection. The web
@@ -49,7 +50,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (903) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (904) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -126,7 +127,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 903 collected; Qt tests may skip without native libraries
+pytest                               # 904 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

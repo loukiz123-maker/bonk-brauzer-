@@ -15,6 +15,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QScrollArea,
     QVBoxLayout,
     QWidget,
 )
@@ -54,23 +55,42 @@ class Canvas(QWidget):
     def __init__(self, editor: ControlEditor) -> None:
         super().__init__()
         self.editor = editor
+        self.dragging = False
         self.setMinimumSize(420, 260)
         self.setStyleSheet("background:#0c101c; border:1px solid #334258; border-radius:6px")
-        self.setToolTip("Нажмите на поле, чтобы разместить выбранный элемент")
+        self.setToolTip("Нажмите на поле для добавления; перетащите элемент для перемещения")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() == Qt.MouseButton.LeftButton:
-            self.editor.place(
+        if event.button() != Qt.MouseButton.LeftButton:
+            return
+        x, y = event.position().x(), event.position().y()
+        for index in range(len(self.editor.controls) - 1, -1, -1):
+            item = self.editor.controls[index]
+            dx = x - item["x"] * self.width()
+            dy = y - item["y"] * self.height()
+            if dx * dx + dy * dy <= 22 * 22:
+                self.editor.select(index)
+                self.dragging = True
+                return
+        self.editor.place(x / self.width(), y / self.height())
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.dragging:
+            self.editor.move_selected(
                 event.position().x() / self.width(), event.position().y() / self.height()
             )
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.dragging = False
 
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        painter.setPen(QColor("#47d2f0"))
-        painter.setBrush(QColor("#243e55"))
-        for item in self.editor.controls:
+        for index, item in enumerate(self.editor.controls):
+            painter.setPen(QColor("#ffffff" if index == self.editor.selected else "#47d2f0"))
+            painter.setBrush(QColor("#367382" if index == self.editor.selected else "#243e55"))
             x, y = int(item["x"] * self.width()), int(item["y"] * self.height())
             painter.drawEllipse(x - 22, y - 22, 44, 44)
             painter.drawText(x - 19, y - 9, 38, 18, int(Qt.AlignmentFlag.AlignCenter), item["key"])
@@ -83,16 +103,23 @@ class ControlEditor(QDialog):
         self.setWindowTitle("Редактор управления — шаблон")
         self.resize(880, 520)
         self.controls: list[dict[str, Any]] = []
+        self.selected: int | None = None
         self.read_only = False
         layout = QHBoxLayout(self)
         self.canvas = Canvas(self)
         layout.addWidget(self.canvas, 1)
-        side = QVBoxLayout()
+        side_widget = QWidget()
+        side = QVBoxLayout(side_widget)
+        side_scroll = QScrollArea()
+        side_scroll.setWidgetResizable(True)
+        side_scroll.setMinimumWidth(250)
+        side_scroll.setMaximumWidth(300)
+        side_scroll.setWidget(side_widget)
         self.close_button = QPushButton("✕  Закрыть редактор")
         side.addWidget(self.close_button)
         side.addWidget(QLabel("РЕДАКТОР УПРАВЛЕНИЯ"))
         note = QLabel(
-            "Выберите тип и клавишу, затем нажмите на поле. "
+            "Нажмите на поле для добавления, перетащите элемент для перемещения. "
             "Это шаблон: ввод в игры пока не работает. "
             "Канал scrcpy подготовлен, но не подключён."
         )
@@ -105,6 +132,14 @@ class ControlEditor(QDialog):
         self.key.setMaxLength(16)
         self.key.setPlaceholderText("Клавиша, например F")
         side.addWidget(self.key)
+        self.apply_button = QPushButton("Изменить выбранный")
+        self.apply_button.setEnabled(False)
+        self.apply_button.clicked.connect(self.apply_selected)
+        side.addWidget(self.apply_button)
+        self.delete_button = QPushButton("Удалить выбранный")
+        self.delete_button.setEnabled(False)
+        self.delete_button.clicked.connect(self.delete_selected)
+        side.addWidget(self.delete_button)
         self.test_key = QLineEdit()
         self.test_key.setMaxLength(1)
         self.test_key.setPlaceholderText("Клавиша для проверки")
@@ -125,7 +160,7 @@ class ControlEditor(QDialog):
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save)
         side.addWidget(self.save_button)
-        layout.addLayout(side)
+        layout.addWidget(side_scroll)
         try:
             self.controls = load_controls(path)
             self.status.setText(f"Элементов: {len(self.controls)}")
@@ -147,8 +182,44 @@ class ControlEditor(QDialog):
                 "y": min(1.0, max(0.0, y)),
             }
         )
+        self.select(len(self.controls) - 1)
         self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
+
+    def select(self, index: int | None) -> None:
+        self.selected = index
+        self.apply_button.setEnabled(index is not None)
+        self.delete_button.setEnabled(index is not None)
+        if index is not None:
+            item = self.controls[index]
+            self.kind.setCurrentText(item["kind"])
+            self.key.setText(item["key"])
         self.canvas.update()
+
+    def move_selected(self, x: float, y: float) -> None:
+        if self.selected is None:
+            return
+        item = self.controls[self.selected]
+        item["x"], item["y"] = min(1.0, max(0.0, x)), min(1.0, max(0.0, y))
+        self.status.setText("Элемент перемещён • не сохранено")
+        self.canvas.update()
+
+    def apply_selected(self) -> None:
+        if self.selected is None:
+            return
+        key = self.key.text().strip()
+        if not key:
+            self.status.setText("Укажите клавишу")
+            return
+        self.controls[self.selected].update(kind=self.kind.currentText(), key=key)
+        self.status.setText("Элемент изменён • не сохранено")
+        self.canvas.update()
+
+    def delete_selected(self) -> None:
+        if self.selected is None:
+            return
+        self.controls.pop(self.selected)
+        self.select(None)
+        self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
 
     def test_mapping(self) -> None:
         try:
@@ -173,11 +244,13 @@ class ControlEditor(QDialog):
     def undo(self) -> None:
         if self.controls:
             self.controls.pop()
+            self.select(None)
             self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
             self.canvas.update()
 
     def reset(self) -> None:
         self.controls.clear()
+        self.select(None)
         self.status.setText("Шаблон очищен • не сохранено")
         self.canvas.update()
 
