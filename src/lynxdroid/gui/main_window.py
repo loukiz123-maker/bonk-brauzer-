@@ -55,7 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lynxdroid.backend.compat import CompatFixes, FixResult
+from lynxdroid.backend.compat import CompatFixes, FixResult, network_manual_help
 from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendState,
@@ -445,8 +445,9 @@ class MainWindow(QMainWindow):
         layout.addWidget(self._game_advice)
         layout.addWidget(_section("Network evidence"))
         network_note = QLabel(
-            "Checks ping and routes inside Android. No settings are changed; "
-            "Android must be running."
+            "Checks ping to 1.1.1.1 and example.com and Android routes. "
+            "No settings are changed; Android must be running. "
+            "Waydroid shell may require administrator access."
         )
         network_note.setWordWrap(True)
         layout.addWidget(network_note)
@@ -484,6 +485,8 @@ class MainWindow(QMainWindow):
         self._game_network_output.setPlainText(
             f"Network probe could not run: {message}\n"
             "Check that Android is running and that Waydroid shell access is available."
+            + "\n\n"
+            + network_manual_help()
         )
         log.warning("game network probe: %s", detail)
 

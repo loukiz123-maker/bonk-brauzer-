@@ -154,8 +154,10 @@ lynxdroid game revert [--yes] [--json]
 
 `lynxdroid game explain MESSAGE [--json]` matches error text to a possible
 category, not a confirmed cause. `lynxdroid game fix network --yes` runs
-non-destructive ICMP and route probes inside Android; it does not test DNS or
-the game's server. Legacy `hide-root`, `egl-fallback`, and `game revert` are
+non-destructive IP and hostname ICMP and route probes inside Android; a failed
+hostname ping is inconclusive, and the game server is not tested. Waydroid
+shell normally requires root: if unavailable, read the displayed commands and
+run them yourself. Legacy `hide-root`, `egl-fallback`, and `game revert` are
 disabled because their effectiveness and safe restoration were not verified.
 See `docs/COMPATIBILITY.md` for limitations and recovery guidance.
 

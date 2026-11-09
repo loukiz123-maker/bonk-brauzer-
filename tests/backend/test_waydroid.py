@@ -644,3 +644,55 @@ class TestOptInsAreOffByDefault:
         config = config_for(Settings(allow_service_control=True, allow_prop_writes=True))
         assert config.allow_service_control is True
         assert config.allow_prop_writes is True
+
+
+class TestShellProbe:
+    def test_guest_exit_status_is_not_waydroid_exit_status(self, backend, monkeypatch):
+        import subprocess
+
+        def run(args, *, timeout):
+            # Model Waydroid, which runs the guest but discards the guest status.
+            guest = subprocess.run(
+                ["/bin/sh", *args[3:]], capture_output=True, text=True, check=False
+            )
+            return proc.RunResult(
+                argv=tuple(args), returncode=0, stdout=guest.stdout, stderr=guest.stderr
+            )
+
+        monkeypatch.setattr(backend, "_run", run)
+        code, output = backend.shell_probe(["/bin/sh", "-c", "echo guest; exit 7"])
+        assert code == 7
+        assert output == "guest"
+
+    def test_missing_guest_marker_never_reports_success(self, backend, monkeypatch):
+        monkeypatch.setattr(backend, "_run", lambda args, *, timeout: ok("container stopped"))
+        code, output = backend.shell_probe(["ping", "1.1.1.1"])
+        assert code != 0
+        assert "status unavailable" in output
+
+    def test_arguments_are_not_interpreted_as_shell_code(self, backend, monkeypatch):
+        import subprocess
+
+        def run(args, *, timeout):
+            guest = subprocess.run(
+                ["/bin/sh", *args[3:]], capture_output=True, text=True, check=False
+            )
+            return proc.RunResult(argv=tuple(args), returncode=0, stdout=guest.stdout)
+
+        monkeypatch.setattr(backend, "_run", run)
+        code, output = backend.shell_probe(["/bin/echo", "hello; echo INJECTED"])
+        assert code == 0
+        assert output == "hello; echo INJECTED"
+
+    def test_wrapper_failure_is_preserved(self, backend, monkeypatch):
+        monkeypatch.setattr(
+            backend,
+            "_run",
+            lambda args, *, timeout: proc.RunResult(argv=(), returncode=1, stderr="needs root"),
+        )
+        code, output = backend.shell_probe(["ip", "route"])
+        assert code == 1 and output == "needs root"
+
+    def test_invalid_command_is_rejected(self, backend):
+        with pytest.raises(BackendError):
+            backend.shell_probe(["ping", "bad\x00address"])

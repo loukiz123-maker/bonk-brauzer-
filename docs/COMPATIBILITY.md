@@ -10,16 +10,20 @@ lynxdroid game explain "Не удалось войти на сервер: 3"
 lynxdroid game fix network --yes
 ```
 
-The network command only runs an ICMP ping to `1.1.1.1` and checks the Android
-routing table. A successful ping does not verify DNS, TCP or the game's server;
-a failure may mean ICMP is blocked. No network settings are changed. Check the
-reported routes and consult the game vendor if connectivity remains unclear.
-The command needs a running Waydroid session and access to its Android shell.
+The network command runs ICMP pings to `1.1.1.1` and `example.com` and checks
+the Android routing table. The hostname ping exercises name resolution as well
+as ICMP; a failed ping alone cannot distinguish a DNS failure from blocked ICMP.
+Successful probes do not verify the game's DNS name, TCP connection or server.
+No network settings are changed. The command needs a running Waydroid session
+and access to its Android shell. Waydroid normally requires root for `shell`,
+and LynxDroid never requests a password or invokes sudo. If access is denied,
+the output lists read-only commands to run yourself; their output is not
+automatically imported or verified by LynxDroid. Share it for further analysis.
 
 ## In the desktop application
 
 Open **Game help**, paste the game error, and select **Explain error**.
-For connection errors, **Check Android network** runs the limited probes in
+For connection errors, **Check Android network** attempts the limited probes in
 the background and displays their output without changing settings. Qt wiring
 is statically tested; actual GUI operation still needs verification on a desktop.
 
@@ -40,3 +44,14 @@ Play Integrity.
 5 for unknown or unsupported cases. `game fix` and `game revert` return 6
 when the requested operation is unavailable or fails; JSON output uses the
 same exit codes as text output.
+
+## Waydroid shell status
+
+At upstream Waydroid commit `db7294c4c2bd43157bab94cf8a3015e22d9f1ad8`,
+[`tools/helpers/lxc.py`](https://github.com/waydroid/waydroid/blob/db7294c4c2bd43157bab94cf8a3015e22d9f1ad8/tools/helpers/lxc.py)
+runs the guest command without returning its exit status, and
+[`tools/__init__.py`](https://github.com/waydroid/waydroid/blob/db7294c4c2bd43157bab94cf8a3015e22d9f1ad8/tools/__init__.py)
+requires root for `shell`. LynxDroid uses a fixed guest wrapper with a random
+status marker and argument separation. A missing marker is reported as
+unavailable, never as a successful probe. This is tested with a simulated
+Waydroid wrapper, not yet on a real Waydroid installation.

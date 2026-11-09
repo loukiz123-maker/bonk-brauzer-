@@ -708,3 +708,14 @@ class TestGameCommand:
     def test_unknown_json_exits_unsupported(self, capsys, root: Path) -> None:
         code, _, _ = run(capsys, ["game", "explain", "unrecognised", "--json"], root)
         assert code == 5
+
+    def test_network_unavailable_json_explains_manual_commands(self, capsys, root: Path) -> None:
+        import json
+
+        code, out, _ = run(
+            capsys, ["game", "fix", "network", "--yes", "--backend", "fake", "--json"], root
+        )
+        result = json.loads(out)[0]
+        assert code == 6 and result["outcome"] == "unavailable"
+        assert "sudo waydroid shell -- ip route" in result["message"]
+        assert not result["changed"]

@@ -242,6 +242,18 @@ class CompatTarget(Protocol):
         raise NotImplementedError
 
 
+def network_manual_help() -> str:
+    """Read-only commands for a user with administrator access."""
+    return (
+        "If Waydroid shell access requires root, run these commands yourself "
+        "with Android running and share the output:\n"
+        "sudo waydroid shell -- ping -c 1 -W 2 1.1.1.1\n"
+        "sudo waydroid shell -- ping -c 1 -W 2 example.com\n"
+        "sudo waydroid shell -- ip route\n"
+        "A failed ping alone does not prove that DNS or networking is broken."
+    )
+
+
 class CompatFixes:
     """The fixes, and the judgement about what is worth trying.
 
@@ -291,21 +303,26 @@ class CompatFixes:
         result = FixResult("network", Outcome.UNAVAILABLE)
         for label, command in (
             ("ICMP to 1.1.1.1", ["ping", "-c", "1", "-W", "2", "1.1.1.1"]),
+            ("hostname ping to example.com", ["ping", "-c", "1", "-W", "2", "example.com"]),
             ("routes", ["ip", "route"]),
         ):
-            code, output = self._target.shell_probe(command)
+            try:
+                code, output = self._target.shell_probe(command)
+            except BackendError as exc:
+                code, output = 125, str(exc)
             result.steps.append(Step(label, code == 0, output.strip()[:500]))
-        if result.steps[0].done:
+        if all(step.done for step in result.steps):
             result.outcome = Outcome.ALREADY
             result.message = (
-                "ICMP to 1.1.1.1 succeeded. This does not verify DNS, "
-                "TCP, or the game's server; no settings changed."
+                "All commands completed successfully. This does not verify the game's "
+                "DNS name, TCP connection, or server; no settings changed."
             )
         else:
             result.message = (
-                "ICMP to 1.1.1.1 failed; ICMP may be blocked. "
-                "This alone does not prove network or DNS failure; "
-                "check routes and consult the game vendor."
+                "One or more probes failed or could not run. ICMP may be blocked, "
+                "the hostname may not resolve, or Waydroid shell access may require root. "
+                "These results alone do not prove the game's cause; no settings changed.\n\n"
+                + network_manual_help()
             )
         return result
 

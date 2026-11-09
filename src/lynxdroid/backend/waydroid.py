@@ -21,6 +21,7 @@ on column positions.
 from __future__ import annotations
 
 import re
+import secrets
 import subprocess
 import time
 from collections.abc import Sequence
@@ -297,18 +298,32 @@ class WaydroidBackend(AndroidBackend):
         return self._run(["shell", *command.split()], timeout=timeout)
 
     def shell_probe(self, command: Sequence[str], *, timeout: float = 10.0) -> tuple[int, str]:
-        """Run one command inside Android; return ``(exit code, output)``.
+        """Get the guest exit status even when Waydroid discards it.
 
-        Part of :class:`lynxdroid.backend.compat.CompatTarget`. The arguments
-        arrive as a list so that no caller can smuggle a shell expression in a
-        string: Waydroid's own ``shell`` passes them to ``sh`` and we do not
-        add a second interpretation on top.
+        The script is constant; command arguments are passed as positional
+        parameters, never interpolated into shell source. A random marker
+        distinguishes an executed guest command from a successful Waydroid
+        wrapper that never reached Android.
         """
         if not command or any("\x00" in part for part in command):
             raise BackendError("invalid shell command", code="invalid-command")
-        result = self._run(["shell", *command], timeout=timeout)
-        output = result.stdout.strip() or result.stderr.strip() or result.error or ""
-        return result.returncode, output
+        marker = "LYNX_EXIT_" + secrets.token_hex(16)
+        script = '"$@"; status=$?; printf "\\n%s:%s\\n" "' + marker + '" "$status"'
+        result = self._run(
+            ["shell", "--", "/system/bin/sh", "-c", script, "lynx-probe", *command],
+            timeout=timeout,
+        )
+        output = "\n".join(part.strip() for part in (result.stdout, result.stderr) if part.strip())
+        if not result.ok:
+            return result.returncode or 125, output or result.error or result.describe()
+        match = re.search(r"(?:^|\n)" + re.escape(marker) + r":([0-9]{1,3})\s*$", result.stdout)
+        if match is None or int(match.group(1)) > 255:
+            detail = output or "Waydroid returned no guest exit status"
+            return 125, f"Guest command status unavailable: {detail}"
+        guest_output = result.stdout[: match.start()].strip()
+        if result.stderr.strip():
+            guest_output = "\n".join(part for part in (guest_output, result.stderr.strip()) if part)
+        return int(match.group(1)), guest_output
 
     def _systemctl(self, *args: str, timeout: float = 20.0) -> proc.RunResult:
         return proc.run(["systemctl", *args], timeout=timeout)
