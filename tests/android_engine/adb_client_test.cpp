@@ -149,6 +149,14 @@ BONK_TEST(android_adb, builds_screenshot_tap_and_discrete_key_argv) {
   CHECK_EQ(key.value().arguments.size(), std::size_t{6});
   CHECK_EQ(key.value().arguments[4], std::string("keyevent"));
   CHECK_EQ(key.value().arguments[5], std::string("4"));
+
+  const Result<android::RuntimeCommand> launch = android::make_adb_launch_package_command(config, "org.example.game");
+  REQUIRE(launch.is_ok());
+  CHECK_EQ(launch.value().arguments.size(), std::size_t{12});
+  CHECK_EQ(launch.value().arguments[4], std::string("start"));
+  CHECK_EQ(launch.value().arguments[7], std::string("android.intent.action.MAIN"));
+  CHECK_EQ(launch.value().arguments[9], std::string("android.intent.category.LAUNCHER"));
+  CHECK_EQ(launch.value().arguments[11], std::string("org.example.game"));
 }
 
 BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_range_key_code) {
@@ -157,6 +165,9 @@ BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_ran
   CHECK(android::make_adb_devices_command({"/sdk/platform-tools/adb", "-s;bad"}).is_error());
   CHECK(android::make_adb_key_command({"/sdk/platform-tools/adb", "emulator-5554"}, 0).is_error());
   CHECK(android::make_adb_key_command({"/sdk/platform-tools/adb", "emulator-5554"}, 65536).is_error());
+  CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com..game").is_error());
+  CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com.game;evil").is_error());
+  CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "single").is_error());
 }
 
 BONK_TEST(android_adb, identifies_selected_transport_state_from_devices_output) {
@@ -250,6 +261,10 @@ BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_sta
   REQUIRE(key.is_error());
   CHECK_EQ(key.error().code, std::string("android.adb_server_consent_required"));
 
+  const Status launch = android::launch_installed_package(config, "org.example.game", std::chrono::milliseconds{100});
+  REQUIRE(launch.is_error());
+  CHECK_EQ(launch.error().code, std::string("android.adb_server_consent_required"));
+
   const Result<image::Image> invalid_timeout =
       android::capture_screenshot_rgba(config, std::chrono::seconds{61});
   REQUIRE(invalid_timeout.is_error());
@@ -273,6 +288,12 @@ BONK_TEST(android_adb, fake_adb_exercises_single_capture_tap_and_key_without_an_
   const Status key = android::send_android_key(config, 4, std::chrono::seconds{1});
   REQUIRE(key.is_ok());
   CHECK_EQ(fake.arguments(), std::string("-s emulator-5554 shell input keyevent 4 "));
+
+  const Status launch = android::launch_installed_package(config, "org.example.game", std::chrono::seconds{1});
+  REQUIRE(launch.is_ok());
+  CHECK_EQ(fake.arguments(),
+           std::string("-s emulator-5554 shell am start -W -a android.intent.action.MAIN -c "
+                        "android.intent.category.LAUNCHER -p org.example.game "));
 }
 
 BONK_TEST(android_adb, requires_explicit_consent_before_any_adb_process_is_started) {

@@ -39,6 +39,8 @@ struct GuestStatus {
 [[nodiscard]] Result<RuntimeCommand> make_adb_screenshot_command(const AdbConfig& config);
 [[nodiscard]] Result<RuntimeCommand> make_adb_tap_command(const AdbConfig& config, std::uint32_t x, std::uint32_t y);
 [[nodiscard]] Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code);
+[[nodiscard]] Result<RuntimeCommand> make_adb_launch_package_command(
+    const AdbConfig& config, std::string_view package_name);
 
 /// Pure parsers for ADB output and a single PNG screenshot (not a video stream).
 /// Screenshot decoding accepts at most 32 MiB of PNG and 16,777,216 pixels; chunk
@@ -73,6 +75,12 @@ struct PixelPoint {
 [[nodiscard]] Status send_android_key(
     const AdbConfig& config, std::uint32_t android_key_code,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
+/// Starts the launchable activity for an already-installed package. This does
+/// not install an APK, and a successful `am start` is not an app-readiness check.
+[[nodiscard]] Status launch_installed_package(
+    const AdbConfig& config, std::string_view package_name,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
 
 /// Checks the selected ADB transport, then queries sys.boot_completed only if
 /// that serial is online. The timeout applies independently to each command.
