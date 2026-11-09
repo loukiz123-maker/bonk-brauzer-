@@ -7,7 +7,8 @@ The current application is a launcher prototype, not an Android emulator yet.
 
 The desktop entry and `lynxdroid gui` now open the **standalone launcher**,
 without starting or contacting Waydroid. It can show a local APK library,
-filter it, add or remove file references, and switch to full screen with F11
+filter it, add or remove file references, copy a file path, open its folder,
+and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
 The independent Android runtime, game compatibility, performance and actual
 Android application execution are **not implemented or verified**. The
@@ -37,7 +38,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (890) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (891) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -114,7 +115,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 890 tests, no display needed
+pytest                               # 891 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

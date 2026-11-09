@@ -82,3 +82,33 @@ def test_fullscreen_and_escape(window, qt_app) -> None:
     window.escape_shortcut.activated.emit()
     qt_app.processEvents()
     assert not window.isFullScreen() and not window.escape_shortcut.isEnabled()
+
+
+def test_selected_file_actions(window, qt_app, tmp_path, monkeypatch) -> None:
+    from PySide6.QtGui import QDesktopServices
+    from PySide6.QtWidgets import QMessageBox
+
+    apk = tmp_path / "Game.apk"
+    apk.write_bytes(b"PK\x03\x04test")
+    window.library.add(apk)
+    window._reload()
+    window.library_button.click()
+    assert not window.folder_button.isEnabled()
+    assert not window.copy_button.isEnabled()
+    window.list.setCurrentRow(0)
+    assert window.folder_button.isEnabled() and window.copy_button.isEnabled()
+    window.copy_button.click()
+    assert qt_app.clipboard().text() == str(apk)
+    opened = []
+    monkeypatch.setattr(
+        QDesktopServices, "openUrl", lambda url: opened.append(url.toLocalFile()) or True
+    )
+    window.folder_button.click()
+    assert opened == [str(tmp_path)]
+    warnings = []
+    monkeypatch.setattr(QDesktopServices, "openUrl", lambda url: False)
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[1]))
+    window.folder_button.click()
+    assert warnings == ["Не удалось открыть папку"]
+    window.search.setText("not found")
+    assert not window.folder_button.isEnabled() and not window.copy_button.isEnabled()

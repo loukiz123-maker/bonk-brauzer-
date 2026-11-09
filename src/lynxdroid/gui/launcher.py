@@ -5,9 +5,10 @@ from __future__ import annotations
 from pathlib import Path
 from typing import cast
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QKeySequence, QShortcut
+from PySide6.QtCore import Qt, QUrl
+from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -221,6 +222,13 @@ class LauncherWindow(QMainWindow):
         self.remove_button.setEnabled(False)
         self.remove_button.clicked.connect(self.remove_selected)
         actions.addWidget(self.remove_button)
+        self.folder_button = QPushButton("Открыть папку")
+        self.folder_button.setToolTip("Открыть папку с выбранным APK")
+        self.folder_button.clicked.connect(self.open_selected_folder)
+        actions.addWidget(self.folder_button)
+        self.copy_button = QPushButton("Копировать путь")
+        self.copy_button.clicked.connect(self.copy_selected_path)
+        actions.addWidget(self.copy_button)
         actions.addStretch()
         box.addLayout(actions)
         return page
@@ -283,9 +291,34 @@ class LauncherWindow(QMainWindow):
         self._selection_changed()
 
     def _selection_changed(self, *args: object) -> None:
-        self.remove_button.setEnabled(
-            self.list.currentItem() is not None and not self._library_error
-        )
+        selected = self.list.currentItem() is not None
+        self.remove_button.setEnabled(selected and not self._library_error)
+        self.folder_button.setEnabled(selected)
+        self.copy_button.setEnabled(selected)
+
+    def _selected_path(self) -> Path | None:
+        item = cast("QListWidgetItem | None", self.list.currentItem())
+        if item is None:
+            return None
+        return Path(str(item.data(Qt.ItemDataRole.UserRole)))
+
+    def copy_selected_path(self) -> None:
+        path = self._selected_path()
+        if path is not None:
+            QApplication.clipboard().setText(str(path))
+
+    def open_selected_folder(self) -> None:
+        path = self._selected_path()
+        if path is None:
+            return
+        if not path.parent.is_dir() or not QDesktopServices.openUrl(
+            QUrl.fromLocalFile(str(path.parent))
+        ):
+            QMessageBox.warning(
+                self,
+                "Не удалось открыть папку",
+                "Папка недоступна или файловый менеджер не запущен.",
+            )
 
     def add_apk(self) -> None:
         path, _ = QFileDialog.getOpenFileName(self, "Выберите APK", "", "APK (*.apk *.APK)")
