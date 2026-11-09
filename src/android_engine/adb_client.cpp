@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <sstream>
 #include <string>
 #include <string_view>
@@ -70,6 +71,14 @@ Status validate_config(const AdbConfig& config) {
   }
   if (!valid_serial(config.serial) || config.serial.find('\0') != std::string::npos) {
     return Status::failure(Error::make("android.invalid_adb_config", "ADB serial is empty or contains unsupported characters"));
+  }
+  return Status::success();
+}
+
+Status validate_apk_path(const std::filesystem::path& apk_path) {
+  if (apk_path.empty() || has_nul(apk_path) || !apk_path.is_absolute()) {
+    return Status::failure(
+        Error::make("android.invalid_apk_path", "APK path must be an explicit absolute path without NUL bytes"));
   }
   return Status::success();
 }
@@ -351,6 +360,15 @@ Result<RuntimeCommand> make_adb_launch_package_command(const AdbConfig& config, 
         "android.intent.category.LAUNCHER", "-p", std::string(package_name)}});
 }
 
+Result<RuntimeCommand> make_adb_install_apk_command(const AdbConfig& config, const std::filesystem::path& apk_path) {
+  const Status valid = validate_config(config);
+  if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
+  const Status apk_path_valid = validate_apk_path(apk_path);
+  if (apk_path_valid.is_error()) return Result<RuntimeCommand>::failure(apk_path_valid.error());
+  return Result<RuntimeCommand>::success(
+      {config.executable.string(), {"-s", config.serial, "install", apk_path.string()}});
+}
+
 GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view output) {
   std::istringstream lines{std::string(output)};
   std::string line;
@@ -476,6 +494,33 @@ Status launch_installed_package(const AdbConfig& config, std::string_view packag
   if (command.is_error()) return Status::failure(command.error());
   const Status consent = require_server_consent(config);
   if (consent.is_error()) return consent;
+  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  return output.status();
+}
+
+Status install_selected_apk(const AdbConfig& config, const std::filesystem::path& apk_path,
+                            bool user_confirmed_install, std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return timeout_valid;
+  const Result<RuntimeCommand> command = make_adb_install_apk_command(config, apk_path);
+  if (command.is_error()) return Status::failure(command.error());
+  if (!user_confirmed_install) {
+    return Status::failure(Error::make(
+        "android.apk_install_consent_required", "installing this APK requires explicit per-file user confirmation"));
+  }
+  const Status adb_consent = require_server_consent(config);
+  if (adb_consent.is_error()) return adb_consent;
+
+  std::error_code status_error;
+  if (!std::filesystem::is_regular_file(apk_path, status_error) || status_error) {
+    return Status::failure(
+        Error::make("android.apk_not_regular_file", "selected APK path is not an existing regular file"));
+  }
+  std::ifstream apk_file{apk_path, std::ios::binary};
+  if (!apk_file) {
+    return Status::failure(Error::make("android.apk_unreadable", "selected APK file is not readable"));
+  }
+
   const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
   return output.status();
 }

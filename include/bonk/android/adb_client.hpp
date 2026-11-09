@@ -45,6 +45,8 @@ struct GuestStatus {
 [[nodiscard]] Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code);
 [[nodiscard]] Result<RuntimeCommand> make_adb_launch_package_command(
     const AdbConfig& config, std::string_view package_name);
+[[nodiscard]] Result<RuntimeCommand> make_adb_install_apk_command(
+    const AdbConfig& config, const std::filesystem::path& apk_path);
 
 /// Pure parsers for ADB output and a single PNG screenshot (not a video stream).
 /// Screenshot decoding accepts at most 32 MiB of PNG and 16,777,216 pixels; chunk
@@ -92,6 +94,13 @@ struct PixelPoint {
 [[nodiscard]] Status launch_installed_package(
     const AdbConfig& config, std::string_view package_name,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
+
+/// Installs exactly the caller-selected APK. `user_confirmed_install` must be
+/// true only after explicit confirmation for this path. No replace/downgrade
+/// flag is passed. Requires ADB server consent as well; does not launch the app.
+[[nodiscard]] Status install_selected_apk(
+    const AdbConfig& config, const std::filesystem::path& apk_path, bool user_confirmed_install,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{60000});
 
 /// Checks the selected ADB transport, then queries sys.boot_completed only if
 /// that serial is online. The timeout applies independently to each command.

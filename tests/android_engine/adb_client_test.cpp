@@ -116,6 +116,7 @@ fi
   [[nodiscard]] android::AdbConfig config() const { return {executable_, "emulator-5554", true}; }
   [[nodiscard]] std::string arguments() const { return read_binary(arguments_file_); }
   [[nodiscard]] std::string boot_query_count() const { return read_binary(boot_query_count_file_); }
+  [[nodiscard]] std::filesystem::path selected_apk_path() const { return directory_ / "selected-game.apk"; }
 
  private:
   std::filesystem::path directory_;
@@ -210,6 +211,21 @@ BONK_TEST(android_adb, builds_a_bounded_straight_line_swipe_argv) {
       config, 0, 0, 1, 1, std::chrono::milliseconds{30001});
   REQUIRE(too_long.is_error());
   CHECK_EQ(too_long.error().code, std::string("android.invalid_gesture_duration"));
+}
+
+BONK_TEST(android_adb, builds_install_argv_from_an_explicit_absolute_apk_path) {
+  const android::AdbConfig config{"/opt/android-sdk/platform-tools/adb", "emulator-5554"};
+  const std::filesystem::path apk_path{"/home/user/downloads/my-game.apk"};
+  const Result<android::RuntimeCommand> install = android::make_adb_install_apk_command(config, apk_path);
+  REQUIRE(install.is_ok());
+  CHECK_EQ(install.value().executable, config.executable.string());
+  REQUIRE(install.value().arguments.size() == 4);
+  CHECK_EQ(install.value().arguments[0], std::string("-s"));
+  CHECK_EQ(install.value().arguments[1], config.serial);
+  CHECK_EQ(install.value().arguments[2], std::string("install"));
+  CHECK_EQ(install.value().arguments[3], apk_path.string());
+
+  CHECK(android::make_adb_install_apk_command(config, "relative-game.apk").is_error());
 }
 
 BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_range_key_code) {
@@ -352,6 +368,40 @@ BONK_TEST(android_adb, sends_normalized_swipe_and_rejects_a_too_short_timeout) {
       config, 640, 480, 0.0f, 0.0f, 0.5f, 0.5f, std::chrono::milliseconds{0}, std::chrono::seconds{1});
   REQUIRE(invalid_duration.is_error());
   CHECK_EQ(invalid_duration.error().code, std::string("android.invalid_gesture_duration"));
+}
+
+BONK_TEST(android_adb, installs_only_a_confirmed_readable_apk_with_both_consents) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  const std::filesystem::path apk_path = fake.selected_apk_path();
+  std::ofstream apk{apk_path, std::ios::binary};
+  REQUIRE(static_cast<bool>(apk));
+  apk << "synthetic APK test payload";
+  apk.close();
+  REQUIRE(static_cast<bool>(apk));
+
+  const android::AdbConfig config = fake.config();
+  const Status unconfirmed = android::install_selected_apk(config, apk_path, false, std::chrono::seconds{1});
+  REQUIRE(unconfirmed.is_error());
+  CHECK_EQ(unconfirmed.error().code, std::string("android.apk_install_consent_required"));
+  CHECK_EQ(fake.arguments(), std::string{});
+
+  const android::AdbConfig without_server_consent{config.executable, config.serial, false};
+  const Status no_adb_consent =
+      android::install_selected_apk(without_server_consent, apk_path, true, std::chrono::seconds{1});
+  REQUIRE(no_adb_consent.is_error());
+  CHECK_EQ(no_adb_consent.error().code, std::string("android.adb_server_consent_required"));
+  CHECK_EQ(fake.arguments(), std::string{});
+
+  const Status missing = android::install_selected_apk(
+      config, apk_path.parent_path() / "missing.apk", true, std::chrono::seconds{1});
+  REQUIRE(missing.is_error());
+  CHECK_EQ(missing.error().code, std::string("android.apk_not_regular_file"));
+  CHECK_EQ(fake.arguments(), std::string{});
+
+  const Status installed = android::install_selected_apk(config, apk_path, true, std::chrono::seconds{1});
+  REQUIRE(installed.is_ok());
+  CHECK_EQ(fake.arguments(), "-s emulator-5554 install " + apk_path.string() + " ");
 }
 
 BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_starts) {
