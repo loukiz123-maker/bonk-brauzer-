@@ -14,7 +14,7 @@ class PreviewHandler(SimpleHTTPRequestHandler):
     def do_GET(self) -> None:
         if self.path == "/__version":
             digest = hashlib.sha256()
-            for name in ("index.html", "style.css", "app.js", "launcher-bg.jpg"):
+            for name in ("index.html", "style.css", "app.js", "launcher-bg.jpg", "desktop-bg.jpg"):
                 digest.update((ROOT / name).read_bytes())
             body = digest.hexdigest().encode("ascii")
             self.send_response(200)

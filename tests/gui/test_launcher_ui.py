@@ -123,3 +123,29 @@ def test_selected_file_actions(window, qt_app, tmp_path, monkeypatch) -> None:
     assert warnings == ["Не удалось открыть папку"]
     window.search.setText("not found")
     assert not window.folder_button.isEnabled() and not window.copy_button.isEnabled()
+
+
+def test_control_editor_saves_layout_and_refuses_corrupt_data(window, qt_app, tmp_path) -> None:
+    import shiboken6
+
+    from lynxdroid.gui.control_editor import ControlEditor, load_controls
+
+    path = tmp_path / "controls.json"
+    editor = ControlEditor(path, window)
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("F")
+    editor.place(0.25, 0.75)
+    editor.save_button.click()
+    assert load_controls(path) == [{"kind": "Огонь", "key": "F", "x": 0.25, "y": 0.75}]
+    editor.undo()
+    assert not editor.controls
+    editor.save_button.click()
+    assert load_controls(path) == []
+    shiboken6.delete(editor)
+    path.write_text("broken")
+    editor = ControlEditor(path, window)
+    assert not editor.save_button.isEnabled()
+    editor.place(0.5, 0.5)
+    editor.save()
+    assert path.read_text() == "broken"
+    shiboken6.delete(editor)

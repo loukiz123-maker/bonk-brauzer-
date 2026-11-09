@@ -25,17 +25,15 @@
       <div class="sidebar-foot">НЕЗАВИСИМЫЙ ПРОЕКТ<br>Без Waydroid</div>
     </aside>
     <main>
-      <section id="home" class="page">
-        <h2>Добро пожаловать</h2>
-        <div class="hero">
-          <div class="hero-content"><div class="eyebrow">ВАШЕ ИГРОВОЕ ПРОСТРАНСТВО</div>
-            <h1>Игра начинается здесь</h1>
-            <p>Соберите APK в одном месте. Собственный Android-движок ещё создаётся.</p>
-            <div class="hero-actions"><button class="primary add-apk">＋ &nbsp;Добавить APK</button><button data-go="library">Моя библиотека &nbsp; →</button></div>
-          </div>
+      <section id="home" class="desktop page">
+        <div class="desktop-status">LYNXDROID &nbsp;•&nbsp; ДВИЖОК В РАЗРАБОТКЕ</div>
+        <div class="desktop-icons">
+          <button class="desktop-icon" id="open-settings"><span>⚙</span>Настройки</button>
+          <button class="desktop-icon" data-go="library"><span>▦</span>Библиотека</button>
+          <button class="desktop-icon add-apk"><span>＋</span>Добавить APK</button>
+          <button class="desktop-icon" id="open-controls"><span>⌨</span>Управление</button>
         </div>
-        <h2 class="library-heading">Ваша библиотека</h2>
-        <div class="summary-card"><div class="muted"><span id="count">APK в библиотеке: 0</span><br>Запуск станет доступен после создания движка.</div><button data-go="library">Открыть →</button></div>
+        <div class="desktop-summary muted"><span id="count">APK в библиотеке: 0</span><br>Запуск станет доступен после создания движка.</div>
       </section>
       <section id="library" class="page" hidden>
         <h1>Библиотека</h1><p class="muted description">Здесь хранятся названия выбранных APK. Это не установка игр.</p>
@@ -49,6 +47,20 @@
     </main>
   </div>
 </div>
+<dialog id="settings-dialog" class="settings-dialog">
+  <div class="dialog-title"><strong>⚙ &nbsp;Настройки LynxDroid</strong><button data-close="settings-dialog" aria-label="Закрыть">✕</button></div>
+  <div class="settings-layout"><div class="settings-nav">◈ &nbsp;Экран<br><br>⚙ &nbsp;Движок<br><br>▯ &nbsp;Телефон<br><br>☷ &nbsp;Настройки<br><br>ⓘ &nbsp;О проекте</div><div class="settings-content"><h2>Настройки</h2><p>Движок Android ещё не создан. Разрешение, FPS, профиль телефона и настройки игр пока недоступны.</p><p>Полный экран: F11 &nbsp;•&nbsp; Выход: Esc</p></div></div>
+</dialog>
+<dialog id="editor-dialog" class="editor-dialog">
+  <div class="dialog-title"><strong>⌨ &nbsp;Редактор управления — шаблон</strong><button data-close="editor-dialog" aria-label="Закрыть">✕</button></div>
+  <div class="editor-layout"><div id="canvas" class="canvas" aria-label="Поле раскладки"><div class="canvas-hint">Нажмите на поле, чтобы разместить элемент</div></div>
+    <div class="editor-side"><h2>РЕДАКТОР УПРАВЛЕНИЯ</h2><p class="muted">Выберите тип и клавишу, затем нажмите на поле. Это шаблон: ввод в игры пока не работает.</p>
+      <label>Тип элемента<select id="control-kind"><option>Нажатие</option><option>Двойное нажатие</option><option>Мультитач</option><option>Джойстик</option><option>Камера</option><option>Перетаскивание</option><option>Огонь</option></select></label>
+      <label>Клавиша<input id="control-key" value="F" maxlength="16" placeholder="Например F"></label>
+      <p id="editor-status" class="muted"></p><div class="editor-spacer"></div><button id="undo-control">Убрать последний</button><button id="reset-controls">Очистить</button><button id="save-controls" class="primary">Сохранить шаблон</button>
+    </div>
+  </div>
+</dialog>
 <input id="file" type="file" multiple accept=".apk,application/vnd.android.package-archive" hidden>
 <div id="message" role="status" aria-live="polite"></div>
 <script src="app.js"></script>

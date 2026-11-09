@@ -79,6 +79,41 @@ $('#fullscreen').addEventListener('click', fullscreen);
 document.addEventListener('fullscreenchange', () => { $('#fullscreen').textContent = document.fullscreenElement ? '⛶  Выйти из полного экрана' : '⛶  Полный экран'; });
 document.addEventListener('keydown', (event) => { if (event.key === 'F11') { event.preventDefault(); fullscreen(); } });
 render();
+// Draft layouts are stored only in this browser, never applied to Android.
+const controlStorageKey = 'lynxdroid-preview-controls-v1';
+const kinds = ['Нажатие', 'Двойное нажатие', 'Мультитач', 'Джойстик', 'Камера', 'Перетаскивание', 'Огонь'];
+let controls = [];
+let controlsValid = true;
+function readControls() {
+  const data = JSON.parse(localStorage.getItem(controlStorageKey) || '{"schema":1,"controls":[]}');
+  if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
+  return data.controls;
+}
+function renderControls() {
+  const canvas = $('#canvas'); canvas.querySelectorAll('.marker').forEach(m => m.remove());
+  controls.forEach(c => { const marker = document.createElement('div'); marker.className = 'marker'; marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
+}
+$('#open-settings').addEventListener('click', () => $('#settings-dialog').showModal());
+$('#open-controls').addEventListener('click', () => {
+  try { controls = readControls(); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
+  catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Библиотека шаблона повреждена или недоступна. Сохранение отключено.'; }
+  $('#save-controls').disabled = !controlsValid; renderControls(); $('#editor-dialog').showModal();
+});
+document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
+$('#canvas').addEventListener('click', event => {
+  const key = $('#control-key').value.trim();
+  if (!key || controls.length >= 100) { $('#editor-status').textContent = 'Укажите клавишу; максимум 100 элементов.'; return; }
+  const rect = $('#canvas').getBoundingClientRect();
+  controls.push({kind: $('#control-kind').value, key, x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))});
+  $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls();
+});
+$('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
+$('#reset-controls').addEventListener('click', () => { controls = []; $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
+$('#save-controls').addEventListener('click', () => {
+  if (!controlsValid) return;
+  try { readControls(); localStorage.setItem(controlStorageKey, JSON.stringify({schema:1, controls})); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }
+  catch { $('#editor-status').textContent = 'Ошибка сохранения. Исходные данные не изменены.'; }
+});
 // The local preview server reports a fingerprint; reload on source edits.
 let version;
 async function checkVersion() {

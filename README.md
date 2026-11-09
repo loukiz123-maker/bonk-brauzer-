@@ -10,6 +10,10 @@ without starting or contacting Waydroid. It can show a local APK library,
 filter it, add one or several APK file references, remove references, copy a file path, open its folder,
 and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
+The desktop-style home screen and control editor can save a layout draft,
+including a fire marker. The draft does not inject input into games. Engine
+settings, Google Play and Android apps are not implemented.
+
 The independent Android runtime, game compatibility, performance and actual
 Android application execution are **not implemented or verified**. The
 Waydroid-specific CLI and old code below are historical and are not the new
@@ -38,7 +42,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (891) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (892) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -115,7 +119,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 891 collected; Qt tests may skip without native libraries
+pytest                               # 892 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -264,3 +268,5 @@ installed, or shared with the desktop launcher. Browser security prevents it
 from opening the APK folder, showing its real path, or controlling the window.
 The preview does not run Android applications. The artwork is a copy of
 `src/lynxdroid/data/launcher-bg.jpg` and must be updated alongside it.
+The same applies to `desktop-bg.jpg`. Control templates in the preview are
+separate browser data, not shared with the desktop launcher.

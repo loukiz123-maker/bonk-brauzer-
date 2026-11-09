@@ -9,6 +9,7 @@ from PySide6.QtCore import Qt, QUrl
 from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QDialog,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -26,6 +27,7 @@ from PySide6.QtWidgets import (
 
 from lynxdroid.core.errors import LynxError
 from lynxdroid.core.paths import AppPaths
+from lynxdroid.gui.control_editor import ControlEditor
 from lynxdroid.gui.library import Library, LibraryEntry, filter_entries
 
 STYLE = """
@@ -68,6 +70,7 @@ class LauncherWindow(QMainWindow):
     def __init__(self, paths: AppPaths) -> None:
         super().__init__()
         self.library = Library(paths.data / "launcher-library.json")
+        self.control_path = paths.data / "launcher-controls.json"
         self.entries: list[LibraryEntry] = []
         self._library_error = ""
         self.setWindowTitle("LynxDroid")
@@ -140,51 +143,55 @@ class LauncherWindow(QMainWindow):
 
     def _home_page(self) -> QWidget:
         page = QWidget()
+        image = (Path(__file__).resolve().parents[1] / "data" / "desktop-bg.jpg").as_posix()
+        page.setObjectName("desktop")
+        page.setStyleSheet(f"QWidget#desktop {{ border-image: url('{image}'); }}")
         box = QVBoxLayout(page)
         box.setContentsMargins(34, 30, 34, 24)
-        box.setSpacing(18)
-        box.addWidget(label("Добро пожаловать", "section"))
-        hero = QFrame()
-        hero.setMinimumHeight(245)
-        image = (Path(__file__).resolve().parents[1] / "data" / "launcher-bg.jpg").as_posix()
-        hero.setStyleSheet(f"QFrame#hero {{ border-radius: 16px; border-image: url('{image}'); }}")
-        hero.setObjectName("hero")
-        content = QVBoxLayout(hero)
-        content.setContentsMargins(30, 26, 30, 26)
-        content.addWidget(label("ВАШЕ ИГРОВОЕ ПРОСТРАНСТВО", "heroText"))
-        title = label("Игра начинается здесь", "heroText")
-        title.setStyleSheet("font-size: 30px; font-weight: 800; background: transparent;")
-        content.addWidget(title)
-        subtitle = label(
-            "Соберите APK в одном месте. Собственный Android-движок ещё создаётся.", "heroText"
-        )
-        subtitle.setMaximumWidth(440)
-        content.addWidget(subtitle)
-        content.addStretch()
-        actions = QHBoxLayout()
-        add = QPushButton("＋  Добавить APK")
-        add.setObjectName("primary")
-        add.clicked.connect(self.add_apk)
-        actions.addWidget(add)
-        browse = QPushButton("Моя библиотека  →")
-        browse.clicked.connect(lambda: self._show_page(1))
-        actions.addWidget(browse)
-        actions.addStretch()
-        content.addLayout(actions)
-        box.addWidget(hero)
-        box.addWidget(label("Ваша библиотека", "section"))
-        card = QFrame()
-        card.setObjectName("card")
-        row = QHBoxLayout(card)
-        row.setContentsMargins(22, 18, 22, 18)
-        self.summary = label("", "muted")
-        row.addWidget(self.summary, 1)
-        open_library = QPushButton("Открыть →")
-        open_library.clicked.connect(lambda: self._show_page(1))
-        row.addWidget(open_library)
-        box.addWidget(card)
+        status = label("LYNXDROID  •  ДВИЖОК В РАЗРАБОТКЕ", "heroText")
+        box.addWidget(status)
+        row = QHBoxLayout()
+        for text, callback in (
+            ("⚙\nНастройки", self.open_settings),
+            ("▦\nБиблиотека", lambda: self._show_page(1)),
+            ("＋\nДобавить APK", self.add_apk),
+            ("⌨\nУправление", self.open_controls),
+        ):
+            button = QPushButton(text)
+            button.setMinimumSize(130, 100)
+            button.clicked.connect(callback)
+            row.addWidget(button)
+        row.addStretch()
+        box.addSpacing(26)
+        box.addLayout(row)
         box.addStretch()
+        self.summary = label("", "heroText")
+        box.addWidget(self.summary)
         return page
+
+    def open_settings(self) -> None:
+        dialog = QDialog(self)
+        dialog.setWindowTitle("Настройки LynxDroid")
+        dialog.resize(600, 320)
+        layout = QVBoxLayout(dialog)
+        layout.addWidget(label("Настройки", "section"))
+        layout.addWidget(
+            label(
+                "Движок Android ещё не создан. Разрешение, FPS, профиль телефона "
+                "и настройки игр пока недоступны.",
+                "muted",
+            )
+        )
+        layout.addWidget(label("Полный экран: F11 • Выход: Esc", "muted"))
+        layout.addStretch()
+        close = QPushButton("Закрыть")
+        close.clicked.connect(dialog.accept)
+        layout.addWidget(close)
+        dialog.exec()
+
+    def open_controls(self) -> None:
+        dialog = ControlEditor(self.control_path, self)
+        dialog.exec()
 
     def _library_page(self) -> QWidget:
         page = QWidget()
