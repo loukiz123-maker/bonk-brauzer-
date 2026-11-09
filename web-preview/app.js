@@ -207,7 +207,7 @@ function controlKeys(control) {
 function validateTest() {
   const allKeys = [];
   for (const control of controls) {
-    if (!['Нажатие', 'Двойное нажатие', 'Огонь', 'Джойстик'].includes(control.kind)) return 'Поддерживаются нажатие, двойное нажатие, огонь и джойстик.';
+    if (!['Нажатие', 'Двойное нажатие', 'Огонь', 'Мультитач', 'Джойстик'].includes(control.kind)) return 'Поддерживаются нажатие, двойное нажатие, огонь, мультитач и джойстик.';
     const keys = controlKeys(control);
     if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k) && !(control.kind !== 'Джойстик' && ['mouse1', 'mouse2'].includes(k)))) return 'Укажите букву, цифру, Mouse1 или Mouse2. Для джойстика — четыре буквы через запятую.';
     if (control.kind === 'Джойстик' && (control.x < 0.089 || control.x > 0.911 || control.y < 0.089 || control.y > 0.911)) return 'Разместите джойстик немного дальше от края.';
@@ -446,7 +446,7 @@ function testDown(key) {
     pendingDouble.set(key, timer);
   }
   const wasActive = controlKeys(control).some(k => liveHeld.has(k));
-  if (control.kind === 'Огонь' || control.kind === 'Джойстик') liveHeld.add(key);
+  if (['Огонь', 'Мультитач', 'Джойстик'].includes(control.kind)) liveHeld.add(key);
   const events = ['Нажатие', 'Двойное нажатие'].includes(control.kind) ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
   $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${events} • удерживается: ${activeTouchCount()}`; renderControls();
 }

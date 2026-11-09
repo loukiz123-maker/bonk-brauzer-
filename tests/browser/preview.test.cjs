@@ -449,3 +449,26 @@ test('double tap emits a delayed offline demo and cancels on focus loss', async 
     assert.equal(await page.locator('#live-test').textContent(), 'Тест клавиш');
   } finally { await context.close(); }
 });
+
+
+test('multitouch markers hold independent contacts and clear on blur', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    const draft = {schema: 1, controls: [
+      {kind: 'Мультитач', key: 'F', x: 0.25, y: 0.5},
+      {kind: 'Мультитач', key: 'G', x: 0.75, y: 0.5}
+    ]};
+    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
+    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+    await page.click('#live-test');
+    await page.keyboard.down('f'); await page.keyboard.down('g');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 2);
+    assert.match(await page.locator('#editor-status').textContent(), /удерживается: 2/);
+    await page.keyboard.up('f');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
+    await page.locator('#control-key').focus();
+    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
+    await page.keyboard.up('g');
+  } finally { await context.close(); }
+});

@@ -89,7 +89,7 @@ def draft_engine(
     elements = []
     for i, control in enumerate(controls):
         kind, key = control.get("kind"), control.get("key")
-        if kind not in ("Нажатие", "Двойное нажатие", "Огонь", "Джойстик"):
+        if kind not in ("Нажатие", "Двойное нажатие", "Огонь", "Мультитач", "Джойстик"):
             raise ValueError(f"Тип «{kind}» пока не поддерживает проверку ввода")
         if not isinstance(key, str):
             raise ValueError("Укажите клавиши")
@@ -124,7 +124,7 @@ def draft_engine(
         else:
             element = Element(
                 id=f"draft-{i}",
-                type=ElementType.HOLD if kind == "Огонь" else ElementType.TAP,
+                type=ElementType.HOLD if kind in ("Огонь", "Мультитач") else ElementType.TAP,
                 label=kind,
                 x=x,
                 y=y,

@@ -162,3 +162,21 @@ def test_double_tap_coalesces_another_press_while_pending() -> None:
     assert engine.key_down("mouse1", now_ms=121) == []  # still physically held
     engine.key_up("mouse1", now_ms=122)
     assert len(engine.key_down("mouse1", now_ms=123)) == 2
+
+
+def test_multitouch_independent_contacts_and_cleanup() -> None:
+    first = draft("Мультитач", "F")
+    second = {**draft("Мультитач", "G"), "x": 0.75}
+    engine = draft_engine([first, second])
+    one = engine.key_down("f")[0]
+    two = engine.key_down("g")[0]
+    assert one.action is Action.DOWN and two.action is Action.DOWN
+    assert one.pointer != two.pointer
+    assert len(engine.active_pointers) == 2
+    up = engine.key_up("f")[0]
+    assert up.action is Action.UP and up.pointer == one.pointer
+    assert len(engine.active_pointers) == 1
+    cancelled = engine.release_all("focus lost")
+    assert len(cancelled) == 1 and cancelled[0].pointer == two.pointer
+    assert not engine.active_pointers
+    assert engine.key_up("g") == []
