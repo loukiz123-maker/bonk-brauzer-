@@ -760,6 +760,8 @@ def test_offline_camera_and_drag_mouse_motion(window, qt_app, tmp_path) -> None:
         event = QMouseEvent(
             QEvent.Type.MouseMove,
             position,
+            position,
+            position,
             Qt.MouseButton.NoButton,
             Qt.MouseButton.NoButton,
             Qt.KeyboardModifier.NoModifier,
