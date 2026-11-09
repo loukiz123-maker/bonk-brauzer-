@@ -6,6 +6,8 @@ A textual match is a hypothesis, not proof of the underlying cause.
 from __future__ import annotations
 
 import logging
+import re
+import shlex
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
 from enum import Enum
@@ -242,16 +244,53 @@ class CompatTarget(Protocol):
         raise NotImplementedError
 
 
+# Fixed, read-only guest commands. Markers carry the guest status because some
+# Waydroid releases return success even when the guest command failed.
+MANUAL_NETWORK_SCRIPT = (
+    r"""ping -c 1 -W 2 1.1.1.1; printf '\nLYNX_NET_IP:%s\n' "$?"; """
+    r"""ping -c 1 -W 2 example.com; printf '\nLYNX_NET_NAME:%s\n' "$?"; """
+    r"""ip route; printf '\nLYNX_NET_ROUTE:%s\n' "$?"; """
+)
+MANUAL_NETWORK_COMMAND = "sudo waydroid shell -- /system/bin/sh -c " + shlex.quote(
+    MANUAL_NETWORK_SCRIPT
+)
+_MANUAL_LABELS = (("IP ping", "IP"), ("Hostname ping", "NAME"), ("Routes", "ROUTE"))
+
+
 def network_manual_help() -> str:
-    """Read-only commands for a user with administrator access."""
+    """A read-only command; the program never runs sudo itself."""
     return (
-        "If Waydroid shell access requires root, run these commands yourself "
-        "with Android running and share the output:\n"
-        "sudo waydroid shell -- ping -c 1 -W 2 1.1.1.1\n"
-        "sudo waydroid shell -- ping -c 1 -W 2 example.com\n"
-        "sudo waydroid shell -- ip route\n"
-        "A failed ping alone does not prove that DNS or networking is broken."
+        "If Waydroid shell requires root, start Android, then run this command "
+        "yourself in a terminal and copy its complete output:\n"
+        + MANUAL_NETWORK_COMMAND
+        + "\nPaste the output into Game help to review the reported statuses. "
+        "A failed ping does not by itself prove that DNS or networking is broken."
     )
+
+
+def parse_manual_network_output(output: str) -> list[tuple[str, str]]:
+    """Interpret pasted guest status markers, never infer missing information.
+
+    Pasted text is user-supplied evidence, not authenticated machine state.
+    Duplicate, malformed, absent and out-of-range markers remain unknown.
+    """
+    rows: list[tuple[str, str]] = []
+    for label, key in _MANUAL_LABELS:
+        prefix = f"LYNX_NET_{key}:"
+        matches = [
+            line.strip()[len(prefix) :]
+            for line in output.splitlines()
+            if line.strip().startswith(prefix)
+        ]
+        value = matches[0] if len(matches) == 1 else ""
+        if not re.fullmatch(r"[0-9]{1,3}", value) or int(value) > 255:
+            status = "unknown (missing or invalid status)"
+        elif int(value) == 0:
+            status = "command reported success"
+        else:
+            status = f"command reported failure (exit {int(value)})"
+        rows.append((label, status))
+    return rows
 
 
 class CompatFixes:

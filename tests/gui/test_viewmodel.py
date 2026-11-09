@@ -478,3 +478,28 @@ class TestGameHelpWiring:
         )
         assert ast.unparse(submit.args[0]) == "compat.network_diagnosis"
         assert {k.arg for k in submit.keywords} >= {"on_done", "on_error"}
+
+
+class TestManualGameNetwork:
+    def test_paste_is_not_described_as_verified_machine_state(self) -> None:
+        result = vm.game_manual_network_message(
+            "LYNX_NET_IP:0\nLYNX_NET_NAME:1\nLYNX_NET_ROUTE:0\n"
+        )
+        assert "not independently verified" in result
+        assert "Hostname ping: command reported failure (exit 1)" in result
+        assert "does not prove" in result
+
+    def test_empty_input_asks_for_output(self) -> None:
+        assert "Paste" in vm.game_manual_network_message("  ")
+
+    def test_missing_markers_remain_unknown(self) -> None:
+        result = vm.game_manual_network_message("access denied")
+        assert result.count("unknown") == 3
+
+    def test_manual_controls_are_wired_and_stale_result_is_cleared(self) -> None:
+        source = TestGameHelpWiring.source()
+        assert "manual_check.clicked.connect(self._review_game_manual_output)" in source
+        assert (
+            "self._game_manual_input.textChanged.connect(self._clear_game_manual_result)" in source
+        )
+        assert "vm.game_manual_network_message(self._game_manual_input.toPlainText())" in source

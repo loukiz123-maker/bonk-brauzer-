@@ -717,5 +717,5 @@ class TestGameCommand:
         )
         result = json.loads(out)[0]
         assert code == 6 and result["outcome"] == "unavailable"
-        assert "sudo waydroid shell -- ip route" in result["message"]
+        assert "sudo waydroid shell -- /system/bin/sh -c" in result["message"]
         assert not result["changed"]

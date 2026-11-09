@@ -55,7 +55,12 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lynxdroid.backend.compat import CompatFixes, FixResult, network_manual_help
+from lynxdroid.backend.compat import (
+    MANUAL_NETWORK_COMMAND,
+    CompatFixes,
+    FixResult,
+    network_manual_help,
+)
 from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendState,
@@ -458,7 +463,41 @@ class MainWindow(QMainWindow):
         self._game_network_output.setReadOnly(True)
         self._game_network_output.setPlaceholderText("Probe results will appear here.")
         layout.addWidget(self._game_network_output)
+        layout.addWidget(_section("Manual network check"))
+        manual_note = QLabel(
+            "If shell access requires root, run this read-only command in a terminal, "
+            "then paste its complete output below."
+        )
+        manual_note.setWordWrap(True)
+        layout.addWidget(manual_note)
+        self._game_manual_command = QPlainTextEdit(MANUAL_NETWORK_COMMAND)
+        self._game_manual_command.setReadOnly(True)
+        self._game_manual_command.setMaximumHeight(100)
+        layout.addWidget(self._game_manual_command)
+        self._game_manual_input = QPlainTextEdit()
+        self._game_manual_input.setPlaceholderText("Paste the terminal output here")
+        self._game_manual_input.setMaximumHeight(130)
+        self._game_manual_input.textChanged.connect(self._clear_game_manual_result)
+        layout.addWidget(self._game_manual_input)
+        manual_check = QPushButton("Review pasted output")
+        manual_check.clicked.connect(self._review_game_manual_output)
+        layout.addWidget(manual_check)
+        self._game_manual_result = QLabel("Paste output and select Review pasted output.")
+        self._game_manual_result.setTextFormat(Qt.TextFormat.PlainText)
+        self._game_manual_result.setWordWrap(True)
+        self._game_manual_result.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
+        layout.addWidget(self._game_manual_result)
         return _scrolled(page)
+
+    def _clear_game_manual_result(self) -> None:
+        self._game_manual_result.setText("Select Review pasted output to analyse the current text.")
+
+    def _review_game_manual_output(self) -> None:
+        self._game_manual_result.setText(
+            vm.game_manual_network_message(self._game_manual_input.toPlainText())
+        )
 
     def _clear_game_advice(self) -> None:
         self._game_advice.setText("Press Explain error to analyse the current message.")

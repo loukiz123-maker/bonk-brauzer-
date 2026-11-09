@@ -157,7 +157,8 @@ category, not a confirmed cause. `lynxdroid game fix network --yes` runs
 non-destructive IP and hostname ICMP and route probes inside Android; a failed
 hostname ping is inconclusive, and the game server is not tested. Waydroid
 shell normally requires root: if unavailable, read the displayed commands and
-run them yourself. Legacy `hide-root`, `egl-fallback`, and `game revert` are
+run the command yourself and paste its complete output into Game help to review
+the reported guest exit statuses. Pasted output is not independently verified. Legacy `hide-root`, `egl-fallback`, and `game revert` are
 disabled because their effectiveness and safe restoration were not verified.
 See `docs/COMPATIBILITY.md` for limitations and recovery guidance.
 

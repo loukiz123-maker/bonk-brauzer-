@@ -151,4 +151,68 @@ def test_missing_shell_gives_actionable_manual_commands() -> None:
     result = fixes(target).network_diagnosis()
     assert result.outcome is Outcome.UNAVAILABLE
     assert len(result.steps) == 3 and not any(step.done for step in result.steps)
-    assert "sudo waydroid shell -- ip route" in result.message
+    assert "sudo waydroid shell -- /system/bin/sh -c" in result.message
+
+
+class TestManualNetworkOutput:
+    def test_individual_statuses_are_reported(self) -> None:
+        from lynxdroid.backend.compat import parse_manual_network_output
+
+        rows = dict(
+            parse_manual_network_output(
+                "ping output\nLYNX_NET_IP:0\nLYNX_NET_NAME:1\nLYNX_NET_ROUTE:0\n"
+            )
+        )
+        assert rows["IP ping"] == "command reported success"
+        assert rows["Hostname ping"] == "command reported failure (exit 1)"
+        assert rows["Routes"] == "command reported success"
+
+    @pytest.mark.parametrize(
+        "value", ["", "LYNX_NET_IP:garbage", "LYNX_NET_IP:256", "LYNX_NET_IP:0\nLYNX_NET_IP:0"]
+    )
+    def test_missing_invalid_and_duplicate_markers_are_unknown(self, value: str) -> None:
+        from lynxdroid.backend.compat import parse_manual_network_output
+
+        rows = dict(parse_manual_network_output(value))
+        assert rows["IP ping"].startswith("unknown")
+        assert rows["Routes"].startswith("unknown")
+
+    def test_guest_script_runs_real_commands_and_emits_statuses(self, tmp_path) -> None:
+        import os
+        import subprocess
+
+        from lynxdroid.backend.compat import MANUAL_NETWORK_SCRIPT, parse_manual_network_output
+
+        ping = tmp_path / "ping"
+        ping.write_text('#!/bin/sh\ncase "$*" in *example.com*) exit 7;; *) exit 0;; esac\n')
+        ping.chmod(0o755)
+        ip = tmp_path / "ip"
+        ip.write_text('#!/bin/sh\necho "default via 192.0.2.1"\nexit 0\n')
+        ip.chmod(0o755)
+        result = subprocess.run(
+            ["/bin/sh", "-c", MANUAL_NETWORK_SCRIPT],
+            capture_output=True,
+            text=True,
+            check=False,
+            env={**os.environ, "PATH": str(tmp_path)},
+        )
+        rows = dict(parse_manual_network_output(result.stdout))
+        assert rows["IP ping"] == "command reported success"
+        assert rows["Hostname ping"] == "command reported failure (exit 7)"
+        assert rows["Routes"] == "command reported success"
+        assert "default via 192.0.2.1" in result.stdout
+
+    def test_manual_command_preserves_script_as_single_argument(self) -> None:
+        import shlex
+
+        from lynxdroid.backend.compat import MANUAL_NETWORK_COMMAND, MANUAL_NETWORK_SCRIPT
+
+        assert shlex.split(MANUAL_NETWORK_COMMAND) == [
+            "sudo",
+            "waydroid",
+            "shell",
+            "--",
+            "/system/bin/sh",
+            "-c",
+            MANUAL_NETWORK_SCRIPT,
+        ]

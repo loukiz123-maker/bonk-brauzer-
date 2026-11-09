@@ -17,8 +17,11 @@ Successful probes do not verify the game's DNS name, TCP connection or server.
 No network settings are changed. The command needs a running Waydroid session
 and access to its Android shell. Waydroid normally requires root for `shell`,
 and LynxDroid never requests a password or invokes sudo. If access is denied,
-the output lists read-only commands to run yourself; their output is not
-automatically imported or verified by LynxDroid. Share it for further analysis.
+the output lists a read-only command to run yourself. In Game help, paste
+its complete terminal output and select **Review pasted output**. LynxDroid
+reads each guest exit marker, reporting missing or duplicate markers as unknown.
+Pasted output is user-supplied and cannot be independently authenticated;
+command success is not a guarantee that the game server is reachable.
 
 ## In the desktop application
 
