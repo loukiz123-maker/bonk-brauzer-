@@ -14,6 +14,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
+from lynxdroid.backend.compat import FixResult, match_failure
 from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendState,
@@ -493,3 +494,25 @@ def consent_text(action: str, detail: str) -> str:
         "This changes state that persists on your system. LynxDroid records the previous "
         "value so it can be restored, and will not touch files it does not own."
     )
+
+
+def game_error_message(message: str) -> str:
+    """Present a possible match, without claiming to have diagnosed the cause."""
+    if not message.strip():
+        return "Enter the error message shown by the game."
+    signature = match_failure(message)
+    if signature is None:
+        return "No known match. The cause is unknown; run Doctor and consult the game vendor."
+    text = f"Possible match: {signature.title}\n\n{signature.explanation}"
+    if signature.fix == "network":
+        text += "\n\nYou can run the network probes below. They do not change settings."
+    return text
+
+
+def game_network_message(result: FixResult) -> str:
+    """Display probe output including unsuccessful or unavailable steps."""
+    steps = "\n".join(
+        f"{step.action}: {'succeeded' if step.done else 'failed'}\n{step.detail}"
+        for step in result.steps
+    )
+    return f"{result.message}\n\n{steps}" if steps else result.message

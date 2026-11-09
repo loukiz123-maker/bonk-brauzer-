@@ -92,3 +92,18 @@ def test_apply_stops_after_unavailable() -> None:
 
 def test_unknown_fix_is_refused() -> None:
     assert fixes(Target()).apply_all(["unknown"])[0].outcome is Outcome.REFUSED
+
+
+def test_generic_device_incompatibility_is_not_emulator_detection() -> None:
+    assert match_failure("This app is not supported on this device") is None
+
+
+def test_container_mention_does_not_assert_android_failed_to_start() -> None:
+    match = match_failure("Waydroid issue")
+    assert match is not None
+    assert "does not establish the cause" in match.explanation
+
+
+def test_network_diagnostic_is_not_claimed_to_be_a_fix() -> None:
+    match = match_failure("network connection failed")
+    assert match is not None and match.support is Support.UNKNOWN

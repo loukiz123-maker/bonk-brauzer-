@@ -44,6 +44,7 @@ from PySide6.QtWidgets import (
     QListWidgetItem,
     QMainWindow,
     QMessageBox,
+    QPlainTextEdit,
     QPushButton,
     QScrollArea,
     QSpinBox,
@@ -54,6 +55,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from lynxdroid.backend.compat import CompatFixes, FixResult
 from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendState,
@@ -226,6 +228,7 @@ class MainWindow(QMainWindow):
         tabs.addTab(self._build_display_tab(), "Display")
         tabs.addTab(self._build_layout_tab(), "Layout")
         tabs.addTab(self._build_apps_tab(), "Apps")
+        tabs.addTab(self._build_game_tab(), "Game help")
         tabs.addTab(self._build_doctor_tab(), "Doctor")
         self._tabs = tabs
         return tabs
@@ -414,6 +417,75 @@ class MainWindow(QMainWindow):
         self._apps_note.setObjectName("Muted")
         layout.addWidget(self._apps_note)
         return _scrolled(page)
+
+    # -- game troubleshooting ---------------------------------------------
+    def _build_game_tab(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(10, 10, 10, 10)
+        layout.setSpacing(8)
+        layout.addWidget(_section("Game error"))
+        note = QLabel(
+            "Paste the error shown by the game. Matches are suggestions, not a confirmed diagnosis."
+        )
+        note.setWordWrap(True)
+        layout.addWidget(note)
+        self._game_error = QPlainTextEdit()
+        self._game_error.setPlaceholderText("Paste the game's error message here")
+        self._game_error.setMaximumHeight(120)
+        self._game_error.textChanged.connect(self._clear_game_advice)
+        layout.addWidget(self._game_error)
+        explain = QPushButton("Explain error")
+        explain.clicked.connect(self._explain_game_error)
+        layout.addWidget(explain)
+        self._game_advice = QLabel("Enter the error message shown by the game.")
+        self._game_advice.setTextFormat(Qt.TextFormat.PlainText)
+        self._game_advice.setWordWrap(True)
+        self._game_advice.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._game_advice)
+        layout.addWidget(_section("Network evidence"))
+        network_note = QLabel(
+            "Checks ping and routes inside Android. No settings are changed; "
+            "Android must be running."
+        )
+        network_note.setWordWrap(True)
+        layout.addWidget(network_note)
+        self._game_network_button = QPushButton("Check Android network")
+        self._game_network_button.clicked.connect(self._check_game_network)
+        layout.addWidget(self._game_network_button)
+        self._game_network_output = QPlainTextEdit()
+        self._game_network_output.setReadOnly(True)
+        self._game_network_output.setPlaceholderText("Probe results will appear here.")
+        layout.addWidget(self._game_network_output)
+        return _scrolled(page)
+
+    def _clear_game_advice(self) -> None:
+        self._game_advice.setText("Press Explain error to analyse the current message.")
+
+    def _explain_game_error(self) -> None:
+        self._game_advice.setText(vm.game_error_message(self._game_error.toPlainText()))
+
+    def _check_game_network(self) -> None:
+        self._game_network_button.setEnabled(False)
+        self._game_network_output.setPlainText("Checking Android network…")
+        compat = CompatFixes(self._backend, consent=user_consented("run network probes"))
+        self._tasks.submit(
+            compat.network_diagnosis,
+            on_done=self._game_network_done,
+            on_error=self._game_network_failed,
+        )
+
+    def _game_network_done(self, result: FixResult) -> None:
+        self._game_network_button.setEnabled(True)
+        self._game_network_output.setPlainText(vm.game_network_message(result))
+
+    def _game_network_failed(self, message: str, detail: str) -> None:
+        self._game_network_button.setEnabled(True)
+        self._game_network_output.setPlainText(
+            f"Network probe could not run: {message}\n"
+            "Check that Android is running and that Waydroid shell access is available."
+        )
+        log.warning("game network probe: %s", detail)
 
     # -- doctor tab ------------------------------------------------------
     def _build_doctor_tab(self) -> QWidget:

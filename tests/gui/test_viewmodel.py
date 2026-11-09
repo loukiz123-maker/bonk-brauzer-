@@ -399,3 +399,82 @@ class TestThemeChoice:
         accepted = {"dark", "light", "system"}
         for name in accepted:
             assert palette_for(name, system_is_dark=False).name in {"dark", "light"}, name
+
+
+class TestGameHelp:
+    def test_empty_error_prompts_for_input(self) -> None:
+        assert "Enter the error" in vm.game_error_message("  ")
+
+    def test_root_error_does_not_offer_unverified_fix(self) -> None:
+        text = vm.game_error_message("активны root-права")
+        assert "Possible match" in text
+        assert "not been verified" in text
+        assert "hide-root" not in text
+
+    def test_network_error_offers_probe_not_fix(self) -> None:
+        text = vm.game_error_message("Не удалось войти на сервер: 3")
+        assert "network probes" in text
+        assert "cause is unknown" in text
+
+    def test_unknown_message_is_not_a_diagnosis(self) -> None:
+        assert "cause is unknown" in vm.game_error_message("error 0xDEADBEEF")
+
+    def test_attestation_precedes_root(self) -> None:
+        assert "Integrity" in vm.game_error_message("root access and Play Integrity failed")
+
+    def test_network_results_include_both_probe_outputs(self) -> None:
+        from lynxdroid.backend.compat import FixResult, Outcome, Step
+
+        result = FixResult(
+            "network",
+            Outcome.UNAVAILABLE,
+            [Step("ICMP", False, "timed out"), Step("routes", True, "default via eth0")],
+            message="ICMP is inconclusive",
+        )
+        text = vm.game_network_message(result)
+        assert "ICMP is inconclusive" in text
+        assert "ICMP: failed" in text and "timed out" in text
+        assert "routes: succeeded" in text and "default via eth0" in text
+
+    def test_no_probe_steps_still_shows_message(self) -> None:
+        from lynxdroid.backend.compat import FixResult, Outcome
+
+        assert (
+            vm.game_network_message(FixResult("network", Outcome.UNAVAILABLE, message="no shell"))
+            == "no shell"
+        )
+
+
+class TestGameHelpWiring:
+    """Static wiring checks; real Qt interaction requires an installed Qt runtime."""
+
+    @staticmethod
+    def source() -> str:
+        from pathlib import Path
+
+        return (
+            Path(__file__).resolve().parents[2] / "src/lynxdroid/gui/main_window.py"
+        ).read_text()
+
+    def test_game_tab_and_buttons_are_connected(self) -> None:
+        source = self.source()
+        assert 'tabs.addTab(self._build_game_tab(), "Game help")' in source
+        assert "explain.clicked.connect(self._explain_game_error)" in source
+        assert "self._game_network_button.clicked.connect(self._check_game_network)" in source
+        assert "self._game_error.textChanged.connect(self._clear_game_advice)" in source
+
+    def test_network_probe_runs_in_worker_with_success_and_error_handlers(self) -> None:
+        import ast
+
+        tree = ast.parse(self.source())
+        method = next(
+            n
+            for n in ast.walk(tree)
+            if isinstance(n, ast.FunctionDef) and n.name == "_check_game_network"
+        )
+        calls = [n for n in ast.walk(method) if isinstance(n, ast.Call)]
+        submit = next(
+            n for n in calls if isinstance(n.func, ast.Attribute) and n.func.attr == "submit"
+        )
+        assert ast.unparse(submit.args[0]) == "compat.network_diagnosis"
+        assert {k.arg for k in submit.keywords} >= {"on_done", "on_error"}

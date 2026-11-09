@@ -103,8 +103,6 @@ SIGNATURES: tuple[Signature, ...] = (
         markers=(
             "эмулятор",
             "emulator",
-            "not supported on this device",
-            "не поддерживается на этом устройстве",
         ),
         fix=None,
         support=Support.NOT_FIXABLE,
@@ -116,7 +114,7 @@ SIGNATURES: tuple[Signature, ...] = (
     ),
     Signature(
         id="binder-root",
-        title="root is unavailable because Android never started",
+        title="the message mentions the Android container",
         markers=(
             "waydroid",
             "container",
@@ -125,8 +123,8 @@ SIGNATURES: tuple[Signature, ...] = (
         fix=None,
         support=Support.UNKNOWN,
         explanation=(
-            "This message names the container itself, so the failure happened "
-            "before the game's own checks. Run 'lynxdroid doctor' first."
+            "This message mentions the container but does not establish the cause. "
+            "Run 'lynxdroid doctor' to gather more information."
         ),
     ),
     Signature(
@@ -160,7 +158,7 @@ SIGNATURES: tuple[Signature, ...] = (
             "timeout",
         ),
         fix="network",
-        support=Support.FIXABLE,
+        support=Support.UNKNOWN,
         explanation=(
             "The game reports a connection error. Its cause is unknown; "
             "check connectivity inside Android and consult the game vendor."

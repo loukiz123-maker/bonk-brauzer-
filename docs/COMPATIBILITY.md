@@ -16,6 +16,13 @@ a failure may mean ICMP is blocked. No network settings are changed. Check the
 reported routes and consult the game vendor if connectivity remains unclear.
 The command needs a running Waydroid session and access to its Android shell.
 
+## In the desktop application
+
+Open **Game help**, paste the game error, and select **Explain error**.
+For connection errors, **Check Android network** runs the limited probes in
+the background and displays their output without changing settings. Qt wiring
+is statically tested; actual GUI operation still needs verification on a desktop.
+
 ## Correction to earlier releases
 
 `hide-root` and `egl-fallback` are disabled: their effectiveness was never
