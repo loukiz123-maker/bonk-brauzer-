@@ -351,3 +351,34 @@ def test_history_is_bounded_and_isolated_between_profiles(window, qt_app, tmp_pa
     editor.profile_choice.setCurrentIndex(1)
     assert len(editor.controls) == 1 and not editor.undo_button.isEnabled()
     shiboken6.delete(editor)
+
+
+def test_selected_apk_opens_its_own_controls(window, qt_app, tmp_path) -> None:
+    from lynxdroid.gui.control_editor import load_controls
+    from lynxdroid.gui.control_profiles import control_profile_path
+
+    first = tmp_path / "Alpha.apk"
+    second = tmp_path / "Bravo.apk"
+    for apk in (first, second):
+        apk.write_bytes(b"PK\x03\x04test")
+        window.library.add(apk)
+    window._reload()
+    window.library_button.click()
+    assert not window.edit_controls_button.isEnabled()
+    window.list.setCurrentRow(1)
+    assert window.edit_controls_button.isEnabled()
+    window.edit_controls_button.click()
+    editor = window.pages.currentWidget()
+    assert editor.profile_choice.currentIndex() == 2
+    assert editor.path == control_profile_path(window.control_path.parent, second)
+    editor.place(0.5, 0.5)
+    editor.save_button.click()
+    assert load_controls(editor.path)[0]["key"] == "F"
+    editor.close_button.click()
+    window.library_button.click()
+    assert window._selected_path() == second
+    window.controls_tool.click()
+    editor = window.pages.currentWidget()
+    assert editor.profile_choice.currentIndex() == 2
+    assert editor.controls[0]["key"] == "F"
+    editor.close_button.click()

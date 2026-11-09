@@ -158,6 +158,7 @@ class ControlEditor(QDialog):
         parent: QWidget | None = None,
         *,
         games: list[tuple[str, Path]] | None = None,
+        initial_profile: int = 1,
     ) -> None:
         super().__init__(parent)
         self.path = path
@@ -246,8 +247,8 @@ class ControlEditor(QDialog):
         side.addWidget(self.save_button)
         layout.addWidget(side_scroll)
         if games:
-            self._profile_index = 1
-            self.profile_choice.setCurrentIndex(1)
+            self._profile_index = initial_profile if 1 <= initial_profile <= len(games) else 1
+            self.profile_choice.setCurrentIndex(self._profile_index)
         self._load_profile(Path(str(self.profile_choice.currentData())))
         self.profile_choice.currentIndexChanged.connect(self.change_profile)
 

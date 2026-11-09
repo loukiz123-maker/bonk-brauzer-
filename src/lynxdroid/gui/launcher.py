@@ -206,6 +206,7 @@ class LauncherWindow(QMainWindow):
             if previous is not None:
                 self.pages.removeWidget(previous)
                 previous.deleteLater()
+        chosen = self._selected_path()
         self._reload()
         games = [
             (
@@ -214,7 +215,8 @@ class LauncherWindow(QMainWindow):
             )
             for entry in self.entries
         ]
-        editor = ControlEditor(self.control_path, self.pages, games=games)
+        initial = next((i + 1 for i, entry in enumerate(self.entries) if entry.path == chosen), 1)
+        editor = ControlEditor(self.control_path, self.pages, games=games, initial_profile=initial)
         editor.setWindowFlags(Qt.WindowType.Widget)
         editor.close_button.clicked.connect(lambda: self._show_page(0))
         self.pages.addWidget(editor)
@@ -252,19 +254,26 @@ class LauncherWindow(QMainWindow):
         self.play_button.setEnabled(False)
         self.play_button.setToolTip("Собственный Android-движок ещё не реализован")
         actions.addWidget(self.play_button)
+        self.edit_controls_button = QPushButton("Настроить управление")
+        self.edit_controls_button.setEnabled(False)
+        self.edit_controls_button.clicked.connect(self.open_controls)
+        actions.addWidget(self.edit_controls_button)
         self.remove_button = QPushButton("Удалить из библиотеки")
         self.remove_button.setEnabled(False)
         self.remove_button.clicked.connect(self.remove_selected)
         actions.addWidget(self.remove_button)
+        actions.addStretch()
+        box.addLayout(actions)
+        file_actions = QHBoxLayout()
         self.folder_button = QPushButton("Открыть папку")
         self.folder_button.setToolTip("Открыть папку с выбранным APK")
         self.folder_button.clicked.connect(self.open_selected_folder)
-        actions.addWidget(self.folder_button)
+        file_actions.addWidget(self.folder_button)
         self.copy_button = QPushButton("Копировать путь")
         self.copy_button.clicked.connect(self.copy_selected_path)
-        actions.addWidget(self.copy_button)
-        actions.addStretch()
-        box.addLayout(actions)
+        file_actions.addWidget(self.copy_button)
+        file_actions.addStretch()
+        box.addLayout(file_actions)
         return page
 
     def _about_page(self) -> QWidget:
@@ -310,6 +319,7 @@ class LauncherWindow(QMainWindow):
         super().closeEvent(event)
 
     def _reload(self) -> None:
+        chosen = self._selected_path()
         try:
             self.entries = self.library.load()
             self._library_error = ""
@@ -317,6 +327,11 @@ class LauncherWindow(QMainWindow):
             self.entries = []
             self._library_error = str(exc)
         self._render_library()
+        if chosen is not None:
+            for row in range(self.list.count()):
+                if self.list.item(row).data(Qt.ItemDataRole.UserRole) == str(chosen):
+                    self.list.setCurrentRow(row)
+                    break
 
     def _render_library(self) -> None:
         self.list.clear()
@@ -338,6 +353,7 @@ class LauncherWindow(QMainWindow):
     def _selection_changed(self, *args: object) -> None:
         selected = self.list.currentItem() is not None
         self.remove_button.setEnabled(selected and not self._library_error)
+        self.edit_controls_button.setEnabled(selected and not self._library_error)
         self.folder_button.setEnabled(selected)
         self.copy_button.setEnabled(selected)
 

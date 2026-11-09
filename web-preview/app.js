@@ -42,6 +42,7 @@ function render() {
     item.addEventListener('click', () => { selected = index; render(); }); list.append(item);
   });
   $('#remove').disabled = selected === null || !storageAvailable;
+  $('#edit-selected-controls').disabled = selected === null || !storageAvailable;
   $('#library-note').textContent = !storageAvailable ? 'Библиотека браузера недоступна или повреждена.' : entries.length ? 'Выберите APK для удаления из списка.' : 'Библиотека пуста — добавьте APK, чтобы сохранить его название.';
 }
 document.querySelectorAll('[data-page], [data-go]').forEach((button) => button.addEventListener('click', () => page(button.dataset.page || button.dataset.go)));
@@ -153,14 +154,16 @@ function loadProfile(key) {
   controlsBaseline = JSON.stringify(controls);
   selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; renderControls();
 }
-$('#open-controls').addEventListener('click', () => {
+function openControls() {
   if (!$('#editor').hidden) return;
   const select = $('#control-profile'); select.replaceChildren();
   const general = document.createElement('option'); general.textContent = 'Общий шаблон (старый)'; general.value = controlStorageKey; select.append(general);
   entries.forEach(name => { const option = document.createElement('option'); option.value = `lynxdroid-preview-game-v1:${name}`; option.textContent = name; select.append(option); });
   activeProfileIndex = entries.length ? (selected !== null ? selected + 1 : 1) : 0;
   select.selectedIndex = activeProfileIndex; loadProfile(select.value); page('editor');
-});
+}
+$('#open-controls').addEventListener('click', openControls);
+$('#edit-selected-controls').addEventListener('click', openControls);
 $('#control-profile').addEventListener('change', event => {
   const select = event.target;
   if (!canDiscard()) { select.selectedIndex = activeProfileIndex; return; }
