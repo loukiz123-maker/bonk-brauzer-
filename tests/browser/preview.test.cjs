@@ -36,6 +36,9 @@ async function freshPages(count = 1) {
 }
 const pagesSnapshot = pages => pages.map(page => page.evaluate(() => ({stored: localStorage.getItem('lynxdroid-preview-library-v1'), message: document.querySelector('#message').textContent, note: document.querySelector('#library-note').textContent, locks: !!navigator.locks, changes: window.debugChanges, log: window.debugLog})));
 const apk = name => ({name, mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from([0x50, 0x4b, 3, 4, 0])});
+async function waitForProfile(page) {
+  await page.waitForFunction(() => !document.querySelector('#editor').inert);
+}
 async function addMarker(page, x = 200) {
   await page.locator('#canvas').click({position: {x, y: 150}});
   await page.waitForSelector('#canvas .marker');
@@ -106,6 +109,7 @@ test('two tabs cannot silently overwrite the same saved profile', async () => {
     assert.equal(await second.locator('#canvas .marker').evaluate(el => el.style.left), before);
     second.once('dialog', dialog => dialog.accept());
     await second.click('#reload-profile');
+    await waitForProfile(second);
     const firstPosition = await first.locator('#canvas .marker').evaluate(el => el.style.left);
     assert.equal(await second.locator('#canvas .marker').evaluate(el => el.style.left), firstPosition);
     await second.click('#save-controls');
@@ -126,6 +130,7 @@ test('automatic reload waits for a dirty draft and resumes after save', async ()
     await page.click('#save-controls');
     await reload;
     await page.click('#open-controls');
+    await waitForProfile(page);
     assert.equal(await page.locator('#canvas .marker').count(), 1);
   } finally { await context.close(); }
 });
@@ -182,6 +187,7 @@ test('corrupt profile remains read-only and is never overwritten', async () => {
   try {
     await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{broken'));
     await page.click('#open-controls');
+    await waitForProfile(page);
     assert.equal(await page.locator('#save-controls').isDisabled(), true);
     assert.equal(await page.locator('#import-controls').isDisabled(), true);
     await addMarker(page);
@@ -189,6 +195,7 @@ test('corrupt profile remains read-only and is never overwritten', async () => {
     await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{"schema":1,"controls":[]}'));
     page.once('dialog', dialog => dialog.accept());
     await page.click('#reload-profile');
+    await waitForProfile(page);
     assert.equal(await page.locator('#canvas .marker').count(), 0);
     assert.equal(await page.locator('#save-controls').isEnabled(), true);
   } finally { await context.close(); }
@@ -278,11 +285,13 @@ test('copying a saved game layout is confirmed, undoable and never auto-saves', 
     await page.selectOption('#control-profile', beta);
     await page.locator('#control-key').fill('G'); await addMarker(page);
     await page.selectOption('#copy-source', alpha);
-    page.once('dialog', dialog => dialog.dismiss());
+    const rejected = page.waitForEvent('dialog').then(dialog => dialog.dismiss());
     await page.click('#copy-profile');
+    await rejected;
     assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
-    page.once('dialog', dialog => dialog.accept());
+    const accepted = page.waitForEvent('dialog').then(dialog => dialog.accept());
     await page.click('#copy-profile');
+    await accepted;
     await page.waitForSelector('#editor-status:text("Раскладка скопирована")');
     assert.equal(await page.locator('#canvas .marker').textContent(), 'F');
     assert.equal(await page.evaluate(key => localStorage.getItem(key), beta), null);
@@ -322,6 +331,7 @@ test('legacy profile migrates and reload repairs a stale valid mirror', async ()
     await page.waitForSelector('#canvas .marker:text("K")');
     await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{"schema":1,"controls":[]}'));
     await page.click('#reload-profile');
+    await waitForProfile(page);
     await page.waitForSelector('#canvas .marker:text("K")');
     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), legacy);
   } finally { await context.close(); }

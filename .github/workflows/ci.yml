@@ -344,7 +344,7 @@ jobs:
         run: |
           export CHROMIUM_PATH="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           npm test > browser-test.log 2>&1 || {
-            python3 -c 'from pathlib import Path; print("::error::" + Path("browser-test.log").read_text().replace("%", "%25").replace("\n", "%0A"))' 
+            python3 -c 'from pathlib import Path; import re; s=Path("browser-test.log").read_text(); blocks=re.findall(r"(?ms)^not ok .*?(?=^# Subtest:|^1\.\.|\Z)", s); [print("::error::"+x.replace("%", "%25").replace("\n", "%0A")) for x in (blocks or [s])]' 
             exit 1
           }
           cat browser-test.log
