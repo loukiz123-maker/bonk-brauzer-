@@ -34,7 +34,7 @@ async function freshPages(count = 1) {
   await Promise.all(pages.map(page => page.goto(url)));
   return {context, pages};
 }
-const pagesSnapshot = pages => pages.map(page => page.evaluate(() => ({stored: localStorage.getItem('lynxdroid-preview-library-v1'), message: document.querySelector('#message').textContent, note: document.querySelector('#library-note').textContent, locks: !!navigator.locks, changes: window.debugChanges})));
+const pagesSnapshot = pages => pages.map(page => page.evaluate(() => ({stored: localStorage.getItem('lynxdroid-preview-library-v1'), message: document.querySelector('#message').textContent, note: document.querySelector('#library-note').textContent, locks: !!navigator.locks, changes: window.debugChanges, log: window.debugLog})));
 const apk = name => ({name, mimeType: 'application/vnd.android.package-archive', buffer: Buffer.from([0x50, 0x4b, 3, 4, 0])});
 async function addMarker(page, x = 200) {
   await page.locator('#canvas').click({position: {x, y: 150}});
@@ -46,7 +46,14 @@ test('concurrent APK additions in two tabs do not overwrite one another', async 
   try {
     const errors = [];
     for (const page of [first, second]) page.on('pageerror', error => errors.push(error.message));
-    for (const page of [first, second]) await page.evaluate(() => { window.debugChanges = []; document.querySelector('#file').addEventListener('change', event => window.debugChanges.push([...event.target.files].map(f => f.name)), true); });
+    for (const page of [first, second]) await page.evaluate(() => {
+      window.debugChanges = []; window.debugLog = [];
+      document.querySelector('#file').addEventListener('change', event => window.debugChanges.push([...event.target.files].map(f => f.name)), true);
+      const read = Blob.prototype.arrayBuffer;
+      Blob.prototype.arrayBuffer = async function() { window.debugLog.push('read-start'); try { const bytes = await read.call(this); window.debugLog.push('read-done'); return bytes; } catch (error) { window.debugLog.push(`read-error:${error.message}`); throw error; } };
+      const request = navigator.locks.request.bind(navigator.locks);
+      navigator.locks.request = (name, callback) => { window.debugLog.push(`request:${name}`); return request(name, (...args) => { window.debugLog.push(`acquire:${name}`); const result = callback(...args); window.debugLog.push(`done:${name}`); return result; }); };
+    });
     // Hold the shared lock while both tabs start an import, then release it.
     // Sequential file-selection automation avoids competing native file
     // choosers while keeping both storage updates concurrent.
@@ -187,6 +194,7 @@ test('mouse binding capture and held fire work locally', async () => {
     await addMarker(page);
     assert.equal(await page.locator('#canvas .marker').textContent(), 'ЛКМ');
     await page.click('#live-test');
+    await page.locator('#canvas').scrollIntoViewIfNeeded();
     const canvas = await page.locator('#canvas').boundingBox();
     await page.mouse.move(canvas.x + 90, canvas.y + 90);
     await page.mouse.down();
