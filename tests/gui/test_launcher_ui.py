@@ -116,7 +116,13 @@ def test_import_search_and_remove_without_deleting_file(
 
 
 def test_fullscreen_and_escape(window, qt_app) -> None:
-    assert window.fullscreen_button.parentWidget().objectName() == "header"
+    from PySide6.QtWidgets import QPushButton
+
+    header = window.fullscreen_button.parentWidget()
+    assert header.objectName() == "header"
+    buttons = header.findChildren(QPushButton, "windowButton")
+    assert len(buttons) == 3
+    assert all(button.size() == window.fullscreen_button.size() for button in buttons)
     assert window.fullscreen_button.text() == "⛶"
     window.fullscreen_button.click()
     qt_app.processEvents()

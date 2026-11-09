@@ -48,6 +48,7 @@ QLabel#badge { color: #81e4cf; background: #173638; border-radius: 9px; padding:
 QPushButton { color: #ffffff; background: #1b2a3a; border: 1px solid #30475b;
     border-radius: 9px; padding: 10px 16px; font-weight: 600; }
 QPushButton:hover:enabled { background: #263d50; border-color: #65d5d0; }
+QPushButton#windowButton { padding: 0; }
 QPushButton:disabled { color: #718092; background: #18212d; border-color: #26313f; }
 QPushButton#primary { background: #146d70; color: #ffffff; border: 0; font-weight: 800; }
 QPushButton#primary:hover { background: #20848a; }
@@ -113,6 +114,9 @@ class LauncherWindow(QMainWindow):
         close.setToolTip("Закрыть лаунчер")
         close.clicked.connect(self.close)
         top.addWidget(close)
+        for button in (self.fullscreen_button, minimize, close):
+            button.setObjectName("windowButton")
+            button.setFixedSize(38, 36)
         layout.addWidget(header)
 
         body = QHBoxLayout()
