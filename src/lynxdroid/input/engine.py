@@ -290,6 +290,8 @@ class InputEngine:
             return []
         pointer = self._claim_pointer(binding)
         x, y = self._element_point(binding)
+        self._active_pointers[pointer].x = x
+        self._active_pointers[pointer].y = y
         return [self._emit(Action.DOWN, pointer, x, y, timestamp, binding.element.id)]
 
     def _release(self, binding: _Binding, timestamp: int) -> list[TouchEvent]:

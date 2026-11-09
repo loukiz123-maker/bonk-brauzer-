@@ -93,7 +93,8 @@ class ControlEditor(QDialog):
         side.addWidget(QLabel("РЕДАКТОР УПРАВЛЕНИЯ"))
         note = QLabel(
             "Выберите тип и клавишу, затем нажмите на поле. "
-            "Это шаблон: ввод в игры пока не работает."
+            "Это шаблон: ввод в игры пока не работает. "
+            "Канал scrcpy подготовлен, но не подключён."
         )
         note.setWordWrap(True)
         side.addWidget(note)

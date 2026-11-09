@@ -38,6 +38,7 @@ class ChannelKind(str, Enum):
     NULL = "null"
     ADB_SHELL = "adb-shell"
     AGENT = "agent"
+    SCRCPY = "scrcpy"
 
 
 @dataclass(frozen=True, slots=True)

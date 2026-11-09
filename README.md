@@ -49,7 +49,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (897) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (903) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -126,7 +126,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 897 collected; Qt tests may skip without native libraries
+pytest                               # 903 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -281,4 +281,7 @@ separate browser data, not shared with the desktop launcher.
 The touch-message encoder is adapted from [scrcpy](https://github.com/Genymobile/scrcpy)
 revision `a60891aea193d92e7e5c3942700eca63f9d19a5f`, Apache-2.0; its license
 is in `licenses/scrcpy-APACHE-2.0.txt`. It is a codec, not an Android runtime,
-and has not been tested against a real scrcpy server.
+and has not been tested against a real scrcpy server. An experimental transport
+accepts only a caller-supplied, already connected control socket; it is not
+connected to the launcher, does not start or discover a server, and cannot
+confirm injection. It is tested with local socket pairs, not an Android device.
