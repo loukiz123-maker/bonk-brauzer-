@@ -285,8 +285,15 @@ jobs:
       - run: python -m pip install -e '.[gui,dev]'
       - name: Require working Qt and test actual widgets
         run: |
-          python -c 'from PySide6.QtWidgets import QApplication; app = QApplication([])'
-          python -m pytest tests/gui/test_launcher_ui.py -q
+          python -c 'from PySide6.QtWidgets import QApplication; app = QApplication([])' > qt-check.log 2>&1 || {
+            python -c "from pathlib import Path; print('::error::Qt startup: ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
+            exit 1
+          }
+          python -m pytest tests/gui/test_launcher_ui.py -q --tb=short > qt-check.log 2>&1 || {
+            python -c "from pathlib import Path; print('::error::Qt tests: ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
+            exit 1
+          }
+          cat qt-check.log
       - name: Capture launcher preview
         run: |
           python - <<'PY'
