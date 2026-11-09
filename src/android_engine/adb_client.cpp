@@ -239,6 +239,36 @@ std::string command_failure_message(const CommandOutput& output) {
   return detail;
 }
 
+Status inspect_am_start_output(std::string_view output) {
+  std::istringstream lines{std::string(output)};
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::string_view trimmed = trim_ascii(line);
+    if (trimmed.rfind("Error:", 0) == 0) {
+      std::string detail(trimmed);
+      if (detail.size() > 512) {
+        detail.resize(512);
+        detail += "…";
+      }
+      return Status::failure(
+          Error::make("android.app_launch_reported_failure", "Android am start reported: " + detail));
+    }
+    if (trimmed.rfind("Status:", 0) == 0) {
+      const std::string_view reported_status = trim_ascii(trimmed.substr(std::string_view{"Status:"}.size()));
+      if (reported_status != "ok") {
+        std::string detail(trimmed);
+        if (detail.size() > 512) {
+          detail.resize(512);
+          detail += "…";
+        }
+        return Status::failure(
+            Error::make("android.app_launch_reported_failure", "Android am start reported: " + detail));
+      }
+    }
+  }
+  return Status::success();
+}
+
 Result<CommandOutput> run_adb(const RuntimeCommand& command, std::chrono::milliseconds timeout,
                               std::size_t max_capture_bytes = kDefaultAdbCaptureBytes) {
   const Result<CommandOutput> result = run_command(command, timeout, max_capture_bytes);
@@ -495,7 +525,12 @@ Status launch_installed_package(const AdbConfig& config, std::string_view packag
   const Status consent = require_server_consent(config);
   if (consent.is_error()) return consent;
   const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
-  return output.status();
+  if (output.is_error()) return Status::failure(output.error());
+  const Status launch_stdout_result = inspect_am_start_output(output.value().stdout_data);
+  if (launch_stdout_result.is_error()) return launch_stdout_result;
+  const Status launch_stderr_result = inspect_am_start_output(output.value().stderr_data);
+  if (launch_stderr_result.is_error()) return launch_stderr_result;
+  return Status::success();
 }
 
 Status install_selected_apk(const AdbConfig& config, const std::filesystem::path& apk_path,

@@ -104,7 +104,7 @@ Preflight не запускает найденные executable, не загру
 - Подключение старого Android-агента не реализовано. Установка выбранного APK описана на этапе 7; запуск установленного приложения по package ID — на этапе 5.
 - Все ADB-операции, как и guest-state query, требуют `allow_adb_server_autostart=true` после явного согласия. Таймаут каждой команды — от 1 ms до 60 s; screenshot stdout/stderr ограничены 32 MiB на поток, обычные ADB-команды — 64 KiB на поток.
 - `include/bonk/image/image.hpp`, `src/image/inflate.cpp`, `src/image/png.cpp`: добавлены лимитированный inflate и overload PNG decode с пределом пикселей; PNG decoder также ограничивает распакованные и RGBA-буферы 256 MiB.
-- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, точные argv/capture/tap/swipe/key/install/launch и bounded boot polling; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
+- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, точные argv/capture/tap/swipe/key/install/launch, launch failure parsing и bounded boot polling; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
 
 Настоящие `adb`, Emulator и AVD в окружении отсутствуют, поэтому нет live-проверки формата кадров и успешной доставки tap/swipe/keyevent на госте. ADB user server может быть запущен при первом вызове; запрет по умолчанию сохраняется.
 
@@ -112,8 +112,8 @@ Preflight не запускает найденные executable, не загру
 
 - `make_adb_launch_package_command()` формирует `adb -s SERIAL shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p PACKAGE`.
 - `launch_installed_package()` проверяет dot-separated Android package ID, требует ADB consent и ограничивает timeout 60 секундами. Используется только package ID, предоставленный/подтверждённый вызывающей стороной; имя APK не используется для догадки.
-- Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. `am start` с успешным exit code означает только успешное завершение команды запуска.
-- Fake ADB проверяет argv и consent gating, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
+- Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. Она распознаёт явный `Error:` и `Status:` не `ok` в stdout/stderr `am start -W`, но если таких строк нет, ориентируется только на exit code. Даже `Status: ok` не доказывает готовность приложения или игры.
+- Fake ADB проверяет argv, consent gating и явные launch failure строки, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
 
 Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
 
@@ -187,6 +187,6 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **311 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 36/36. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка: `make -j2 verify` — **312 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 37/37. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
 
 Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.

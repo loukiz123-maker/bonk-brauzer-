@@ -63,7 +63,8 @@ std::string shell_quote(std::string_view value) {
 
 class FakeAdb final {
  public:
-  explicit FakeAdb(bool simulate_boot_sequence = false) : simulate_boot_sequence_(simulate_boot_sequence) {
+  explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok")
+      : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
     mutable_pattern.push_back(0);
@@ -101,6 +102,8 @@ fi
       script << R"(if [ "${3-}" = "exec-out" ]; then exec /bin/cat )" << shell_quote(fixture.string())
              << R"(; fi)" << std::endl;
     }
+    script << R"(if [ "${4-}" = "am" ]; then printf '%s\n' )" << shell_quote(launch_output) << R"(; fi)"
+           << std::endl;
     script << "exit 0" << std::endl;
     script.close();
     if (!script || ::chmod(executable_.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) != 0) return;
@@ -457,6 +460,24 @@ BONK_TEST(android_adb, fake_adb_exercises_single_capture_tap_and_key_without_an_
   CHECK_EQ(fake.arguments(),
            std::string("-s emulator-5554 shell am start -W -a android.intent.action.MAIN -c "
                         "android.intent.category.LAUNCHER -p org.example.game "));
+}
+
+BONK_TEST(android_adb, reports_explicit_am_start_failures_even_when_adb_exits_zero) {
+  FakeAdb timeout_adb{false, "Status: timeout"};
+  REQUIRE(timeout_adb.ready());
+  const Status timeout = android::launch_installed_package(
+      timeout_adb.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(timeout.is_error());
+  CHECK_EQ(timeout.error().code, std::string("android.app_launch_reported_failure"));
+  CHECK(timeout.error().message.find("Status: timeout") != std::string::npos);
+
+  FakeAdb unresolved_adb{false, "Error: Activity not started, unable to resolve Intent"};
+  REQUIRE(unresolved_adb.ready());
+  const Status unresolved = android::launch_installed_package(
+      unresolved_adb.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(unresolved.is_error());
+  CHECK_EQ(unresolved.error().code, std::string("android.app_launch_reported_failure"));
+  CHECK(unresolved.error().message.find("unable to resolve Intent") != std::string::npos);
 }
 
 BONK_TEST(android_adb, requires_explicit_consent_before_any_adb_process_is_started) {
