@@ -344,7 +344,7 @@ jobs:
         run: |
           export CHROMIUM_PATH="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
           npm test > browser-test.log 2>&1 || {
-            while IFS= read -r line; do echo "::error::$line"; done < browser-test.log
+            python3 -c 'from pathlib import Path; print("::error::" + Path("browser-test.log").read_text().replace("%", "%25").replace("\n", "%0A"))' 
             exit 1
           }
           cat browser-test.log
