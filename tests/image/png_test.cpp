@@ -128,6 +128,21 @@ BONK_TEST(inflate, rejects_garbage) {
   CHECK(image::inflate_zlib("tiny").is_error());
 }
 
+BONK_TEST(inflate, enforces_output_limits_for_raw_and_zlib_streams) {
+  const std::string data = "bounded output";
+  const std::string deflate = stored_deflate(data);
+  CHECK(image::inflate_raw(deflate, data.size() - 1).is_error());
+  const Result<std::string> raw = image::inflate_raw(deflate, data.size());
+  REQUIRE(raw.is_ok());
+  CHECK_EQ(raw.value(), data);
+
+  const std::string zlib = zlib_wrap(deflate, data);
+  CHECK(image::inflate_zlib(zlib, data.size() - 1).is_error());
+  const Result<std::string> wrapped = image::inflate_zlib(zlib, data.size());
+  REQUIRE(wrapped.is_ok());
+  CHECK_EQ(wrapped.value(), data);
+}
+
 BONK_TEST(png, decodes_rgb_with_sub_filter) {
   // 2x2 RGB: row 0 = red, green; row 1 uses the "Sub" filter.
   std::string raw;
@@ -166,6 +181,21 @@ BONK_TEST(png, decodes_palette_and_alpha) {
   CHECK_EQ(static_cast<int>(decoded.value().sample(1, 0, 3)), 255);
 }
 
+BONK_TEST(png, decodes_a_minimal_adam7_image) {
+  PngBuilder builder(1, 1, 8, 6, 1);
+  builder.payload.assign(5, static_cast<char>(0));
+  builder.payload[1] = static_cast<char>(0x12);
+  builder.payload[2] = static_cast<char>(0x34);
+  builder.payload[3] = static_cast<char>(0x56);
+  builder.payload[4] = static_cast<char>(0xFF);
+  const Result<image::Image> decoded = image::decode_png(builder.build());
+  REQUIRE(decoded.is_ok());
+  CHECK_EQ(static_cast<int>(decoded.value().sample(0, 0, 0)), 0x12);
+  CHECK_EQ(static_cast<int>(decoded.value().sample(0, 0, 1)), 0x34);
+  CHECK_EQ(static_cast<int>(decoded.value().sample(0, 0, 2)), 0x56);
+  CHECK_EQ(static_cast<int>(decoded.value().sample(0, 0, 3)), 0xFF);
+}
+
 BONK_TEST(png, decodes_grayscale_alpha) {
   std::string raw;
   raw.push_back(0);
@@ -181,6 +211,25 @@ BONK_TEST(png, decodes_grayscale_alpha) {
 BONK_TEST(png, rejects_broken_input) {
   CHECK(image::decode_png("not a png at all").is_error());
   CHECK(image::decode_png(std::string("\x89PNG\r\n\x1a\n", 8)).is_error());  // signature only
+}
+
+BONK_TEST(png, enforces_pixel_limit_before_decoding) {
+  PngBuilder builder(2, 1, 8, 2);
+  builder.payload.assign(7, static_cast<char>(0));
+  const std::string png = builder.build();
+  CHECK(image::decode_png(png, 1).is_error());
+  const Result<image::Image> decoded = image::decode_png(png, 2);
+  REQUIRE(decoded.is_ok());
+  CHECK_EQ(decoded.value().width, 2);
+  CHECK_EQ(decoded.value().height, 1);
+}
+
+BONK_TEST(png, enforces_global_inflated_and_rgba_memory_limits) {
+  const PngBuilder huge_inflated(8192, 8192, 16, 6);
+  CHECK(image::decode_png(huge_inflated.build()).is_error());
+
+  const PngBuilder huge_rgba(8193, 8192, 8, 0);
+  CHECK(image::decode_png(huge_rgba.build()).is_error());
 }
 
 BONK_TEST(image_store, keeps_the_src_spelling) {

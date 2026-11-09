@@ -1,0 +1,85 @@
+// Explicit ADB commands, one-shot screenshot capture, discrete input, and
+// Android boot-state inspection. APIs that run ADB require explicit consent
+// because the user-level ADB server may auto-start on first use.
+#pragma once
+
+#include <chrono>
+#include <cstdint>
+#include <filesystem>
+#include <string>
+#include <string_view>
+
+#include "bonk/android/engine_session.hpp"
+#include "bonk/core/result.hpp"
+#include "bonk/image/image.hpp"
+
+namespace bonk::android {
+
+struct AdbConfig {
+  std::filesystem::path executable;  // Explicit absolute path to platform-tools/adb.
+  std::string serial;                // For example emulator-5554 or a selected device serial.
+  // adb may start a user-level server and create ~/.android/adbkey on first use.
+  // Set true only after the user explicitly agrees to that side effect.
+  bool allow_adb_server_autostart = false;
+};
+
+enum class GuestState { NotConnected, Offline, Unauthorized, AdbOnline, Booting, BootComplete, Unknown };
+
+[[nodiscard]] std::string_view to_string(GuestState state) noexcept;
+
+struct GuestStatus {
+  GuestState state = GuestState::Unknown;
+  std::string serial;
+  std::string detail;
+};
+
+/// Command builders are pure; they never invoke ADB.
+[[nodiscard]] Result<RuntimeCommand> make_adb_devices_command(const AdbConfig& config);
+[[nodiscard]] Result<RuntimeCommand> make_adb_boot_property_command(const AdbConfig& config);
+[[nodiscard]] Result<RuntimeCommand> make_adb_screenshot_command(const AdbConfig& config);
+[[nodiscard]] Result<RuntimeCommand> make_adb_tap_command(const AdbConfig& config, std::uint32_t x, std::uint32_t y);
+[[nodiscard]] Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code);
+
+/// Pure parsers for ADB output and a single PNG screenshot (not a video stream).
+/// Screenshot decoding accepts at most 32 MiB of PNG and 16,777,216 pixels; chunk
+/// lengths, CRCs, image format, and terminal IEND are checked before decoding.
+[[nodiscard]] GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view output);
+[[nodiscard]] GuestState parse_boot_completed_property(std::string_view output) noexcept;
+[[nodiscard]] Result<image::Image> decode_screenshot_png(std::string_view png_bytes);
+
+struct PixelPoint {
+  std::uint32_t x = 0;
+  std::uint32_t y = 0;
+};
+
+/// Maps finite normalized viewport coordinates in [0, 1] to guest pixels in
+/// [0, width-1] x [0, height-1], rounding to the nearest pixel.
+[[nodiscard]] Result<PixelPoint> normalized_touch_to_pixels(
+    std::uint32_t width, std::uint32_t height, float x, float y);
+
+/// Captures one ADB screenshot and decodes it to RGBA pixels. The PNG is
+/// limited to 32 MiB and 16,777,216 pixels; the default command timeout is 5s and
+/// the maximum accepted timeout is 60s. This is a still frame, not a stream.
+[[nodiscard]] Result<image::Image> capture_screenshot_rgba(
+    const AdbConfig& config,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
+/// Sends one discrete tap or Android key press (key code 1..65535). It does
+/// not support held/moving pointers, key-down/up, or joystick input; the caller
+/// supplies guest-viewport dimensions.
+[[nodiscard]] Status send_tap_normalized(
+    const AdbConfig& config, std::uint32_t width, std::uint32_t height, float x, float y,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+[[nodiscard]] Status send_android_key(
+    const AdbConfig& config, std::uint32_t android_key_code,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
+/// Checks the selected ADB transport, then queries sys.boot_completed only if
+/// that serial is online. The timeout applies independently to each command.
+/// A result of BootComplete means only that Android reports its boot property;
+/// it does not prove that an app/game is installed or usable.
+[[nodiscard]] Result<GuestStatus> query_guest_status(
+    const AdbConfig& config,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
+}  // namespace bonk::android

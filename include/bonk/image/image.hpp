@@ -8,6 +8,7 @@
 // to 8), colour-space conversion (we pass samples through as sRGB).
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <string>
 #include <string_view>
@@ -27,13 +28,19 @@ struct Image {
   [[nodiscard]] std::uint8_t sample(int x, int y, int channel) const;
 };
 
-/// Raw deflate (no zlib header). Exposed because it is the interesting part.
-[[nodiscard]] Result<std::string> inflate_raw(std::string_view deflate_stream);
+/// Raw deflate (no zlib header). Output is bounded to 256 MiB by default.
+[[nodiscard]] Result<std::string> inflate_raw(
+    std::string_view deflate_stream, std::size_t max_output_bytes = 256u * 1024u * 1024u);
 
 /// zlib wrapper around inflate_raw: 2-byte header, optional dictionary, Adler-32.
-[[nodiscard]] Result<std::string> inflate_zlib(std::string_view zlib_stream);
+[[nodiscard]] Result<std::string> inflate_zlib(
+    std::string_view zlib_stream, std::size_t max_output_bytes = 256u * 1024u * 1024u);
 
 [[nodiscard]] Result<Image> decode_png(std::string_view bytes);
+/// Like decode_png(bytes), but rejects images exceeding max_pixels before
+/// inflating IDAT data or allocating the RGBA buffer. PNG inflate and RGBA
+/// output are also independently capped at 256 MiB.
+[[nodiscard]] Result<Image> decode_png(std::string_view bytes, std::size_t max_pixels);
 
 /// Loads and decodes an image by path (extension decides the codec; only PNG today).
 [[nodiscard]] Result<Image> load_image(std::string_view path);
