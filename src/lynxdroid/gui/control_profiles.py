@@ -98,27 +98,17 @@ def save_profile(
     with a persistent advisory lock. Uncooperative external writers do not
     take this lock and cannot be made transactional by this protocol.
     """
-    import fcntl
-    import os
-    import stat
-
     from lynxdroid.core.storage import write_json
+    from lynxdroid.gui.file_lock import exclusive_file_lock
 
     validate_controls({"schema": 1, "controls": controls})
-    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    lock_path = path.with_name(path.name + ".lock")
-    flags = os.O_CREAT | os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW
-    fd = os.open(lock_path, flags, 0o600)
-    with os.fdopen(fd, "rb+") as lock:
-        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
-            raise OSError("Файл блокировки профиля не является обычным файлом")
-        try:
-            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
-        except BlockingIOError as exc:
-            raise ProfileConflict("Профиль занят другим окном. Повторите сохранение.") from exc
-        if read_profile(path) != expected:
-            raise ProfileConflict(
-                "Раскладка изменилась в другом окне. "
-                "Экспортируйте черновик и откройте профиль заново."
-            )
-        write_json(path, {"schema": 1, "controls": controls})
+    try:
+        with exclusive_file_lock(path):
+            if read_profile(path) != expected:
+                raise ProfileConflict(
+                    "Раскладка изменилась в другом окне. "
+                    "Экспортируйте черновик и откройте профиль заново."
+                )
+            write_json(path, {"schema": 1, "controls": controls})
+    except BlockingIOError as exc:
+        raise ProfileConflict("Профиль занят другим окном. Повторите сохранение.") from exc

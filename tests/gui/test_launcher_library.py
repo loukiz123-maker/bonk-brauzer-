@@ -119,3 +119,54 @@ def test_invalid_utf8_library_does_not_overwrite(library: Library, tmp_path: Pat
     with pytest.raises(DataCorrupted):
         library.add(apk)
     assert library.path.read_bytes() == b"\xff"
+
+
+@pytest.mark.parametrize("first_action", ["add", "remove"])
+def test_concurrent_library_writers_are_not_lost(
+    library: Library, tmp_path: Path, monkeypatch, first_action: str
+) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Event
+
+    original = apk(tmp_path, "Original.apk")
+    added = apk(tmp_path, "Added.apk")
+    other = apk(tmp_path, "Other.apk")
+    library.add(original)
+    entered, release = Event(), Event()
+    save = library._save
+
+    def paused_save(entries):
+        entered.set()
+        assert release.wait(timeout=5)
+        save(entries)
+
+    monkeypatch.setattr(library, "_save", paused_save)
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pending = pool.submit(
+            library.add if first_action == "add" else library.remove,
+            added if first_action == "add" else original,
+        )
+        try:
+            assert entered.wait(timeout=5)
+            with pytest.raises(BlockingIOError, match="занята"):
+                Library(library.path).add(other)
+        finally:
+            release.set()
+        pending.result(timeout=5)
+    # Retrying from the other instance must load the latest committed state.
+    Library(library.path).add(other)
+    paths = {entry.path for entry in library.load()}
+    assert paths == ({original, added, other} if first_action == "add" else {other})
+    assert original.exists() and added.exists() and other.exists()
+
+
+def test_library_rejects_symlink_lock_without_touching_target(
+    library: Library, tmp_path: Path
+) -> None:
+    library.path.parent.mkdir(parents=True)
+    target = tmp_path / "target"
+    target.write_text("untouched")
+    library.path.with_name(library.path.name + ".lock").symlink_to(target)
+    with pytest.raises(OSError):
+        library.add(apk(tmp_path))
+    assert target.read_text() == "untouched" and not library.path.exists()

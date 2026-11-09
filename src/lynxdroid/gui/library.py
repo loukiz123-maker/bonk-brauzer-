@@ -7,6 +7,7 @@ from pathlib import Path
 
 from lynxdroid.core.errors import DataCorrupted
 from lynxdroid.core.storage import read_json, write_json
+from lynxdroid.gui.file_lock import exclusive_file_lock
 
 MAX_ENTRIES = 500
 
@@ -51,21 +52,29 @@ class Library:
         with path.open("rb") as handle:
             if handle.read(4) != b"PK\x03\x04":
                 raise ValueError("Файл не похож на APK: отсутствует заголовок ZIP.")
-        entries = self.load()
-        if any(entry.path == path for entry in entries):
-            return entries
-        if len(entries) >= MAX_ENTRIES:
-            raise ValueError("В библиотеке уже 500 файлов.")
-        entries.append(LibraryEntry(path))
-        self._save(entries)
-        return entries
+        try:
+            with exclusive_file_lock(self.path):
+                entries = self.load()
+                if any(entry.path == path for entry in entries):
+                    return entries
+                if len(entries) >= MAX_ENTRIES:
+                    raise ValueError("В библиотеке уже 500 файлов.")
+                entries.append(LibraryEntry(path))
+                self._save(entries)
+                return entries
+        except BlockingIOError as exc:
+            raise BlockingIOError("Библиотека занята другим окном. Повторите добавление.") from exc
 
     def remove(self, source: Path) -> list[LibraryEntry]:
-        entries = self.load()
-        remaining = [entry for entry in entries if entry.path != source]
-        if len(remaining) != len(entries):
-            self._save(remaining)
-        return remaining
+        try:
+            with exclusive_file_lock(self.path):
+                entries = self.load()
+                remaining = [entry for entry in entries if entry.path != source]
+                if len(remaining) != len(entries):
+                    self._save(remaining)
+                return remaining
+        except BlockingIOError as exc:
+            raise BlockingIOError("Библиотека занята другим окном. Повторите удаление.") from exc
 
     def _save(self, entries: list[LibraryEntry]) -> None:
         write_json(self.path, {"schema": 1, "files": [str(entry.path) for entry in entries]})
