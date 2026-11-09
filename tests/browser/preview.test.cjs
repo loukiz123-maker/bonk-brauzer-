@@ -375,3 +375,33 @@ test('simultaneous saves of one profile have exactly one winner', async () => {
     assert.equal(await second.locator('#canvas .marker').count(), 1);
   } finally { await context.close(); }
 });
+
+test('control list selects overlapping markers and stays in sync with edits', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    const draft = {schema: 1, controls: [
+      {kind: 'Огонь', key: 'F', x: 0.5, y: 0.5},
+      {kind: 'Огонь', key: 'G', x: 0.5, y: 0.5}
+    ]};
+    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
+    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+    assert.equal(await page.locator('#control-list option').count(), 2);
+    await page.selectOption('#control-list', '0');
+    assert.equal(await page.locator('#control-key').inputValue(), 'F');
+    assert.equal(await page.locator('#canvas .marker.selected').textContent(), 'F');
+    await page.locator('#control-key').fill('H'); await page.click('#apply-control');
+    assert.match(await page.locator('#control-list option').first().textContent(), /H.*50%, 50%/);
+    await page.click('#delete-control');
+    assert.equal(await page.locator('#control-list option').count(), 1);
+    assert.match(await page.locator('#control-list option').first().textContent(), /G/);
+    await page.click('#undo-control');
+    assert.equal(await page.locator('#control-list option').count(), 2);
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
+    await page.click('#save-controls');
+    await page.waitForSelector('#editor-status:text("Раскладка сохранена")');
+    await page.click('#reload-profile'); await waitForProfile(page);
+    assert.equal(await page.locator('#control-list option').count(), 2);
+    assert.match(await page.locator('#control-list option').first().textContent(), /H/);
+  } finally { await context.close(); }
+});

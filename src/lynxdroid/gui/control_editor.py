@@ -16,6 +16,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -297,6 +298,15 @@ class ControlEditor(QDialog):
         )
         note.setWordWrap(True)
         side.addWidget(note)
+        side.addWidget(QLabel("Элементы раскладки"))
+        self.control_list = QListWidget()
+        self.control_list.setAccessibleName("Элементы раскладки")
+        self.control_list.setMaximumHeight(128)
+        self.control_list.setMaximumWidth(250)
+        self.control_list.currentRowChanged.connect(
+            lambda row: self.select(row if row >= 0 else None)
+        )
+        side.addWidget(self.control_list)
         self.kind = QComboBox()
         self.kind.addItems(KINDS)
         side.addWidget(self.kind)
@@ -407,6 +417,7 @@ class ControlEditor(QDialog):
             self.status.setText(f"Ошибка чтения: {exc}. Сохранение отключено.")
         self._baseline = self._snapshot()
         self._refresh_copy_sources()
+        self._sync_control_list()
         self.canvas.update()
 
     def _refresh_copy_sources(self) -> None:
@@ -481,6 +492,20 @@ class ControlEditor(QDialog):
         self.select(len(self.controls) - 1)
         self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
 
+    def _sync_control_list(self) -> None:
+        labels = [
+            f"{index + 1}. {item['kind']} · {item['key']} · "
+            f"{int(item['x'] * 100 + 0.5)}%, {int(item['y'] * 100 + 0.5)}%"
+            for index, item in enumerate(self.controls)
+        ]
+        old = [self.control_list.item(i).text() for i in range(self.control_list.count())]
+        blocked = self.control_list.blockSignals(True)
+        if old != labels:
+            self.control_list.clear()
+            self.control_list.addItems(labels)
+        self.control_list.setCurrentRow(self.selected if self.selected is not None else -1)
+        self.control_list.blockSignals(blocked)
+
     def select(self, index: int | None) -> None:
         self.selected = index
         self.apply_button.setEnabled(index is not None)
@@ -489,6 +514,7 @@ class ControlEditor(QDialog):
             item = self.controls[index]
             self.kind.setCurrentText(item["kind"])
             self.key.setText(item["key"])
+        self._sync_control_list()
         self.canvas.update()
 
     def move_selected(self, x: float, y: float, *, record: bool = True) -> bool:
@@ -501,6 +527,7 @@ class ControlEditor(QDialog):
         if record:
             self._record_change()
         item["x"], item["y"] = position
+        self._sync_control_list()
         self.status.setText("Элемент перемещён • не сохранено")
         self.canvas.update()
         return True
@@ -517,6 +544,7 @@ class ControlEditor(QDialog):
             return
         self._record_change()
         item.update(kind=self.kind.currentText(), key=key)
+        self._sync_control_list()
         self.status.setText("Элемент изменён • не сохранено")
         self.canvas.update()
 

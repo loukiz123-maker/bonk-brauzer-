@@ -639,3 +639,33 @@ def test_copy_saved_profile_is_confirmed_undoable_and_never_auto_saves(
     assert warnings and editor.controls[0]["key"] == "G" and not beta.exists()
     assert alpha.read_bytes() == b"\xff"
     shiboken6.delete(editor)
+
+
+def test_control_list_selects_overlapping_items_and_tracks_edits(window, qt_app, tmp_path) -> None:
+    import shiboken6
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    path = tmp_path / "controls.json"
+    editor = ControlEditor(path, window)
+    editor.key.setText("F")
+    editor.place(0.5, 0.5)
+    editor.key.setText("G")
+    editor.place(0.5, 0.5)
+    assert editor.control_list.count() == 2
+    editor.control_list.setCurrentRow(0)
+    assert editor.selected == 0 and editor.key.text() == "F"
+    editor.key.setText("H")
+    editor.apply_selected()
+    assert "H" in editor.control_list.item(0).text()
+    editor.move_selected(0.25, 0.75)
+    assert "25%, 75%" in editor.control_list.item(0).text()
+    editor.delete_selected()
+    assert editor.control_list.count() == 1 and "G" in editor.control_list.item(0).text()
+    editor.undo()
+    assert editor.control_list.count() == 2 and editor.selected is None
+    assert not path.exists()
+    editor.save()
+    editor.reload_profile()
+    assert editor.control_list.count() == 2 and "H" in editor.control_list.item(0).text()
+    shiboken6.delete(editor)

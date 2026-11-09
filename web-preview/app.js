@@ -215,6 +215,12 @@ function validateTest() {
   return '';
 }
 function renderControls() {
+  const list = $('#control-list');
+  const labels = controls.map((c, i) => `${i + 1}. ${c.kind} · ${c.key} · ${Math.round(c.x * 100)}%, ${Math.round(c.y * 100)}%`);
+  if (list.options.length !== labels.length || labels.some((label, i) => list.options[i].textContent !== label)) {
+    list.replaceChildren(...labels.map((label, i) => new Option(label, String(i))));
+  }
+  list.selectedIndex = selectedControl === null ? -1 : selectedControl;
   const canvas = $('#canvas'); canvas.querySelectorAll('.marker, .touch-point').forEach(m => m.remove());
   controls.forEach((c, index) => {
     const keys = controlKeys(c); const active = keys.some(k => liveHeld.has(k));
@@ -350,6 +356,10 @@ function selectControl(index) {
   if (index !== null) { $('#control-kind').value = controls[index].kind; syncCaptureKind(); $('#control-key').value = controls[index].key; }
   renderControls();
 }
+$('#control-list').addEventListener('change', event => {
+  const index = event.target.selectedIndex;
+  selectControl(index < 0 ? null : index);
+});
 function canvasPosition(event) {
   const rect = $('#canvas').getBoundingClientRect();
   return {x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))};
