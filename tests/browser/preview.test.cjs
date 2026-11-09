@@ -62,8 +62,16 @@ test('concurrent APK additions in two tabs do not overwrite one another', async 
       navigator.locks.request('lynxdroid:lynxdroid-preview-library-v1', () => new Promise(resolve => { window.releaseTestLock = resolve; window.testLockHeld = true; }));
     });
     await first.waitForFunction(() => window.testLockHeld);
+    await first.bringToFront();
     await first.locator('#file').setInputFiles(apk('Alpha.apk'));
+    await first.waitForFunction(() => window.debugLog.filter(item => item.startsWith('request:')).length === 2, null, {timeout: 15000});
+    await second.bringToFront();
     await second.locator('#file').setInputFiles(apk('Beta.apk'));
+    await second.waitForFunction(() => window.debugLog.some(item => item.startsWith('request:')), null, {timeout: 15000});
+    // Both handlers have read their files and requested the lock before either
+    // can write. Confirm the browser itself sees both waiting requests.
+    const pending = await first.evaluate(async () => (await navigator.locks.query()).pending.filter(lock => lock.name === 'lynxdroid:lynxdroid-preview-library-v1').length);
+    assert.equal(pending, 2);
     await first.evaluate(() => window.releaseTestLock());
     try {
       await first.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2, null, {timeout: 8000});
@@ -231,5 +239,24 @@ test('changing a binding stops the old live test before applying the edit', asyn
     await page.keyboard.down('g');
     assert.equal(await page.locator('#canvas .marker.active').count(), 1);
     await page.keyboard.up('g');
+  } finally { await context.close(); }
+});
+
+
+test('browser without Web Locks refuses writes without losing drafts', async () => {
+  const context = await browser.newContext({viewport: {width: 1400, height: 900}});
+  try {
+    await context.addInitScript(() => Object.defineProperty(navigator, 'locks', {value: undefined}));
+    const page = await context.newPage();
+    await page.goto(url);
+    await page.locator('#file').setInputFiles(apk('Offline.apk'));
+    await page.waitForSelector('#message:text("не поддерживает защиту")');
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-library-v1')), null);
+    await page.click('#open-controls');
+    await addMarker(page);
+    await page.click('#save-controls');
+    await page.waitForSelector('#editor-status:text("не поддерживает защиту")');
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
+    assert.equal(await page.locator('#canvas .marker').count(), 1);
   } finally { await context.close(); }
 });

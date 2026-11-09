@@ -209,7 +209,7 @@ HTML, CSS and JavaScript. It checks concurrent APK additions in two tabs,
 conflicting profile saves, deferred auto-reload with an unsaved draft, and
 keyboard release / stop-test behaviour, import/export and invalid UTF-8,
 read-only handling of corrupted profiles, mouse binding capture, and stopping
-live tests when a layout changes. These tests cover the browser mock,
+live tests when a layout changes, plus refusal to write without Web Locks. These tests cover the browser mock,
 not Android or the native Qt launcher. To run them locally:
 
 ```bash
