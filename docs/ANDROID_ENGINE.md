@@ -1,6 +1,6 @@
 # Android-движок: архитектура и проверяемые этапы
 
-**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, перечисление ADB-транспортов и guest-state probe с bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe, запрос запуска установленного приложения и установка явно выбранного APK по подтверждению вызывающего кода. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и управления произвольным состоянием pointer/key нет.
+**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, перечисление ADB-транспортов и guest-state probe с bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe, запрос путей установленного пакета, запуск приложения и установка явно выбранного APK по подтверждению вызывающего кода. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и управления произвольным состоянием pointer/key нет.
 
 ## Исходное состояние репозитория
 
@@ -37,7 +37,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 Пользовательский Android SDK Emulator + AVD
 ```
 
-`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()`, `query_installed_package_paths()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
 
 ## Контракт лаунчера
 
@@ -112,8 +112,10 @@ Preflight не запускает найденные executable, не загру
 
 - `make_adb_launch_package_command()` формирует `adb -s SERIAL shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p PACKAGE`.
 - `launch_installed_package()` проверяет dot-separated Android package ID, требует ADB consent и ограничивает timeout 60 секундами. Используется только package ID, предоставленный/подтверждённый вызывающей стороной; имя APK не используется для догадки.
+- Соседний `query_installed_package_paths()` строит `adb -s SERIAL shell pm path PACKAGE` и возвращает абсолютные guest-side пути базового и split APK. Это отдельный package-presence probe, не извлечение APK на хост и не проверка launchability.
 - Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. Явный `Error:` или `Status:` не `ok` из stdout/stderr `am start -W` имеет приоритет и возвращает `android.app_launch_reported_failure`, даже если ADB завершился с ненулевым кодом; при отсутствии таких строк проверяется обычный exit status. Даже `Status: ok` не доказывает готовность приложения или игры.
 - Fake ADB проверяет argv, consent gating, явные launch failure строки в обоих потоках и их приоритет над ненулевым exit code, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
+- `parse_adb_package_paths_output()` ограничивает текст 64 KiB, принимает только `package:/absolute/path` строки и возвращает guest пути без префикса. Явный `Error: package not found` получает `android.package_not_installed` даже при ненулевом exit code; malformed output, timeout и прочие ошибки остаются ошибками. Пустой вектор означает лишь, что успешный ответ не содержал путей.
 
 Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
 
@@ -187,6 +189,6 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **316 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 41/41. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка: `make -j2 verify` — **318 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 43/43. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
 
 Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.

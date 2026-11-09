@@ -47,6 +47,8 @@ struct GuestStatus {
 [[nodiscard]] Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code);
 [[nodiscard]] Result<RuntimeCommand> make_adb_launch_package_command(
     const AdbConfig& config, std::string_view package_name);
+[[nodiscard]] Result<RuntimeCommand> make_adb_package_path_command(
+    const AdbConfig& config, std::string_view package_name);
 [[nodiscard]] Result<RuntimeCommand> make_adb_install_apk_command(
     const AdbConfig& config, const std::filesystem::path& apk_path);
 
@@ -56,6 +58,8 @@ struct GuestStatus {
 [[nodiscard]] GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view output);
 /// Parses selectable device rows from `adb devices -l`; duplicate serials are marked Unknown.
 [[nodiscard]] std::vector<GuestStatus> parse_adb_devices_list_output(std::string_view output);
+/// Returns guest-side APK paths from `pm path`; an empty result means no paths were reported.
+[[nodiscard]] Result<std::vector<std::string>> parse_adb_package_paths_output(std::string_view output);
 [[nodiscard]] GuestState parse_boot_completed_property(std::string_view output) noexcept;
 [[nodiscard]] Result<image::Image> decode_screenshot_png(std::string_view png_bytes);
 
@@ -101,6 +105,14 @@ struct PixelPoint {
 [[nodiscard]] Status launch_installed_package(
     const AdbConfig& config, std::string_view package_name,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
+
+/// Queries Android Package Manager for the guest-side APK paths belonging to
+/// an exact package ID. Requires ADB server consent; an empty vector means no
+/// paths were reported, while explicit package-not-found output is an error.
+/// This does not prove the app is launchable or ready.
+[[nodiscard]] Result<std::vector<std::string>> query_installed_package_paths(
+    const AdbConfig& config, std::string_view package_name,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 
 /// Installs exactly the caller-selected APK. `user_confirmed_install` must be
 /// true only after explicit confirmation for this path. No replace/downgrade

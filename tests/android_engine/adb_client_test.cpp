@@ -66,7 +66,9 @@ class FakeAdb final {
   explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok",
                    std::string_view install_output = "Success", int exit_code = 0,
                    std::string_view launch_stderr_output = {}, std::string_view install_stderr_output = {},
-                   bool include_devices_output = false)
+                   bool include_devices_output = false,
+                   std::string_view package_path_output = "package:/data/app/org.example.game/base.apk",
+                   std::string_view package_path_stderr_output = {})
       : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
@@ -125,6 +127,14 @@ fi
     }
     if (!install_stderr_output.empty()) {
       script << "  printf '%s\\n' " << shell_quote(install_stderr_output) << " >&2" << std::endl;
+    }
+    script << "fi" << std::endl;
+    script << R"(if [ "${4-}" = "pm" ] && [ "${5-}" = "path" ]; then)" << std::endl;
+    if (!package_path_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(package_path_output) << std::endl;
+    }
+    if (!package_path_stderr_output.empty()) {
+      script << "  printf '%s\\n' " << shell_quote(package_path_stderr_output) << " >&2" << std::endl;
     }
     script << "fi" << std::endl;
     script << "exit " << exit_code << std::endl;
@@ -208,6 +218,17 @@ BONK_TEST(android_adb, builds_screenshot_tap_and_discrete_key_argv) {
   CHECK_EQ(launch.value().arguments[7], std::string("android.intent.action.MAIN"));
   CHECK_EQ(launch.value().arguments[9], std::string("android.intent.category.LAUNCHER"));
   CHECK_EQ(launch.value().arguments[11], std::string("org.example.game"));
+
+  const Result<android::RuntimeCommand> package_path =
+      android::make_adb_package_path_command(config, "org.example.game");
+  REQUIRE(package_path.is_ok());
+  REQUIRE(package_path.value().arguments.size() == 6);
+  CHECK_EQ(package_path.value().arguments[0], std::string("-s"));
+  CHECK_EQ(package_path.value().arguments[1], config.serial);
+  CHECK_EQ(package_path.value().arguments[2], std::string("shell"));
+  CHECK_EQ(package_path.value().arguments[3], std::string("pm"));
+  CHECK_EQ(package_path.value().arguments[4], std::string("path"));
+  CHECK_EQ(package_path.value().arguments[5], std::string("org.example.game"));
 }
 
 BONK_TEST(android_adb, builds_a_bounded_straight_line_swipe_argv) {
@@ -264,6 +285,7 @@ BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_ran
   CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com..game").is_error());
   CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com.game;evil").is_error());
   CHECK(android::make_adb_launch_package_command({"/sdk/platform-tools/adb", "emulator-5554"}, "single").is_error());
+  CHECK(android::make_adb_package_path_command({"/sdk/platform-tools/adb", "emulator-5554"}, "com.game;evil").is_error());
 }
 
 BONK_TEST(android_adb, identifies_selected_transport_state_from_devices_output) {
@@ -307,6 +329,28 @@ BONK_TEST(android_adb, handles_ambiguous_or_unrecognized_device_rows) {
         android::GuestState::Unknown);
   CHECK(android::parse_adb_devices_output("serial", "serial\tdevice\nserial\toffline\n").state ==
         android::GuestState::Unknown);
+}
+
+BONK_TEST(android_adb, parses_bounded_package_paths_and_reports_missing_packages) {
+  const Result<std::vector<std::string>> paths = android::parse_adb_package_paths_output(
+      "package:/data/app/org.example.game/base.apk\n"
+      "package:/data/app/org.example.game/split_config.arm64.apk\n");
+  REQUIRE(paths.is_ok());
+  REQUIRE(paths.value().size() == 2);
+  CHECK_EQ(paths.value()[0], std::string("/data/app/org.example.game/base.apk"));
+  CHECK_EQ(paths.value()[1], std::string("/data/app/org.example.game/split_config.arm64.apk"));
+
+  const Result<std::vector<std::string>> empty = android::parse_adb_package_paths_output("\n");
+  REQUIRE(empty.is_ok());
+  CHECK(empty.value().empty());
+
+  const Result<std::vector<std::string>> missing =
+      android::parse_adb_package_paths_output("Error: package not found\n");
+  REQUIRE(missing.is_error());
+  CHECK_EQ(missing.error().code, std::string("android.package_not_installed"));
+  CHECK(android::parse_adb_package_paths_output("package:relative/base.apk\n").is_error());
+  CHECK(android::parse_adb_package_paths_output("unexpected pm output\n").is_error());
+  CHECK(android::parse_adb_package_paths_output(std::string(64 * 1024 + 1, 'x')).is_error());
 }
 
 BONK_TEST(android_adb, parses_boot_property_without_claiming_app_readiness) {
@@ -418,6 +462,41 @@ BONK_TEST(android_adb, sends_normalized_swipe_and_rejects_a_too_short_timeout) {
       config, 640, 480, 0.0f, 0.0f, 0.5f, 0.5f, std::chrono::milliseconds{0}, std::chrono::seconds{1});
   REQUIRE(invalid_duration.is_error());
   CHECK_EQ(invalid_duration.error().code, std::string("android.invalid_gesture_duration"));
+}
+
+BONK_TEST(android_adb, queries_guest_package_paths_with_consent_and_reports_absence) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  const android::AdbConfig config = fake.config();
+
+  const android::AdbConfig no_consent{config.executable, config.serial, false};
+  const Result<std::vector<std::string>> blocked =
+      android::query_installed_package_paths(no_consent, "org.example.game", std::chrono::seconds{1});
+  REQUIRE(blocked.is_error());
+  CHECK_EQ(blocked.error().code, std::string("android.adb_server_consent_required"));
+  CHECK_EQ(fake.arguments(), std::string{});
+
+  const Result<std::vector<std::string>> paths =
+      android::query_installed_package_paths(config, "org.example.game", std::chrono::seconds{1});
+  REQUIRE(paths.is_ok());
+  REQUIRE(paths.value().size() == 1);
+  CHECK_EQ(paths.value()[0], std::string("/data/app/org.example.game/base.apk"));
+  CHECK_EQ(fake.arguments(), std::string("-s emulator-5554 shell pm path org.example.game "));
+
+  FakeAdb missing{false, "Status: ok", "Success", 1, {}, {}, false, "Error: package not found"};
+  REQUIRE(missing.ready());
+  const Result<std::vector<std::string>> not_installed = android::query_installed_package_paths(
+      missing.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(not_installed.is_error());
+  CHECK_EQ(not_installed.error().code, std::string("android.package_not_installed"));
+  CHECK(not_installed.error().message.find("package not found") != std::string::npos);
+
+  FakeAdb missing_stderr{false, "Status: ok", "Success", 1, {}, {}, false, {}, "Error: package not found"};
+  REQUIRE(missing_stderr.ready());
+  const Result<std::vector<std::string>> not_installed_stderr = android::query_installed_package_paths(
+      missing_stderr.config(), "org.example.game", std::chrono::seconds{1});
+  REQUIRE(not_installed_stderr.is_error());
+  CHECK_EQ(not_installed_stderr.error().code, std::string("android.package_not_installed"));
 }
 
 BONK_TEST(android_adb, installs_only_a_confirmed_readable_apk_with_both_consents) {

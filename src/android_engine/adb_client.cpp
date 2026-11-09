@@ -294,6 +294,27 @@ Status inspect_adb_install_output(std::string_view output) {
   return Status::success();
 }
 
+Status inspect_adb_package_path_failure(std::string_view output) {
+  std::istringstream lines{std::string(output)};
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::string_view trimmed = trim_ascii(line);
+    if (trimmed.rfind("Error:", 0) != 0 && trimmed.rfind("Failure", 0) != 0) continue;
+    std::string detail(trimmed);
+    if (detail.size() > 512) {
+      detail.resize(512);
+      detail += "…";
+    }
+    if (trimmed.rfind("Error: package not found", 0) == 0) {
+      return Status::failure(
+          Error::make("android.package_not_installed", "Android Package Manager reported: " + detail));
+    }
+    return Status::failure(
+        Error::make("android.package_path_query_reported_failure", "Android Package Manager reported: " + detail));
+  }
+  return Status::success();
+}
+
 Status validate_adb_command_output(const CommandOutput& output, std::size_t max_capture_bytes) {
   if (output.timed_out) {
     return Status::failure(Error::make("android.adb_timeout", "ADB command timed out"));
@@ -420,6 +441,17 @@ Result<RuntimeCommand> make_adb_launch_package_command(const AdbConfig& config, 
         "android.intent.category.LAUNCHER", "-p", std::string(package_name)}});
 }
 
+Result<RuntimeCommand> make_adb_package_path_command(const AdbConfig& config, std::string_view package_name) {
+  const Status valid = validate_config(config);
+  if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
+  if (!valid_package_name(package_name)) {
+    return Result<RuntimeCommand>::failure(
+        Error::make("android.invalid_package_name", "Android package name must be a valid dot-separated identifier"));
+  }
+  return Result<RuntimeCommand>::success(
+      {config.executable.string(), {"-s", config.serial, "shell", "pm", "path", std::string(package_name)}});
+}
+
 Result<RuntimeCommand> make_adb_install_apk_command(const AdbConfig& config, const std::filesystem::path& apk_path) {
   const Status valid = validate_config(config);
   if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
@@ -493,6 +525,35 @@ std::vector<GuestStatus> parse_adb_devices_list_output(std::string_view output) 
     devices.push_back(std::move(status));
   }
   return devices;
+}
+
+Result<std::vector<std::string>> parse_adb_package_paths_output(std::string_view output) {
+  if (output.size() > kDefaultAdbCaptureBytes) {
+    return Result<std::vector<std::string>>::failure(
+        Error::make("android.package_path_output_too_large", "package path output exceeds the 64 KiB limit"));
+  }
+  const Status reported_failure = inspect_adb_package_path_failure(output);
+  if (reported_failure.is_error()) return Result<std::vector<std::string>>::failure(reported_failure.error());
+
+  std::vector<std::string> paths;
+  std::istringstream lines{std::string(output)};
+  std::string line;
+  constexpr std::string_view kPackagePathPrefix = "package:";
+  while (std::getline(lines, line)) {
+    const std::string_view trimmed = trim_ascii(line);
+    if (trimmed.empty()) continue;
+    if (trimmed.rfind(kPackagePathPrefix, 0) != 0) {
+      return Result<std::vector<std::string>>::failure(
+          Error::make("android.invalid_package_path_output", "Android returned an unexpected pm path output line"));
+    }
+    const std::string_view path = trim_ascii(trimmed.substr(kPackagePathPrefix.size()));
+    if (path.empty() || path.front() != '/' || path.find('\0') != std::string_view::npos) {
+      return Result<std::vector<std::string>>::failure(
+          Error::make("android.invalid_package_path_output", "Android returned a non-absolute package path"));
+    }
+    paths.emplace_back(path);
+  }
+  return Result<std::vector<std::string>>::success(std::move(paths));
 }
 
 GuestState parse_boot_completed_property(std::string_view output) noexcept {
@@ -603,6 +664,26 @@ Status launch_installed_package(const AdbConfig& config, std::string_view packag
   const Status launch_stderr_result = inspect_am_start_output(output.value().stderr_data);
   if (launch_stderr_result.is_error()) return launch_stderr_result;
   return validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
+}
+
+Result<std::vector<std::string>> query_installed_package_paths(
+    const AdbConfig& config, std::string_view package_name, std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return Result<std::vector<std::string>>::failure(timeout_valid.error());
+  const Result<RuntimeCommand> command = make_adb_package_path_command(config, package_name);
+  if (command.is_error()) return Result<std::vector<std::string>>::failure(command.error());
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return Result<std::vector<std::string>>::failure(consent.error());
+
+  const Result<CommandOutput> output = run_command(command.value(), command_timeout, kDefaultAdbCaptureBytes);
+  if (output.is_error()) return Result<std::vector<std::string>>::failure(output.error());
+  const Status stderr_failure = inspect_adb_package_path_failure(output.value().stderr_data);
+  if (stderr_failure.is_error()) return Result<std::vector<std::string>>::failure(stderr_failure.error());
+  const Status stdout_failure = inspect_adb_package_path_failure(output.value().stdout_data);
+  if (stdout_failure.is_error()) return Result<std::vector<std::string>>::failure(stdout_failure.error());
+  const Status process_status = validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
+  if (process_status.is_error()) return Result<std::vector<std::string>>::failure(process_status.error());
+  return parse_adb_package_paths_output(output.value().stdout_data);
 }
 
 Status install_selected_apk(const AdbConfig& config, const std::filesystem::path& apk_path,
