@@ -52,6 +52,8 @@ class GameSurface(QWidget):
     pointer_moved_by = Signal(float, float)
     #: Aim mode started/stopped (locked to a mouse element or released).
     aim_active = Signal(bool)
+    #: The transform changed, including when the child widget is resized.
+    geometry_changed = Signal()
 
     #: Whether the letterbox size is drawn next to the surface.
     _show_bar_labels: bool = True
@@ -97,6 +99,7 @@ class GameSurface(QWidget):
             display_name=self._geometry.display_name,
         )
         self.update()
+        self.geometry_changed.emit()
 
     def set_buffer(self, width: int, height: int) -> None:
         if width == self._geometry.buffer.width and height == self._geometry.buffer.height:
@@ -110,6 +113,7 @@ class GameSurface(QWidget):
             display_name=self._geometry.display_name,
         )
         self.update()
+        self.geometry_changed.emit()
 
     def set_rotation(self, rotation: Rotation) -> None:
         self._geometry = ViewportGeometry(
@@ -121,6 +125,7 @@ class GameSurface(QWidget):
             display_name=self._geometry.display_name,
         )
         self.update()
+        self.geometry_changed.emit()
 
     def set_bar_labels(self, enabled: bool) -> None:
         """Show or hide the size of the letterbox bars.
@@ -144,6 +149,7 @@ class GameSurface(QWidget):
             dpr=self.devicePixelRatioF(),
         )
         self.update()
+        self.geometry_changed.emit()
 
     def set_profile(self, profile: Profile | None) -> None:
         self._profile = profile

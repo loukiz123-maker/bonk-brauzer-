@@ -325,3 +325,176 @@ class TestOrientationSwap:
     def test_the_result_is_still_valid(self) -> None:
         swapped = orientation_swapped(profile(stick(x=0.5, y=0.5)))
         swapped.validate()
+
+
+class TestMainWindowEditorIntegration:
+    """Execute actual Qt-free portions of MainWindow with a real input engine.
+
+    PySide's shared libraries are absent in this sandbox. Extracting the real
+    method AST tests behaviour rather than merely looking for source strings;
+    it is still not a substitute for running the complete Qt window.
+    """
+
+    @staticmethod
+    def make_window():
+        import ast
+        import logging
+        from dataclasses import replace
+        from pathlib import Path
+        from types import SimpleNamespace
+
+        from lynxdroid.backend.contract import BackendState
+        from lynxdroid.input.engine import InputEngine
+
+        source = (
+            Path(__file__).resolve().parents[2] / "src/lynxdroid/gui/main_window.py"
+        ).read_text()
+        tree = ast.parse(source)
+        main = next(n for n in tree.body if isinstance(n, ast.ClassDef) and n.name == "MainWindow")
+        wanted = {
+            "_on_element_moved",
+            "_ensure_engine",
+            "focusOutEvent",
+            "_refresh_surface",
+            "_stop_session",
+            "closeEvent",
+        }
+        methods = [n for n in main.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
+        assert len(methods) == len(wanted)
+
+        class Base:
+            def focusOutEvent(self, event):
+                pass
+
+            def closeEvent(self, event):
+                pass
+
+        module = ast.Module(
+            body=[
+                ast.ImportFrom(module="__future__", names=[ast.alias(name="annotations")], level=0),
+                ast.ClassDef(
+                    name="Harness",
+                    bases=[ast.Name(id="Base", ctx=ast.Load())],
+                    keywords=[],
+                    body=methods,
+                    decorator_list=[],
+                ),
+            ],
+            type_ignores=[],
+        )
+        namespace = {
+            "Base": Base,
+            "InputEngine": InputEngine,
+            "BackendState": BackendState,
+            "log": logging.getLogger(__name__),
+        }
+        exec(compile(ast.fix_missing_locations(module), "<gui-harness>", "exec"), namespace)  # noqa: S102
+        window = namespace["Harness"]()
+        original = profile(replace(tap(), type=ElementType.HOLD))
+        window._profile = original
+        window._editor = LayoutEditor(profile=original, saved=original)
+        window._engine = InputEngine(original, GEOMETRY)
+        window.events = []
+        window._deliver = lambda events: window.events.extend(events)
+        window._ensure_channel = lambda: None
+        window._sync_aim_mode = lambda: None
+        window._refresh_geometry_label = lambda: None
+        window._render_elements = lambda: None
+        window._sync_element_row = lambda _id: None
+        window._set_status = lambda *args: None
+        window._save_profile_button = SimpleNamespace(
+            setEnabled=lambda enabled: setattr(window, "dirty", enabled)
+        )
+        window._surface = SimpleNamespace(
+            geometry_info=lambda: GEOMETRY,
+            set_active_elements=lambda ids: None,
+            set_profile=lambda p: setattr(window, "surface_profile", p),
+            set_selected=lambda element_id: None,
+        )
+        window._settings = SimpleNamespace(release_on_focus_loss=True)
+        window._poller = SimpleNamespace(stop=lambda: None)
+        window._tasks = SimpleNamespace(shutdown=lambda: None, submit=lambda *args, **kwargs: None)
+        window._backend = SimpleNamespace(stop=lambda: None)
+        window._snapshot = SimpleNamespace(state=BackendState.RUNNING)
+        window._stop_button = SimpleNamespace(setEnabled=lambda enabled: None)
+        window._on_snapshot = lambda value: None
+        return window
+
+    def test_drag_updates_editor_saved_profile_and_engine(self) -> None:
+        window = self.make_window()
+        window._on_element_moved("tap-a", 0.3, 0.7)
+        assert (
+            window._editor.profile.element("tap-a").x,
+            window._editor.profile.element("tap-a").y,
+        ) == (0.3, 0.7)
+        assert window._profile == window._editor.profile == window.surface_profile
+        assert window._engine.profile == window._profile
+        assert window._editor.selected == "tap-a" and window.dirty
+
+    def test_drag_emits_cancel_before_rebinding_pressed_key(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window._on_element_moved("tap-a", 0.3, 0.7)
+        assert [e.action for e in window.events] == [Action.CANCEL]
+        assert not window._engine.active_pointers
+
+    def test_focus_loss_delivers_cancel(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window.focusOutEvent(None)
+        assert [e.action for e in window.events] == [Action.CANCEL]
+        assert not window._engine.active_pointers
+
+    def test_profile_switch_delivers_release(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window._profile = profile(tap("tap-b", keys=("k",)))
+        window._ensure_engine()
+        assert [e.action for e in window.events] == [Action.CANCEL]
+        assert window._engine.profile == window._profile
+
+    def test_geometry_change_releases_but_unchanged_geometry_does_not(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window._refresh_surface()
+        assert window.events == [] and window._engine.active_pointers
+        window._surface.geometry_info = lambda: WIDE
+        window._refresh_surface()
+        assert [e.action for e in window.events] == [Action.CANCEL]
+        assert window._engine.geometry == WIDE
+
+    def test_surface_geometry_signal_is_connected_after_ui_construction(self) -> None:
+        from pathlib import Path
+
+        root = Path(__file__).resolve().parents[2] / "src/lynxdroid/gui"
+        main = (root / "main_window.py").read_text()
+        surface = (root / "overlay.py").read_text()
+        assert "self._surface.geometry_changed.connect(self._refresh_surface)" in main
+        assert "geometry_changed = Signal()" in surface
+        for name in ("set_surface_size", "set_buffer", "set_rotation", "set_fit_mode"):
+            section = surface.split(f"    def {name}(", 1)[1].split("\n    def ", 1)[0]
+            assert "self.geometry_changed.emit()" in section
+
+    def test_stopping_session_delivers_cancel(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window._stop_session()
+        assert [event.action for event in window.events] == [Action.CANCEL]
+
+    def test_closing_window_delivers_cancel(self) -> None:
+        from lynxdroid.input.events import Action
+
+        window = self.make_window()
+        window._engine.key_down("j")
+        window.closeEvent(None)
+        assert [event.action for event in window.events] == [Action.CANCEL]

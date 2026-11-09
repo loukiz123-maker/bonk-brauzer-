@@ -165,6 +165,8 @@ not trustworthy about anything else.
 | 67 | Two commands answered "can this machine run Android" differently: `doctor --strict` counted `session.wayland = UNKNOWN` as blocking, while the first `HostProfile` reported the same fact as merely unexamined and could stay non-blocking | a live comparison of the two verdicts on the same container | fixed: the profile treats an unchecked prerequisite as not-a-green-light, matching `Report.blockers_for`, and `tests/doctor/test_host_profile.py::TestTheTwoVerdictsAgree` plus `tests/cli/test_cli.py::TestProfileCommand` now compare both commands on the live host |
 | 68 | Game compatibility property fixes and their claimed reversal were not verified; old revert guessed values | compatibility review | disabled pending real-device validation; old original values were not saved. See `docs/COMPATIBILITY.md` |
 
+| 69 | Dragging moved the painted control but did not update the editor profile; focus loss, profile changes and resizing could discard generated CANCEL events | review of the window-to-engine integration | corrected and covered by extracted real window callback tests; full Qt, delivery channel and real Waydroid still need a desktop test |
+
 ## Environment issues that are not bugs
 
 * **Waydroid already installed by the user** → we never modify its config or

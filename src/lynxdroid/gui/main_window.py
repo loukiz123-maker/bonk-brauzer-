@@ -128,6 +128,7 @@ class MainWindow(QMainWindow):
         self.setWindowTitle(f"LynxDroid — {version_string()}")
         self.setMinimumSize(QSize(1000, 640))
         self._build_ui()
+        self._surface.geometry_changed.connect(self._refresh_surface)
         self._surface.set_bar_labels(self._settings.show_bar_thickness)
         self._apply_theme()
         self._load_profiles()
@@ -744,7 +745,7 @@ class MainWindow(QMainWindow):
 
     def _stop_session(self) -> None:
         if self._engine is not None:
-            self._engine.focus_lost("session stopping")
+            self._deliver(self._engine.focus_lost("session stopping"))
             self._surface.set_active_elements(set())
         if self._snapshot.state is BackendState.STARTING:
             self._set_status("stop requested; will stop after the start attempt")
@@ -768,8 +769,8 @@ class MainWindow(QMainWindow):
         if self._engine is None:
             self._engine = InputEngine(self._profile, geometry)
         else:
-            self._engine.set_geometry(geometry)
-            self._engine.set_profile(self._profile)
+            self._deliver(self._engine.set_geometry(geometry))
+            self._deliver(self._engine.set_profile(self._profile))
         self._ensure_channel()
         return self._engine
 
@@ -813,10 +814,10 @@ class MainWindow(QMainWindow):
         """
         if self._engine is not None:
             self._sync_aim_mode()
-        if self._pipeline.channel is None:
-            self._ensure_channel()
         if not events:
             return
+        if self._pipeline.channel is None:
+            self._ensure_channel()
         delivered = self._pipeline.deliver(events)
         self._latency_label.setText(self._pipeline.summary())
         if not delivered and self._pipeline.last_error:
@@ -864,6 +865,7 @@ class MainWindow(QMainWindow):
         # Stage 8: never leave a contact or a held key behind.
         if self._settings.release_on_focus_loss and self._engine is not None:
             released = self._engine.focus_lost()
+            self._deliver(released)
             self._surface.set_active_elements(set())
             # A captured pointer must never survive the window losing focus.
             self._sync_aim_mode()
@@ -989,14 +991,12 @@ class MainWindow(QMainWindow):
     def _on_fit_changed(self, mode: str) -> None:
         self._surface.set_fit_mode(mode)
         self._save_setting(fit_mode=mode)
-        self._refresh_geometry_label()
+        self._refresh_surface()
 
     def _on_rotation_changed(self, index: int) -> None:
         rotation = Rotation(self._rotation_combo.itemData(index))
         self._surface.set_rotation(rotation)
-        if self._engine is not None:
-            self._engine.set_geometry(self._surface.geometry_info())
-        self._refresh_geometry_label()
+        self._refresh_surface()
 
     def _refresh_geometry_label(self) -> None:
         geometry = self._surface.geometry_info()
@@ -1039,6 +1039,10 @@ class MainWindow(QMainWindow):
             self._editor = None
             self._surface.set_editor_mode(False)
             self._surface.set_profile(None)
+            if self._engine is not None:
+                self._deliver(self._engine.focus_lost("profile cleared"))
+                self._engine = None
+                self._sync_aim_mode()
             self._element_list.clear()
             return
         profile_id = current.data(Qt.ItemDataRole.UserRole)
@@ -1092,9 +1096,15 @@ class MainWindow(QMainWindow):
         """A drag finished a step: mirror it into the list and the dirty state."""
         if self._editor is None:
             return
+        self._editor.profile = self._editor.profile.move_element(element_id, x, y)
+        self._editor.select(element_id)
         self._profile = self._editor.profile
+        self._surface.set_profile(self._profile)
+        self._surface.set_selected(element_id)
         self._render_elements()
+        self._sync_element_row(element_id)
         self._save_profile_button.setEnabled(self._editor.dirty)
+        self._ensure_engine()
         self._set_status(f"{element_id}: {x:.3f}, {y:.3f} (unsaved)", 4000)
 
     def _refresh_active_elements(self) -> None:
@@ -1339,17 +1349,17 @@ class MainWindow(QMainWindow):
     # ==================================================================
     def _refresh_surface(self) -> None:
         geometry = self._surface.geometry_info()
-        if self._engine is not None:
-            self._engine.set_geometry(geometry)
+        if self._engine is not None and self._engine.geometry != geometry:
+            self._deliver(self._engine.set_geometry(geometry))
         self._refresh_geometry_label()
 
     def resizeEvent(self, event: QResizeEvent) -> None:
         super().resizeEvent(event)
-        self._refresh_geometry_label()
+        self._refresh_surface()
 
     def closeEvent(self, event: QCloseEvent) -> None:
         if self._engine is not None:
-            self._engine.focus_lost("window closed")
+            self._deliver(self._engine.focus_lost("window closed"))
         self._poller.stop()
         self._tasks.shutdown()
         super().closeEvent(event)
