@@ -98,6 +98,7 @@ class Canvas(QWidget):
         self.editor = editor
         self.dragging = False
         self.drag_recorded = False
+        self.pressed_keys: dict[int, str] = {}
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(420, 260)
         self.setStyleSheet("background:#0c101c; border:1px solid #334258; border-radius:6px")
@@ -159,18 +160,25 @@ class Canvas(QWidget):
             self.editor.end_live_test()
             event.accept()
         else:
-            self.editor.live_key(event.text().lower(), down=True, repeat=event.isAutoRepeat())
+            physical = event.nativeScanCode() or event.key()
+            key = event.text().lower()
+            if not event.isAutoRepeat() and physical not in self.pressed_keys:
+                self.pressed_keys[physical] = key
+                self.editor.live_key(key, down=True)
             event.accept()
 
     def keyReleaseEvent(self, event: QKeyEvent) -> None:
         if self.editor.test_engine is None:
             super().keyReleaseEvent(event)
         elif not event.isAutoRepeat():
-            self.editor.live_key(event.text().lower(), down=False)
+            physical = event.nativeScanCode() or event.key()
+            key = self.pressed_keys.pop(physical, event.text().lower())
+            self.editor.live_key(key, down=False)
             event.accept()
 
     def focusOutEvent(self, event: QFocusEvent) -> None:
-        self.editor.end_live_test()
+        self.pressed_keys.clear()
+        self.editor.release_live_inputs()
         super().focusOutEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:
@@ -245,6 +253,11 @@ class ControlEditor(QDialog):
         side.addWidget(QLabel("РЕДАКТОР УПРАВЛЕНИЯ"))
         side.addWidget(QLabel("Раскладка для APK"))
         self.profile_choice = QComboBox()
+        self.profile_choice.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.profile_choice.setMinimumContentsLength(12)
+        self.profile_choice.setMaximumWidth(250)
         self.profile_choice.addItem("Общий шаблон (старый)", str(path))
         for title, profile_path in games or []:
             self.profile_choice.addItem(title, str(profile_path))
@@ -451,10 +464,23 @@ class ControlEditor(QDialog):
         self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
         self.status.setText("Тест без Android: нажмите клавишу или мышь на поле. Esc — выход.")
 
+    def reject(self) -> None:
+        # Embedded dialogs must not hide themselves and desynchronise the page stack.
+        if self.test_engine is not None:
+            self.end_live_test()
+        elif self.isWindow():
+            super().reject()
+
+    def release_live_inputs(self) -> None:
+        if self.test_engine is not None:
+            self.test_engine.release_all("focus lost")
+            self.canvas.update()
+
     def end_live_test(self) -> None:
         if self.test_engine is None:
             return
         self.test_engine.release_all("test ended")
+        self.canvas.pressed_keys.clear()
         self.test_engine = None
         self.live_button.setText("Тест клавиш")
         self.status.setText("Тест остановлен. Ничего не отправлено в Android.")

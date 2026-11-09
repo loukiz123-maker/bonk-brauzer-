@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 923 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 927 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 923 collected; Qt tests may skip without native libraries
+pytest                                    # 927 collected; Qt tests may skip without native libraries
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: 923 collected; thirteen Qt tests skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
+Expected: 927 collected; thirteen Qt tests skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
 
 ### What each suite pins down
 
@@ -47,7 +47,7 @@ Expected: 923 collected; thirteen Qt tests skip if native Qt libraries are missi
 | `tests/input/test_agent_protocol.py` | 11 | the Java agent and the Python client agree on protocol version, frame limit, op names |
 | `tests/profiles/test_compat.py` | 11 | the stored-format gate: a newer schema is refused, old files migrate, timestamps keep whole seconds |
 | `tests/test_settings_are_read.py` | 9 | every setting has a reader, a row in SETTINGS.md, and that row names the right module |
-| `tests/test_packaging.py` | 17 | desktop entry, icon, and the installer script run in a throwaway home |
+| `tests/test_packaging.py` | 18 | desktop entry, icon, and the installer script run in a throwaway home |
 | `tests/test_stage_criteria.py` | 11 | stage criteria: every HERE one cites a test that exists, every CI one a real job |
 | `tests/test_install_script.py` | 7 | the install script parses, never runs sudo, and matches what the README documents |
 | `tests/core/test_diagnostics.py` | 9 | the one definition of "this check blocks the container path" |

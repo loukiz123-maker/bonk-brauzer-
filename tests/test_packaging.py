@@ -216,7 +216,7 @@ class TestInstallScript:
         exec_line = next(
             line for line in entry.read_text().splitlines() if line.startswith("Exec=")
         )
-        assert exec_line == f"Exec={gui}", (
+        assert exec_line == f'Exec="{gui}"', (
             "Exec must name the interpreter, not a bare name that a menu "
             f"cannot resolve: {exec_line}"
         )
@@ -298,3 +298,17 @@ class TestPyprojectFallback:
         assert module._pyproject()["project"]["scripts"]
         monkeypatch.undo()
         importlib.reload(module)
+
+
+def test_desktop_exec_quotes_spaces_and_field_codes(tmp_path: Path) -> None:
+    bin_dir = tmp_path / "space $ and % path"
+    bin_dir.mkdir()
+    executable = bin_dir / "lynxdroid-gui"
+    executable.write_text("#!/bin/sh\nexit 0\n")
+    executable.chmod(0o755)
+    env = dict(os.environ, PATH=f"{bin_dir}:/usr/bin:/bin", XDG_DATA_HOME=str(tmp_path / "data"))
+    result = subprocess.run(["bash", str(SCRIPT)], env=env, capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr
+    entry = (tmp_path / "data/applications/lynxdroid.desktop").read_text()
+    line = next(line for line in entry.splitlines() if line.startswith("Exec="))
+    assert line == 'Exec="' + str(executable).replace("$", "\\\\$").replace("%", "%%") + '"'

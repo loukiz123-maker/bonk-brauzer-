@@ -39,7 +39,21 @@ mkdir -p "$APPS_DIR" "$ICON_DIR"
 # at whatever `lynxdroid-gui` happens to mean in this shell: a venv is often
 # not active when the menu is clicked.
 GUI_BIN="$(command -v lynxdroid-gui)"
-sed "s|^Exec=.*|Exec=$GUI_BIN|" "$REPO_ROOT/packaging/lynxdroid.desktop" > "$ENTRY"
+python3 - "$GUI_BIN" "$REPO_ROOT/packaging/lynxdroid.desktop" "$ENTRY" <<'PYCODE'
+import pathlib
+import sys
+
+binary, template, output = sys.argv[1:]
+if any(c in binary for c in "\n\r"):
+    raise SystemExit("Executable path contains a newline; cannot install desktop entry")
+# Exec parsing follows desktop value unescaping. Escape for both layers and
+# double percent signs so a literal path cannot introduce field codes.
+quoted = ''.join('\\' + c if c in '\\"`$' else c for c in binary.replace('%', '%%'))
+quoted = quoted.replace('\\', '\\\\')
+text = pathlib.Path(template).read_text(encoding='utf-8')
+lines = text.splitlines(keepends=True)
+pathlib.Path(output).write_text(''.join('Exec="' + quoted + '"\n' if line.startswith('Exec=') else line for line in lines), encoding='utf-8')
+PYCODE
 install -m 0644 "$REPO_ROOT/packaging/lynxdroid.svg" "$ICON"
 
 echo "installed $ENTRY"

@@ -32,6 +32,8 @@ def read_json(path: Path) -> dict[str, Any]:
         raw = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         raise
+    except UnicodeDecodeError as exc:
+        raise DataCorrupted(f"{path.name} is not valid UTF-8") from exc
     except OSError as exc:
         raise DataCorrupted(f"cannot read {path.name}: {exc.strerror}") from exc
     try:

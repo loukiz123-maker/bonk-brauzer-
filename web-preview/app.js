@@ -18,13 +18,34 @@ function message(text) {
   clearTimeout(message.timer);
   message.timer = setTimeout(() => box.classList.remove('visible'), 5000);
 }
-function persist(next) {
-  if (!storageAvailable) { message('Библиотека браузера недоступна или повреждена. Данные не изменены.'); return false; }
-  try { localStorage.setItem(storageKey, JSON.stringify(next)); entries = next; return true; }
-  catch { message('Не удалось сохранить библиотеку в браузере.'); return false; }
+function readLibrary() {
+  const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  if (!Array.isArray(data) || data.length > 500 || !data.every(name => typeof name === 'string') || new Set(data).size !== data.length) throw new Error('invalid library');
+  return data;
 }
+async function withStorageLock(key, action) {
+  if (!navigator.locks) throw new Error('Браузер не поддерживает защиту от конфликтов вкладок');
+  return navigator.locks.request(`lynxdroid:${key}`, action);
+}
+async function updateLibrary(change) {
+  if (!storageAvailable) { message('Библиотека браузера недоступна или повреждена. Данные не изменены.'); return false; }
+  try {
+    await withStorageLock(storageKey, () => {
+      const current = readLibrary();
+      const next = change(current);
+      localStorage.setItem(storageKey, JSON.stringify(next)); entries = next;
+    });
+    return true;
+  } catch (error) { message(`Не удалось сохранить библиотеку: ${error.message}`); return false; }
+}
+window.addEventListener('storage', event => {
+  if (event.key !== storageKey && event.key !== null) return;
+  try { entries = readLibrary(); storageAvailable = true; selected = null; render(); }
+  catch { storageAvailable = false; selected = null; render(); message('Библиотека повреждена; запись отключена.'); }
+});
 function page(name) {
   if (!$('#editor').hidden && name !== 'editor' && !canDiscard()) return false;
+  if (name !== 'editor') endLiveTest();
   document.querySelectorAll('.page').forEach((el) => { el.hidden = el.id !== name; });
   document.querySelectorAll('.nav').forEach((el) => { el.classList.toggle('active', el.dataset.page === name); });
   return true;
@@ -50,27 +71,33 @@ document.querySelectorAll('.add-apk').forEach((button) => button.addEventListene
 $('#file').addEventListener('change', async (event) => {
   const files = Array.from(event.target.files); event.target.value = '';
   if (!files.length) return;
-  const next = [...entries];
+  const accepted = [];
   const failures = [];
   for (const file of files) {
     try {
       const bytes = new Uint8Array(await file.slice(0, 4).arrayBuffer());
       if (!/\.apk$/i.test(file.name) || bytes.length !== 4 || bytes[0] !== 0x50 || bytes[1] !== 0x4b || bytes[2] !== 3 || bytes[3] !== 4) { failures.push(`${file.name}: неверный заголовок APK`); continue; }
-      if (next.includes(file.name)) { failures.push(`${file.name}: название уже есть в библиотеке`); continue; }
-      if (next.length >= 500) { failures.push(`${file.name}: лимит 500 файлов`); continue; }
-      next.push(file.name);
+      accepted.push(file.name);
     } catch { failures.push(`${file.name}: не удалось прочитать файл`); }
   }
-  if (next.length !== entries.length && !persist(next)) return;
+  if (accepted.length && !await updateLibrary(current => {
+    const next = [...current];
+    for (const name of accepted) {
+      if (next.includes(name)) failures.push(`${name}: название уже есть в библиотеке`);
+      else if (next.length >= 500) failures.push(`${name}: лимит 500 файлов`);
+      else next.push(name);
+    }
+    return next;
+  })) return;
   selected = null; render(); page('library');
   if (failures.length) message(`Некоторые файлы не добавлены: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? `; ещё ${failures.length - 3}` : ''}`);
 });
 $('#search').addEventListener('input', () => { selected = null; render(); });
 $('#refresh').addEventListener('click', () => { selected = null; render(); message('Предпросмотр обновлён. Браузер не проверяет наличие файлов.'); });
-$('#remove').addEventListener('click', () => {
+$('#remove').addEventListener('click', async () => {
   if (selected !== null && confirm('Удалить название из библиотеки предпросмотра? Сам APK останется на диске.')) {
-    const next = entries.filter((_, index) => index !== selected);
-    if (persist(next)) { selected = null; render(); }
+    const name = entries[selected];
+    if (await updateLibrary(current => current.filter(entry => entry !== name))) { selected = null; render(); }
   }
 });
 async function fullscreen() {
@@ -93,6 +120,7 @@ let controlsValid = true;
 let activeProfileKey = controlStorageKey;
 let activeProfileIndex = 0;
 let controlsBaseline = '[]';
+let storedProfileBaseline = null;
 let profileGeneration = 0;
 let selectedControl = null;
 let dragging = false;
@@ -102,6 +130,7 @@ let redoStack = [];
 let liveTest = false;
 const liveHeld = new Set();
 const livePressed = new Set();
+const physicalKeys = new Map();
 function validateDraft(data) {
   if (!data || typeof data !== 'object' || Object.keys(data).sort().join(',') !== 'controls,schema' || data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && typeof c === 'object' && Object.keys(c).sort().join(',') === 'key,kind,x,y' && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && Number.isFinite(c[k]) && c[k] >= 0 && c[k] <= 1))) throw new Error('Некорректная раскладка');
   return data.controls;
@@ -169,7 +198,7 @@ function canDiscard() {
 function loadProfile(key) {
   endLiveTest(); profileGeneration++;
   activeProfileKey = key;
-  try { controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
+  try { storedProfileBaseline = localStorage.getItem(key); controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
   controlsBaseline = JSON.stringify(controls);
   selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid; renderControls();
@@ -245,7 +274,7 @@ $('#delete-control').addEventListener('click', () => {
 });
 function endLiveTest() {
   if (!liveTest) return;
-  liveTest = false; liveHeld.clear(); livePressed.clear();
+  liveTest = false; liveHeld.clear(); livePressed.clear(); physicalKeys.clear();
   $('#live-test').textContent = 'Тест клавиш';
   $('#editor-status').textContent = 'Тест остановлен. Ничего не отправлено в Android.';
   renderControls();
@@ -278,13 +307,14 @@ $('#canvas').addEventListener('keydown', event => {
   if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
   const key = event.key.toLowerCase();
   if (!/^[a-z0-9]$/.test(key) || event.repeat) return;
-  event.preventDefault(); testDown(key);
+  event.preventDefault(); physicalKeys.set(event.code || key, key); testDown(key);
 });
 $('#canvas').addEventListener('keyup', event => {
   if (!liveTest) return;
-  const key = event.key.toLowerCase();
-  if (!/^[a-z0-9]$/.test(key)) return;
-  testUp(key); event.preventDefault();
+  const physical = event.code || event.key.toLowerCase();
+  const key = physicalKeys.get(physical);
+  if (!key) return;
+  physicalKeys.delete(physical); testUp(key); event.preventDefault();
 });
 $('#canvas').addEventListener('mousedown', event => {
   if (!liveTest) return;
@@ -297,7 +327,7 @@ window.addEventListener('mouseup', event => {
   if (key) testUp(key);
 });
 $('#canvas').addEventListener('contextmenu', event => { if (liveTest) event.preventDefault(); });
-$('#canvas').addEventListener('blur', endLiveTest);
+$('#canvas').addEventListener('blur', () => { if (liveTest) { liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); renderControls(); } });
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
   const error = validateTest();
@@ -345,14 +375,27 @@ $('#export-controls').addEventListener('click', () => {
   document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
   $('#editor-status').textContent = 'Экспорт запрошен. Профиль игры не изменён.';
 });
-$('#save-controls').addEventListener('click', () => {
+$('#save-controls').addEventListener('click', async () => {
   if (!controlsValid) return;
-  try { readControls(); localStorage.setItem(activeProfileKey, JSON.stringify({schema:1, controls})); controlsBaseline = JSON.stringify(controls); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }
-  catch { $('#editor-status').textContent = 'Ошибка сохранения. Исходные данные не изменены.'; }
+  const key = activeProfileKey, generation = profileGeneration, baseline = storedProfileBaseline;
+  const snapshot = JSON.stringify(controls);
+  try {
+    await withStorageLock(key, () => {
+      if (generation !== profileGeneration) throw new Error('Профиль изменился');
+      if (localStorage.getItem(key) !== baseline) throw new Error('Раскладка изменена в другой вкладке. Экспортируйте черновик и откройте профиль заново');
+      readControls(key);
+      const serialized = JSON.stringify({schema:1, controls: JSON.parse(snapshot)});
+      localStorage.setItem(key, serialized); storedProfileBaseline = serialized; controlsBaseline = snapshot;
+    });
+    $('#editor-status').textContent = 'Раскладка сохранена' + (JSON.stringify(controls) !== snapshot ? ' • есть новые изменения' : '');
+  } catch (error) { $('#editor-status').textContent = `Ошибка сохранения: ${error.message}. Исходные данные не изменены.`; }
+});
+window.addEventListener('beforeunload', event => {
+  if (JSON.stringify(controls) !== controlsBaseline && !$('#editor').hidden) { event.preventDefault(); event.returnValue = ''; }
 });
 // The local preview server reports a fingerprint; reload on source edits.
 let version;
 async function checkVersion() {
-  try { const response = await fetch('/__version', {cache:'no-store'}); if (!response.ok) return; const next = await response.text(); if (version && version !== next) location.reload(); version = next; } catch { /* Static hosting does not support live reload. */ }
+  try { const response = await fetch('/__version', {cache:'no-store'}); if (!response.ok) return; const next = await response.text(); if (version && version !== next) { if (!$('#editor').hidden && JSON.stringify(controls) !== controlsBaseline) { $('#editor-status').textContent = 'Обновление предпросмотра отложено: сначала сохраните раскладку.'; return; } location.reload(); return; } version = next; } catch { /* Static hosting does not support live reload. */ }
 }
 checkVersion(); setInterval(checkVersion, 1500);

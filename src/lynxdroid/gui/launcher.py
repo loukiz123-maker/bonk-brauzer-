@@ -87,7 +87,7 @@ class LauncherWindow(QMainWindow):
         self.fullscreen_shortcut.activated.connect(self.toggle_fullscreen)
         self.escape_shortcut = QShortcut(QKeySequence("Escape"), self)
         self.escape_shortcut.setEnabled(False)
-        self.escape_shortcut.activated.connect(self.toggle_fullscreen)
+        self.escape_shortcut.activated.connect(self._escape)
         self._reload()
 
     def _build(self) -> None:
@@ -421,6 +421,15 @@ class LauncherWindow(QMainWindow):
             QMessageBox.warning(self, "Не удалось удалить", str(exc))
             return
         self._render_library()
+
+    def _escape(self) -> None:
+        editor = self.pages.currentWidget()
+        if isinstance(editor, ControlEditor) and editor.capture_button.armed:
+            editor.capture_button.cancel()
+        elif isinstance(editor, ControlEditor) and editor.test_engine is not None:
+            editor.end_live_test()
+        elif self.isFullScreen():
+            self.toggle_fullscreen()
 
     def toggle_fullscreen(self) -> None:
         if self.isFullScreen():

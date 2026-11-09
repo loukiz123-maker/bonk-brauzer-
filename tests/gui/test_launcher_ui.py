@@ -473,3 +473,59 @@ def test_binding_capture_is_explicit_and_cancellable(window, qt_app, tmp_path) -
     assert not editor.controls
     editor.close()
     shiboken6.delete(editor)
+
+
+def test_invalid_utf8_profiles_and_library_are_protected(window, qt_app, tmp_path) -> None:
+    import shiboken6
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    window.library.path.write_bytes(b"\xff")
+    window._reload()
+    assert window._library_error
+    assert window.library.path.read_bytes() == b"\xff"
+    path = tmp_path / "bad.json"
+    path.write_bytes(b"\xff")
+    editor = ControlEditor(path, window)
+    assert editor.read_only and not editor.save_button.isEnabled()
+    assert path.read_bytes() == b"\xff"
+    shiboken6.delete(editor)
+
+
+def test_live_focus_and_escape_do_not_restart_or_hide_editor(window, qt_app) -> None:
+    from PySide6.QtCore import QEvent, Qt
+    from PySide6.QtGui import QFocusEvent, QKeyEvent
+    from PySide6.QtWidgets import QApplication
+
+    window.open_controls()
+    editor = window.pages.currentWidget()
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("1")
+    editor.place(0.5, 0.5)
+    editor.toggle_live_test()
+    engine = editor.test_engine
+    # Same native scan code, even when Shift changes the release symbol.
+    press = QKeyEvent(
+        QEvent.Type.KeyPress, Qt.Key.Key_1, Qt.KeyboardModifier.NoModifier, 10, 0, 0, "1"
+    )
+    release = QKeyEvent(
+        QEvent.Type.KeyRelease, Qt.Key.Key_Exclam, Qt.KeyboardModifier.ShiftModifier, 10, 0, 0, "!"
+    )
+    QApplication.sendEvent(editor.canvas, press)
+    assert engine.active_pointers
+    QApplication.sendEvent(editor.canvas, release)
+    assert not engine.active_pointers
+    QApplication.sendEvent(editor.canvas, press)
+    QApplication.sendEvent(editor.canvas, QFocusEvent(QEvent.Type.FocusOut))
+    assert editor.test_engine is engine and not engine.active_pointers
+    editor.live_button.click()
+    assert editor.test_engine is None
+    editor.toggle_live_test()
+    window.toggle_fullscreen()
+    window._escape()
+    assert editor.test_engine is None and window.isFullScreen() and editor.isVisible()
+    window._escape()
+    assert not window.isFullScreen()
+    editor.reject()
+    assert window.pages.currentWidget() is editor and editor.isVisible()
+    editor.controls.clear()

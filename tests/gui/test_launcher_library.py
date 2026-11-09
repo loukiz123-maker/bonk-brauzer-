@@ -105,3 +105,17 @@ def test_launcher_art_is_packaged() -> None:
     desktop = files("lynxdroid").joinpath("data/desktop-bg.jpg")
     preview_desktop = preview_image.with_name("desktop-bg.jpg")
     assert desktop.is_file() and desktop.read_bytes() == preview_desktop.read_bytes()
+
+
+def test_invalid_utf8_library_does_not_overwrite(library: Library, tmp_path: Path) -> None:
+    from lynxdroid.core.errors import DataCorrupted
+
+    library.path.parent.mkdir(parents=True, exist_ok=True)
+    library.path.write_bytes(b"\xff")
+    apk = tmp_path / "game.apk"
+    apk.write_bytes(b"PK\x03\x04")
+    with pytest.raises(DataCorrupted):
+        library.load()
+    with pytest.raises(DataCorrupted):
+        library.add(apk)
+    assert library.path.read_bytes() == b"\xff"
