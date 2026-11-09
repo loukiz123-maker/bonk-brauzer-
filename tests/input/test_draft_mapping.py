@@ -121,3 +121,44 @@ def test_mouse_fire_and_tap_are_mapped_without_a_channel() -> None:
     assert not engine.active_pointers
     with pytest.raises(ValueError):
         draft_engine([draft("Огонь", "mouse1"), draft("Нажатие", "MOUSE1")])
+
+
+def test_double_tap_is_timed_and_not_repeated_while_held() -> None:
+    from lynxdroid.input.draft_mapping import DOUBLE_TAP_INTERVAL_MS
+
+    engine = draft_engine([draft("Двойное нажатие", "F")])
+    first = engine.key_down("f", now_ms=100)
+    assert [event.action for event in first] == [Action.DOWN, Action.UP]
+    assert engine.key_down("f", now_ms=105, repeat=True) == []
+    assert engine.key_down("f", now_ms=106) == []
+    assert engine.key_up("f", now_ms=107) == []
+    assert engine.tick(now_ms=100 + DOUBLE_TAP_INTERVAL_MS - 1) == []
+    second = engine.tick(now_ms=100 + DOUBLE_TAP_INTERVAL_MS)
+    assert [event.action for event in second] == [Action.DOWN, Action.UP]
+    assert all(event.timestamp_ms == 100 + DOUBLE_TAP_INTERVAL_MS for event in second)
+    assert [event.seq for event in first + second] == sorted(event.seq for event in first + second)
+    assert all(len(encode_touch(event, 1920, 1080)) == 32 for event in first + second)
+    assert not engine.active_pointers and not engine.has_pending_double_taps
+
+
+def test_double_tap_pending_is_cancelled_on_focus_loss() -> None:
+    engine = draft_engine([draft("Двойное нажатие", "F"), draft("Огонь", "G")])
+    engine.key_down("f", now_ms=100)
+    engine.key_down("g", now_ms=101)
+    assert engine.has_pending_double_taps
+    released = engine.release_all("focus lost")
+    assert [event.action for event in released] == [Action.CANCEL]
+    assert not engine.active_pointers and not engine.has_pending_double_taps
+    assert engine.tick(now_ms=500) == []
+    assert [event.action for event in engine.key_down("f", now_ms=600)] == [Action.DOWN, Action.UP]
+
+
+def test_double_tap_coalesces_another_press_while_pending() -> None:
+    engine = draft_engine([draft("Двойное нажатие", "Mouse1")])
+    engine.key_down("mouse1", now_ms=0)
+    engine.key_up("mouse1", now_ms=1)
+    assert engine.key_down("mouse1", now_ms=2) == []
+    assert len(engine.tick(now_ms=120)) == 2
+    assert engine.key_down("mouse1", now_ms=121) == []  # still physically held
+    engine.key_up("mouse1", now_ms=122)
+    assert len(engine.key_down("mouse1", now_ms=123)) == 2

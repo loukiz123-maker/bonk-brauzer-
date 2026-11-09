@@ -316,6 +316,9 @@ class LauncherWindow(QMainWindow):
             if isinstance(current, ControlEditor) and not current.can_discard():
                 event.ignore()
                 return
+        current = self.pages.currentWidget()
+        if isinstance(current, ControlEditor):
+            current.end_live_test()
         super().closeEvent(event)
 
     def _reload(self) -> None:

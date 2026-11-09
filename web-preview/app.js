@@ -191,6 +191,8 @@ let redoStack = [];
 let liveTest = false;
 const liveHeld = new Set();
 const livePressed = new Set();
+const pendingDouble = new Map();
+function cancelPendingDouble() { for (const timer of pendingDouble.values()) clearTimeout(timer); pendingDouble.clear(); }
 const physicalKeys = new Map();
 function validateDraft(data) {
   if (!data || typeof data !== 'object' || Object.keys(data).sort().join(',') !== 'controls,schema' || data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && typeof c === 'object' && Object.keys(c).sort().join(',') === 'key,kind,x,y' && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && Number.isFinite(c[k]) && c[k] >= 0 && c[k] <= 1))) throw new Error('Некорректная раскладка');
@@ -205,7 +207,7 @@ function controlKeys(control) {
 function validateTest() {
   const allKeys = [];
   for (const control of controls) {
-    if (!['Нажатие', 'Огонь', 'Джойстик'].includes(control.kind)) return 'Поддерживаются только нажатие, огонь и джойстик.';
+    if (!['Нажатие', 'Двойное нажатие', 'Огонь', 'Джойстик'].includes(control.kind)) return 'Поддерживаются нажатие, двойное нажатие, огонь и джойстик.';
     const keys = controlKeys(control);
     if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k) && !(control.kind !== 'Джойстик' && ['mouse1', 'mouse2'].includes(k)))) return 'Укажите букву, цифру, Mouse1 или Mouse2. Для джойстика — четыре буквы через запятую.';
     if (control.kind === 'Джойстик' && (control.x < 0.089 || control.x > 0.911 || control.y < 0.089 || control.y > 0.911)) return 'Разместите джойстик немного дальше от края.';
@@ -417,7 +419,7 @@ $('#delete-control').addEventListener('click', () => {
 });
 function endLiveTest() {
   if (!liveTest) return;
-  liveTest = false; liveHeld.clear(); livePressed.clear(); physicalKeys.clear();
+  liveTest = false; liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); cancelPendingDouble();
   $('#live-test').textContent = 'Тест клавиш';
   $('#editor-status').textContent = 'Тест остановлен. Ничего не отправлено в Android.';
   renderControls();
@@ -434,9 +436,18 @@ function testDown(key) {
   const control = controls.find(c => controlKeys(c).includes(key));
   if (!control) return;
   livePressed.add(key);
+  if (control.kind === 'Двойное нажатие') {
+    if (pendingDouble.has(key)) return;
+    const timer = setTimeout(() => {
+      pendingDouble.delete(key);
+      if (!liveTest) return;
+      $('#editor-status').textContent = 'Тест без Android: второе нажатие • событий: 2';
+    }, 120);
+    pendingDouble.set(key, timer);
+  }
   const wasActive = controlKeys(control).some(k => liveHeld.has(k));
   if (control.kind === 'Огонь' || control.kind === 'Джойстик') liveHeld.add(key);
-  const events = control.kind === 'Нажатие' ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
+  const events = ['Нажатие', 'Двойное нажатие'].includes(control.kind) ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
   $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${events} • удерживается: ${activeTouchCount()}`; renderControls();
 }
 function testUp(key) {
@@ -470,7 +481,7 @@ window.addEventListener('mouseup', event => {
   if (key) testUp(key);
 });
 $('#canvas').addEventListener('contextmenu', event => { if (liveTest) event.preventDefault(); });
-$('#canvas').addEventListener('blur', () => { if (liveTest) { liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); renderControls(); } });
+$('#canvas').addEventListener('blur', () => { if (liveTest) { liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); cancelPendingDouble(); renderControls(); } });
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
   const error = validateTest();
@@ -480,7 +491,7 @@ $('#test-mapping').addEventListener('click', () => {
   if (!control) { status.textContent = 'Демо без Android: клавиша не назначена. Ничего не отправлено.'; return; }
   const x = Math.min(1919, Math.floor(control.x * 1920));
   const y = Math.min(1079, Math.floor(control.y * 1080));
-  status.textContent = `Демо без Android: ${control.kind === 'Джойстик' ? 3 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
+  status.textContent = `Демо без Android: ${control.kind === 'Джойстик' ? 3 : control.kind === 'Двойное нажатие' ? 4 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
 });
 $('#undo-control').addEventListener('click', () => {
   if (!undoStack.length) return;

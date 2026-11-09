@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QColor, QFocusEvent, QKeyEvent, QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QComboBox,
@@ -33,8 +33,7 @@ from lynxdroid.gui.control_profiles import (
     read_profile,
     save_profile,
 )
-from lynxdroid.input.draft_mapping import draft_engine
-from lynxdroid.input.engine import InputEngine
+from lynxdroid.input.draft_mapping import DOUBLE_TAP_INTERVAL_MS, DraftInputEngine, draft_engine
 from lynxdroid.input.scrcpy_touch import encode_touch
 
 
@@ -273,7 +272,10 @@ class ControlEditor(QDialog):
         self.selected: int | None = None
         self._undo_stack: list[list[dict[str, Any]]] = []
         self._redo_stack: list[list[dict[str, Any]]] = []
-        self.test_engine: InputEngine | None = None
+        self.test_engine: DraftInputEngine | None = None
+        self.test_timer = QTimer(self)
+        self.test_timer.setInterval(20)
+        self.test_timer.timeout.connect(self._tick_live_test)
         self.read_only = False
         layout = QHBoxLayout(self)
         self.canvas = Canvas(self)
@@ -618,10 +620,27 @@ class ControlEditor(QDialog):
 
     def release_live_inputs(self) -> None:
         if self.test_engine is not None:
+            self.test_timer.stop()
             self.test_engine.release_all("focus lost")
             self.canvas.update()
 
+    def _tick_live_test(self) -> None:
+        if self.test_engine is None:
+            return
+        try:
+            events = self.test_engine.tick()
+        except LynxError as exc:
+            self.end_live_test()
+            self.status.setText(f"Тест остановлен: {exc}")
+            return
+        if not self.test_engine.has_pending_double_taps:
+            self.test_timer.stop()
+        if events:
+            self.status.setText(f"Тест без Android: второе нажатие • событий: {len(events)}")
+            self.canvas.update()
+
     def end_live_test(self) -> None:
+        self.test_timer.stop()
         if self.test_engine is None:
             return
         self.test_engine.release_all("test ended")
@@ -648,6 +667,8 @@ class ControlEditor(QDialog):
             self.end_live_test()
             self.status.setText(f"Тест остановлен: {exc}")
             return
+        if self.test_engine.has_pending_double_taps and not self.test_timer.isActive():
+            self.test_timer.start()
         if events:
             active = len(self.test_engine.active_pointers)
             self.status.setText(
@@ -661,7 +682,11 @@ class ControlEditor(QDialog):
             key = self.test_key.text().strip().lower()
             if len(key) != 1 or not key.isascii() or not key.isalnum():
                 raise ValueError("Введите одну латинскую букву или цифру")
-            events = engine.key_down(key) + engine.key_up(key)
+            events = (
+                engine.key_down(key, now_ms=0)
+                + engine.key_up(key, now_ms=0)
+                + engine.tick(now_ms=DOUBLE_TAP_INTERVAL_MS)
+            )
             for event in events:
                 encode_touch(event, 1920, 1080)
         except ValueError as exc:

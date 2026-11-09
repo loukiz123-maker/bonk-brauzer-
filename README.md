@@ -42,11 +42,13 @@ confirmation protects unsaved edits on navigation. Android app detection is not
 implemented: the desktop draft identity is the local APK path, so moving the
 file creates a different draft. The legacy general draft is preserved separately.
 The draft does not inject input into games. A local dry-run connects supported
-tap, fire and four-key joystick drafts to the existing input engine and encodes touch
+tap, timed double-tap, fire and four-key joystick drafts to the existing input engine and encodes touch
 messages using the scrcpy v5 protocol, without opening a connection. The web
 preview demonstrates the same result independently; it does not run that engine.
 In the editor, “Тест клавиш” also lets you press and release mapped keys on
-the canvas offline. It currently supports only tap, fire (including Mouse1/Mouse2) and four-key joystick drafts;
+the canvas offline. Double-tap schedules a second simulated tap at least 120 ms later;
+its timer is cancelled on focus loss. This is not a verified Android timing contract.
+It currently supports only tap, timed double-tap, fire (including Mouse1/Mouse2) and four-key joystick drafts;
 the test ends on focus loss and never sends input to Android. Engine
 settings, Google Play and Android apps are not implemented.
 
@@ -78,7 +80,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (939) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (943) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -155,7 +157,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 939 collected; Qt tests may skip without native libraries
+pytest                               # 943 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

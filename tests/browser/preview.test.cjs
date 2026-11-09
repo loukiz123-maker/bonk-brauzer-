@@ -424,3 +424,28 @@ test('keyboard nudge uses small and large steps, clamps and undoes', async () =>
     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
   } finally { await context.close(); }
 });
+
+test('double tap emits a delayed offline demo and cancels on focus loss', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    await page.selectOption('#control-kind', {label: 'Двойное нажатие'});
+    await addMarker(page);
+    await page.locator('#test-key').fill('F'); await page.click('#test-mapping');
+    assert.match(await page.locator('#editor-status').textContent(), /4 события/);
+    await page.click('#live-test');
+    await page.keyboard.press('f');
+    await page.waitForSelector('#editor-status:text("второе нажатие")');
+    await page.locator('#canvas').evaluate(el => {
+      el.dispatchEvent(new KeyboardEvent('keydown', {key:'f', code:'KeyF', bubbles:true}));
+      el.dispatchEvent(new KeyboardEvent('keyup', {key:'f', code:'KeyF', bubbles:true}));
+      document.querySelector('#control-key').focus();
+    });
+    const status = await page.locator('#editor-status').textContent();
+    await page.waitForTimeout(250);
+    assert.equal(await page.locator('#editor-status').textContent(), status);
+    assert.doesNotMatch(status, /второе нажатие/);
+    await page.click('#live-test');
+    assert.equal(await page.locator('#live-test').textContent(), 'Тест клавиш');
+  } finally { await context.close(); }
+});

@@ -703,3 +703,36 @@ def test_keyboard_nudge_clamps_and_supports_undo(window, qt_app, tmp_path) -> No
     assert "99%, 50%" in editor.control_list.item(0).text()
     assert not path.exists()
     shiboken6.delete(editor)
+
+
+def test_double_tap_offline_timer_and_focus_loss(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    editor.kind.setCurrentText("Двойное нажатие")
+    editor.key.setText("F")
+    editor.place(0.5, 0.5)
+    editor.test_key.setText("F")
+    editor.test_button.click()
+    assert "4 событий" in editor.status.text()
+    editor.live_button.click()
+    QTest.keyClick(editor.canvas, Qt.Key.Key_F)
+    assert editor.test_timer.isActive()
+    QTest.qWait(200)
+    assert "второе нажатие" in editor.status.text()
+    assert not editor.test_timer.isActive()
+    QTest.keyClick(editor.canvas, Qt.Key.Key_F)
+    assert editor.test_timer.isActive()
+    editor.release_live_inputs()
+    assert not editor.test_timer.isActive()
+    status = editor.status.text()
+    QTest.qWait(200)
+    assert editor.status.text() == status
+    editor.end_live_test()
+    shiboken6.delete(editor)
