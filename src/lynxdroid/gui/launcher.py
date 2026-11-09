@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from PySide6.QtCore import Qt, QUrl
-from PySide6.QtGui import QDesktopServices, QKeySequence, QShortcut
+from PySide6.QtGui import QCloseEvent, QDesktopServices, QKeySequence, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
     QDialog,
@@ -28,6 +28,7 @@ from PySide6.QtWidgets import (
 from lynxdroid.core.errors import LynxError
 from lynxdroid.core.paths import AppPaths
 from lynxdroid.gui.control_editor import ControlEditor
+from lynxdroid.gui.control_profiles import control_profile_path
 from lynxdroid.gui.library import Library, LibraryEntry, filter_entries
 
 STYLE = """
@@ -198,13 +199,22 @@ class LauncherWindow(QMainWindow):
         dialog.exec()
 
     def open_controls(self) -> None:
-        # Reopen from disk, discarding any previously unsaved draft.
+        if self.pages.currentIndex() == 3:
+            return
         if self.pages.count() > 3:
             previous = self.pages.widget(3)
             if previous is not None:
                 self.pages.removeWidget(previous)
                 previous.deleteLater()
-        editor = ControlEditor(self.control_path, self.pages)
+        self._reload()
+        games = [
+            (
+                f"{entry.title} — {entry.path}",
+                control_profile_path(self.control_path.parent, entry.path),
+            )
+            for entry in self.entries
+        ]
+        editor = ControlEditor(self.control_path, self.pages, games=games)
         editor.setWindowFlags(Qt.WindowType.Widget)
         editor.close_button.clicked.connect(lambda: self._show_page(0))
         self.pages.addWidget(editor)
@@ -281,9 +291,21 @@ class LauncherWindow(QMainWindow):
         return page
 
     def _show_page(self, index: int) -> None:
+        if self.pages.currentIndex() == 3 and index != 3:
+            current = self.pages.currentWidget()
+            if isinstance(current, ControlEditor) and not current.can_discard():
+                return
         self.pages.setCurrentIndex(index)
         for i, button in enumerate((self.home_button, self.library_button, self.about_button)):
             button.setChecked(i == index)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        if self.pages.currentIndex() == 3:
+            current = self.pages.currentWidget()
+            if isinstance(current, ControlEditor) and not current.can_discard():
+                event.ignore()
+                return
+        super().closeEvent(event)
 
     def _reload(self) -> None:
         try:

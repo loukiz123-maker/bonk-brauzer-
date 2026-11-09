@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -97,9 +98,17 @@ class Canvas(QWidget):
 
 
 class ControlEditor(QDialog):
-    def __init__(self, path: Path, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        path: Path,
+        parent: QWidget | None = None,
+        *,
+        games: list[tuple[str, Path]] | None = None,
+    ) -> None:
         super().__init__(parent)
         self.path = path
+        self._baseline = "[]"
+        self._profile_index = 0
         self.setWindowTitle("Редактор управления — шаблон")
         self.resize(880, 520)
         self.controls: list[dict[str, Any]] = []
@@ -118,6 +127,12 @@ class ControlEditor(QDialog):
         self.close_button = QPushButton("✕  Закрыть редактор")
         side.addWidget(self.close_button)
         side.addWidget(QLabel("РЕДАКТОР УПРАВЛЕНИЯ"))
+        side.addWidget(QLabel("Раскладка для APK"))
+        self.profile_choice = QComboBox()
+        self.profile_choice.addItem("Общий шаблон (старый)", str(path))
+        for title, profile_path in games or []:
+            self.profile_choice.addItem(title, str(profile_path))
+        side.addWidget(self.profile_choice)
         note = QLabel(
             "Нажмите на поле для добавления, перетащите элемент для перемещения. "
             "Это шаблон: ввод в игры пока не работает. "
@@ -161,6 +176,35 @@ class ControlEditor(QDialog):
         self.save_button.clicked.connect(self.save)
         side.addWidget(self.save_button)
         layout.addWidget(side_scroll)
+        if games:
+            self._profile_index = 1
+            self.profile_choice.setCurrentIndex(1)
+        self._load_profile(Path(str(self.profile_choice.currentData())))
+        self.profile_choice.currentIndexChanged.connect(self.change_profile)
+
+    def _snapshot(self) -> str:
+        return json.dumps(self.controls, ensure_ascii=False, sort_keys=True)
+
+    def can_discard(self) -> bool:
+        if self._snapshot() == self._baseline:
+            return True
+        return (
+            QMessageBox.question(
+                self,
+                "Несохранённая раскладка",
+                "Отменить несохранённые изменения?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            == QMessageBox.StandardButton.Yes
+        )
+
+    def _load_profile(self, path: Path) -> None:
+        self.path = path
+        self.controls = []
+        self.read_only = False
+        self.save_button.setEnabled(True)
+        self.select(None)
         try:
             self.controls = load_controls(path)
             self.status.setText(f"Элементов: {len(self.controls)}")
@@ -168,6 +212,19 @@ class ControlEditor(QDialog):
             self.read_only = True
             self.save_button.setEnabled(False)
             self.status.setText(f"Ошибка чтения: {exc}. Сохранение отключено.")
+        self._baseline = self._snapshot()
+        self.canvas.update()
+
+    def change_profile(self, index: int) -> None:
+        if index == self._profile_index or index < 0:
+            return
+        if not self.can_discard():
+            self.profile_choice.blockSignals(True)
+            self.profile_choice.setCurrentIndex(self._profile_index)
+            self.profile_choice.blockSignals(False)
+            return
+        self._profile_index = index
+        self._load_profile(Path(str(self.profile_choice.itemData(index))))
 
     def place(self, x: float, y: float) -> None:
         key = self.key.text().strip()
@@ -264,4 +321,5 @@ class ControlEditor(QDialog):
         except (OSError, LynxError) as exc:
             QMessageBox.warning(self, "Ошибка сохранения", str(exc))
             return
+        self._baseline = self._snapshot()
         self.status.setText(f"Сохранено элементов: {len(self.controls)}")

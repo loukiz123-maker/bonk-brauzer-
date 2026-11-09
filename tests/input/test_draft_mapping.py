@@ -58,3 +58,18 @@ def test_scrcpy_rejects_out_of_bounds_and_invalid_size() -> None:
         encode_touch(event, 1920, 1080)
     with pytest.raises(ValueError):
         encode_touch(event, 0, 1080)
+
+
+def test_profile_path_is_stable_and_distinguishes_same_names(tmp_path) -> None:
+    from pathlib import Path
+
+    from lynxdroid.gui.control_profiles import control_profile_path
+
+    a = tmp_path / "a" / "Game.apk"
+    b = tmp_path / "b" / "Game.apk"
+    path = control_profile_path(tmp_path, a)
+    assert path == control_profile_path(tmp_path, a)
+    assert path != control_profile_path(tmp_path, b)
+    assert path.parent == tmp_path / "control-profiles"
+    with pytest.raises(ValueError):
+        control_profile_path(tmp_path, Path("Game.apk"))

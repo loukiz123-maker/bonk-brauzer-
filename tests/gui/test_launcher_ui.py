@@ -42,9 +42,9 @@ def window(qt_app, tmp_path: Path):
     shiboken6.delete(widget)
 
 
-def test_navigation_and_disabled_launch(window, qt_app) -> None:
+def test_navigation_and_disabled_launch(window, qt_app, monkeypatch) -> None:
     from PySide6.QtCore import QTimer
-    from PySide6.QtWidgets import QApplication
+    from PySide6.QtWidgets import QApplication, QMessageBox
 
     opened = []
 
@@ -70,6 +70,7 @@ def test_navigation_and_disabled_launch(window, qt_app) -> None:
     editor.kind.setCurrentText("Огонь")
     editor.place(0.5, 0.5)
     assert editor.controls[0]["kind"] == "Огонь"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
     editor.close_button.click()
     assert window.pages.currentIndex() == 0
     window.controls_tool.click()
@@ -225,3 +226,39 @@ def test_control_editor_select_drag_edit_and_delete(window, qt_app, tmp_path) ->
     assert load_controls(path) == []
     editor.close()
     shiboken6.delete(editor)
+
+
+def test_separate_apk_profiles_and_unsaved_switch(window, qt_app, tmp_path, monkeypatch) -> None:
+    from PySide6.QtWidgets import QMessageBox
+
+    from lynxdroid.gui.control_editor import load_controls
+    from lynxdroid.gui.control_profiles import control_profile_path
+
+    first = tmp_path / "one" / "Game.apk"
+    second = tmp_path / "two" / "Game.apk"
+    for apk in (first, second):
+        apk.parent.mkdir()
+        apk.write_bytes(b"PK\x03\x04test")
+        window.library.add(apk)
+    window.controls_tool.click()
+    editor = window.pages.currentWidget()
+    assert editor.profile_choice.count() == 3
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("F")
+    editor.place(0.2, 0.3)
+    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.No)
+    editor.profile_choice.setCurrentIndex(2)
+    assert editor.profile_choice.currentIndex() == 1 and len(editor.controls) == 1
+    editor.save_button.click()
+    editor.profile_choice.setCurrentIndex(2)
+    assert not editor.controls
+    editor.key.setText("G")
+    editor.place(0.7, 0.8)
+    editor.save_button.click()
+    editor.profile_choice.setCurrentIndex(1)
+    assert editor.controls[0]["key"] == "F"
+    a = control_profile_path(window.control_path.parent, first)
+    b = control_profile_path(window.control_path.parent, second)
+    assert a != b and load_controls(a)[0]["key"] == "F"
+    assert load_controls(b)[0]["key"] == "G"
+    editor.close_button.click()

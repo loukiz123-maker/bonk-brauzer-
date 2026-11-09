@@ -24,8 +24,10 @@ function persist(next) {
   catch { message('Не удалось сохранить библиотеку в браузере.'); return false; }
 }
 function page(name) {
+  if (!$('#editor').hidden && name !== 'editor' && !canDiscard()) return false;
   document.querySelectorAll('.page').forEach((el) => { el.hidden = el.id !== name; });
   document.querySelectorAll('.nav').forEach((el) => { el.classList.toggle('active', el.dataset.page === name); });
+  return true;
 }
 function render() {
   const list = $('#list'); list.replaceChildren();
@@ -87,10 +89,13 @@ const controlStorageKey = 'lynxdroid-preview-controls-v1';
 const kinds = ['Нажатие', 'Двойное нажатие', 'Мультитач', 'Джойстик', 'Камера', 'Перетаскивание', 'Огонь'];
 let controls = [];
 let controlsValid = true;
+let activeProfileKey = controlStorageKey;
+let activeProfileIndex = 0;
+let controlsBaseline = '[]';
 let selectedControl = null;
 let dragging = false;
-function readControls() {
-  const data = JSON.parse(localStorage.getItem(controlStorageKey) || '{"schema":1,"controls":[]}');
+function readControls(key = activeProfileKey) {
+  const data = JSON.parse(localStorage.getItem(key) || '{"schema":1,"controls":[]}');
   if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
   return data.controls;
 }
@@ -101,10 +106,28 @@ function renderControls() {
   $('#delete-control').disabled = selectedControl === null;
 }
 $('#open-settings').addEventListener('click', () => $('#settings-dialog').showModal());
+function canDiscard() {
+  return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
+}
+function loadProfile(key) {
+  activeProfileKey = key;
+  try { controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
+  catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
+  controlsBaseline = JSON.stringify(controls);
+  selectedControl = null; dragging = false; $('#save-controls').disabled = !controlsValid; renderControls();
+}
 $('#open-controls').addEventListener('click', () => {
-  try { controls = readControls(); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
-  catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Библиотека шаблона повреждена или недоступна. Сохранение отключено.'; }
-  selectedControl = null; dragging = false; $('#save-controls').disabled = !controlsValid; renderControls(); page('editor');
+  if (!$('#editor').hidden) return;
+  const select = $('#control-profile'); select.replaceChildren();
+  const general = document.createElement('option'); general.textContent = 'Общий шаблон (старый)'; general.value = controlStorageKey; select.append(general);
+  entries.forEach(name => { const option = document.createElement('option'); option.value = `lynxdroid-preview-game-v1:${name}`; option.textContent = name; select.append(option); });
+  activeProfileIndex = entries.length ? (selected !== null ? selected + 1 : 1) : 0;
+  select.selectedIndex = activeProfileIndex; loadProfile(select.value); page('editor');
+});
+$('#control-profile').addEventListener('change', event => {
+  const select = event.target;
+  if (!canDiscard()) { select.selectedIndex = activeProfileIndex; return; }
+  activeProfileIndex = select.selectedIndex; loadProfile(select.value);
 });
 $('#close-editor').addEventListener('click', () => page('home'));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
@@ -166,7 +189,7 @@ $('#undo-control').addEventListener('click', () => { if (controls.length) contro
 $('#reset-controls').addEventListener('click', () => { controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
 $('#save-controls').addEventListener('click', () => {
   if (!controlsValid) return;
-  try { readControls(); localStorage.setItem(controlStorageKey, JSON.stringify({schema:1, controls})); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }
+  try { readControls(); localStorage.setItem(activeProfileKey, JSON.stringify({schema:1, controls})); controlsBaseline = JSON.stringify(controls); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }
   catch { $('#editor-status').textContent = 'Ошибка сохранения. Исходные данные не изменены.'; }
 });
 // The local preview server reports a fingerprint; reload on source edits.

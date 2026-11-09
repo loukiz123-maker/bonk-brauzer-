@@ -15,7 +15,10 @@ settings, APK import and the control editor. The central desktop is intentionall
 empty until an Android runtime exists. The editor opens
 beside its canvas, and can save a layout draft,
 including a fire marker. Markers can be selected, dragged, edited and deleted.
-Unsaved edits are discarded on leaving the editor.
+Each imported APK reference has a separate draft, selected in the editor. A
+confirmation protects unsaved edits on navigation. Android app detection is not
+implemented: the desktop draft identity is the local APK path, so moving the
+file creates a different draft. The legacy general draft is preserved separately.
 The draft does not inject input into games. A local dry-run connects supported
 single-key tap and fire drafts to the existing input engine and encodes touch
 messages using the scrcpy v5 protocol, without opening a connection. The web
@@ -50,7 +53,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (904) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (906) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -127,7 +130,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 904 collected; Qt tests may skip without native libraries
+pytest                               # 906 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -286,3 +289,6 @@ and has not been tested against a real scrcpy server. An experimental transport
 accepts only a caller-supplied, already connected control socket; it is not
 connected to the launcher, does not start or discover a server, and cannot
 confirm injection. It is tested with local socket pairs, not an Android device.
+
+Browser preview profiles are separate from desktop data and use APK filenames
+(browsers do not reveal real paths); names must be unique in the preview.
