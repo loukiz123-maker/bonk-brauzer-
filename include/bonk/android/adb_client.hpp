@@ -38,6 +38,10 @@ struct GuestStatus {
 [[nodiscard]] Result<RuntimeCommand> make_adb_boot_property_command(const AdbConfig& config);
 [[nodiscard]] Result<RuntimeCommand> make_adb_screenshot_command(const AdbConfig& config);
 [[nodiscard]] Result<RuntimeCommand> make_adb_tap_command(const AdbConfig& config, std::uint32_t x, std::uint32_t y);
+/// Builds one straight-line `adb shell input swipe`; duration must be 1 ms..30 s.
+[[nodiscard]] Result<RuntimeCommand> make_adb_swipe_command(
+    const AdbConfig& config, std::uint32_t start_x, std::uint32_t start_y,
+    std::uint32_t end_x, std::uint32_t end_y, std::chrono::milliseconds duration);
 [[nodiscard]] Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code);
 [[nodiscard]] Result<RuntimeCommand> make_adb_launch_package_command(
     const AdbConfig& config, std::string_view package_name);
@@ -66,11 +70,18 @@ struct PixelPoint {
     const AdbConfig& config,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 
-/// Sends one discrete tap or Android key press (key code 1..65535). It does
-/// not support held/moving pointers, key-down/up, or joystick input; the caller
-/// supplies guest-viewport dimensions.
+/// Sends a tap or one straight-line touch gesture between normalized viewport
+/// endpoints. Android's input shell synthesizes the gesture; callers cannot
+/// control individual DOWN/MOVE/UP events, pointer IDs, cancellation, multitouch,
+/// or joystick state. The gesture duration is 1 ms..30 s and must be shorter
+/// than the ADB command timeout. The caller supplies guest-viewport dimensions.
 [[nodiscard]] Status send_tap_normalized(
     const AdbConfig& config, std::uint32_t width, std::uint32_t height, float x, float y,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+[[nodiscard]] Status send_swipe_normalized(
+    const AdbConfig& config, std::uint32_t width, std::uint32_t height,
+    float start_x, float start_y, float end_x, float end_y,
+    std::chrono::milliseconds gesture_duration = std::chrono::milliseconds{300},
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 [[nodiscard]] Status send_android_key(
     const AdbConfig& config, std::uint32_t android_key_code,

@@ -159,6 +159,35 @@ BONK_TEST(android_adb, builds_screenshot_tap_and_discrete_key_argv) {
   CHECK_EQ(launch.value().arguments[11], std::string("org.example.game"));
 }
 
+BONK_TEST(android_adb, builds_a_bounded_straight_line_swipe_argv) {
+  const android::AdbConfig config{"/opt/android-sdk/platform-tools/adb", "emulator-5554"};
+  const Result<android::RuntimeCommand> swipe =
+      android::make_adb_swipe_command(config, 12, 34, 567, 890, std::chrono::milliseconds{750});
+  REQUIRE(swipe.is_ok());
+  CHECK_EQ(swipe.value().executable, config.executable.string());
+  REQUIRE(swipe.value().arguments.size() == 10);
+  CHECK_EQ(swipe.value().arguments[0], std::string("-s"));
+  CHECK_EQ(swipe.value().arguments[1], config.serial);
+  CHECK_EQ(swipe.value().arguments[2], std::string("shell"));
+  CHECK_EQ(swipe.value().arguments[3], std::string("input"));
+  CHECK_EQ(swipe.value().arguments[4], std::string("swipe"));
+  CHECK_EQ(swipe.value().arguments[5], std::string("12"));
+  CHECK_EQ(swipe.value().arguments[6], std::string("34"));
+  CHECK_EQ(swipe.value().arguments[7], std::string("567"));
+  CHECK_EQ(swipe.value().arguments[8], std::string("890"));
+  CHECK_EQ(swipe.value().arguments[9], std::string("750"));
+
+  const Result<android::RuntimeCommand> max_duration = android::make_adb_swipe_command(
+      config, 0, 0, 1, 1, std::chrono::seconds{30});
+  CHECK(max_duration.is_ok());
+  CHECK(android::make_adb_swipe_command(config, 0, 0, 1, 1, std::chrono::milliseconds{0}).is_error());
+  CHECK(android::make_adb_swipe_command(config, 0, 0, 1, 1, std::chrono::milliseconds{-1}).is_error());
+  const Result<android::RuntimeCommand> too_long = android::make_adb_swipe_command(
+      config, 0, 0, 1, 1, std::chrono::milliseconds{30001});
+  REQUIRE(too_long.is_error());
+  CHECK_EQ(too_long.error().code, std::string("android.invalid_gesture_duration"));
+}
+
 BONK_TEST(android_adb, rejects_relative_executable_invalid_serial_and_out_of_range_key_code) {
   CHECK(android::make_adb_devices_command({"adb", "emulator-5554"}).is_error());
   CHECK(android::make_adb_devices_command({"/sdk/platform-tools/adb", ""}).is_error());
@@ -246,6 +275,29 @@ BONK_TEST(android_adb, maps_finite_normalized_coordinates_to_viewport_pixels) {
   CHECK(android::normalized_touch_to_pixels(640, 480, std::numeric_limits<float>::quiet_NaN(), 0.5f).is_error());
 }
 
+BONK_TEST(android_adb, sends_normalized_swipe_and_rejects_a_too_short_timeout) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  const android::AdbConfig config = fake.config();
+
+  const Status swipe = android::send_swipe_normalized(config, 640, 480, 0.0f, 0.0f, 1.0f, 1.0f,
+                                                       std::chrono::milliseconds{750}, std::chrono::seconds{2});
+  REQUIRE(swipe.is_ok());
+  CHECK_EQ(fake.arguments(),
+           std::string("-s emulator-5554 shell input swipe 0 0 639 479 750 "));
+
+  const Status too_short = android::send_swipe_normalized(
+      config, 640, 480, 0.0f, 0.0f, 0.5f, 0.5f, std::chrono::milliseconds{500}, std::chrono::milliseconds{500});
+  REQUIRE(too_short.is_error());
+  CHECK_EQ(too_short.error().code, std::string("android.gesture_timeout_too_short"));
+  CHECK_EQ(fake.arguments(), std::string("-s emulator-5554 shell input swipe 0 0 639 479 750 "));
+
+  const Status invalid_duration = android::send_swipe_normalized(
+      config, 640, 480, 0.0f, 0.0f, 0.5f, 0.5f, std::chrono::milliseconds{0}, std::chrono::seconds{1});
+  REQUIRE(invalid_duration.is_error());
+  CHECK_EQ(invalid_duration.error().code, std::string("android.invalid_gesture_duration"));
+}
+
 BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_starts) {
   const android::AdbConfig config{"/definitely/missing/adb", "emulator-5554"};
   const Result<image::Image> screenshot =
@@ -256,6 +308,11 @@ BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_sta
   const Status tap = android::send_tap_normalized(config, 640, 480, 0.5f, 0.5f, std::chrono::milliseconds{100});
   REQUIRE(tap.is_error());
   CHECK_EQ(tap.error().code, std::string("android.adb_server_consent_required"));
+
+  const Status swipe = android::send_swipe_normalized(
+      config, 640, 480, 0.1f, 0.1f, 0.9f, 0.9f, std::chrono::milliseconds{200}, std::chrono::seconds{1});
+  REQUIRE(swipe.is_error());
+  CHECK_EQ(swipe.error().code, std::string("android.adb_server_consent_required"));
 
   const Status key = android::send_android_key(config, 4, std::chrono::milliseconds{100});
   REQUIRE(key.is_error());

@@ -22,6 +22,7 @@ constexpr std::uint32_t kMaxViewportDimension = 16384;
 constexpr std::uint32_t kMaxAndroidKeyCode = 65535;
 constexpr std::size_t kMaxAndroidPackageNameBytes = 255;
 constexpr auto kMaxAdbCommandTimeout = std::chrono::minutes{1};
+constexpr auto kMaxAdbSwipeDuration = std::chrono::seconds{30};
 
 bool ascii_alpha(unsigned char character) {
   return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
@@ -82,6 +83,14 @@ Status require_server_consent(const AdbConfig& config) {
     return Status::failure(Error::make(
         "android.adb_server_consent_required",
         "using ADB may start a user-level ADB server or create an ADB key; explicit user consent is required"));
+  }
+  return Status::success();
+}
+
+Status validate_swipe_duration(std::chrono::milliseconds duration) {
+  if (duration.count() <= 0 || duration > kMaxAdbSwipeDuration) {
+    return Status::failure(
+        Error::make("android.invalid_gesture_duration", "touch gesture duration must be between 1 ms and 30 seconds"));
   }
   return Status::success();
 }
@@ -286,6 +295,19 @@ Result<RuntimeCommand> make_adb_tap_command(const AdbConfig& config, std::uint32
                                            std::to_string(y)}});
 }
 
+Result<RuntimeCommand> make_adb_swipe_command(const AdbConfig& config, std::uint32_t start_x, std::uint32_t start_y,
+                                              std::uint32_t end_x, std::uint32_t end_y,
+                                              std::chrono::milliseconds duration) {
+  const Status valid = validate_config(config);
+  if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
+  const Status duration_valid = validate_swipe_duration(duration);
+  if (duration_valid.is_error()) return Result<RuntimeCommand>::failure(duration_valid.error());
+  return Result<RuntimeCommand>::success(
+      {config.executable.string(),
+       {"-s", config.serial, "shell", "input", "swipe", std::to_string(start_x), std::to_string(start_y),
+        std::to_string(end_x), std::to_string(end_y), std::to_string(duration.count())}});
+}
+
 Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32_t android_key_code) {
   const Status valid = validate_config(config);
   if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
@@ -382,6 +404,32 @@ Status send_tap_normalized(const AdbConfig& config, std::uint32_t width, std::ui
   const Result<PixelPoint> point = normalized_touch_to_pixels(width, height, x, y);
   if (point.is_error()) return Status::failure(point.error());
   const Result<RuntimeCommand> command = make_adb_tap_command(config, point.value().x, point.value().y);
+  if (command.is_error()) return Status::failure(command.error());
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return consent;
+  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  return output.status();
+}
+
+Status send_swipe_normalized(const AdbConfig& config, std::uint32_t width, std::uint32_t height,
+                             float start_x, float start_y, float end_x, float end_y,
+                             std::chrono::milliseconds gesture_duration,
+                             std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return timeout_valid;
+  const Status duration_valid = validate_swipe_duration(gesture_duration);
+  if (duration_valid.is_error()) return duration_valid;
+  if (command_timeout <= gesture_duration) {
+    return Status::failure(Error::make(
+        "android.gesture_timeout_too_short", "ADB command timeout must exceed the touch gesture duration"));
+  }
+
+  const Result<PixelPoint> start = normalized_touch_to_pixels(width, height, start_x, start_y);
+  if (start.is_error()) return Status::failure(start.error());
+  const Result<PixelPoint> end = normalized_touch_to_pixels(width, height, end_x, end_y);
+  if (end.is_error()) return Status::failure(end.error());
+  const Result<RuntimeCommand> command =
+      make_adb_swipe_command(config, start.value().x, start.value().y, end.value().x, end.value().y, gesture_duration);
   if (command.is_error()) return Status::failure(command.error());
   const Status consent = require_server_consent(config);
   if (consent.is_error()) return consent;
