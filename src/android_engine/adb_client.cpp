@@ -269,6 +269,23 @@ Status inspect_am_start_output(std::string_view output) {
   return Status::success();
 }
 
+Status inspect_adb_install_output(std::string_view output) {
+  std::istringstream lines{std::string(output)};
+  std::string line;
+  while (std::getline(lines, line)) {
+    const std::string_view trimmed = trim_ascii(line);
+    if (trimmed.rfind("Failure", 0) != 0) continue;
+    std::string detail(trimmed);
+    if (detail.size() > 512) {
+      detail.resize(512);
+      detail += "…";
+    }
+    return Status::failure(
+        Error::make("android.apk_install_reported_failure", "ADB install reported: " + detail));
+  }
+  return Status::success();
+}
+
 Result<CommandOutput> run_adb(const RuntimeCommand& command, std::chrono::milliseconds timeout,
                               std::size_t max_capture_bytes = kDefaultAdbCaptureBytes) {
   const Result<CommandOutput> result = run_command(command, timeout, max_capture_bytes);
@@ -557,7 +574,12 @@ Status install_selected_apk(const AdbConfig& config, const std::filesystem::path
   }
 
   const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
-  return output.status();
+  if (output.is_error()) return Status::failure(output.error());
+  const Status install_stdout_result = inspect_adb_install_output(output.value().stdout_data);
+  if (install_stdout_result.is_error()) return install_stdout_result;
+  const Status install_stderr_result = inspect_adb_install_output(output.value().stderr_data);
+  if (install_stderr_result.is_error()) return install_stderr_result;
+  return Status::success();
 }
 
 Result<GuestStatus> query_guest_status(const AdbConfig& config, std::chrono::milliseconds command_timeout) {

@@ -63,7 +63,8 @@ std::string shell_quote(std::string_view value) {
 
 class FakeAdb final {
  public:
-  explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok")
+  explicit FakeAdb(bool simulate_boot_sequence = false, std::string_view launch_output = "Status: ok",
+                   std::string_view install_output = "Success")
       : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
@@ -103,6 +104,8 @@ fi
              << R"(; fi)" << std::endl;
     }
     script << R"(if [ "${4-}" = "am" ]; then printf '%s\n' )" << shell_quote(launch_output) << R"(; fi)"
+           << std::endl;
+    script << R"(if [ "${3-}" = "install" ]; then printf '%s\n' )" << shell_quote(install_output) << R"(; fi)"
            << std::endl;
     script << "exit 0" << std::endl;
     script.close();
@@ -405,6 +408,22 @@ BONK_TEST(android_adb, installs_only_a_confirmed_readable_apk_with_both_consents
   const Status installed = android::install_selected_apk(config, apk_path, true, std::chrono::seconds{1});
   REQUIRE(installed.is_ok());
   CHECK_EQ(fake.arguments(), "-s emulator-5554 install " + apk_path.string() + " ");
+}
+
+BONK_TEST(android_adb, reports_explicit_apk_install_failure_even_when_adb_exits_zero) {
+  FakeAdb fake{false, "Status: ok", "Failure [INSTALL_FAILED_INVALID_APK]"};
+  REQUIRE(fake.ready());
+  const std::filesystem::path apk_path = fake.selected_apk_path();
+  std::ofstream apk{apk_path, std::ios::binary};
+  REQUIRE(static_cast<bool>(apk));
+  apk << "synthetic APK test payload";
+  apk.close();
+  REQUIRE(static_cast<bool>(apk));
+
+  const Status install = android::install_selected_apk(fake.config(), apk_path, true, std::chrono::seconds{1});
+  REQUIRE(install.is_error());
+  CHECK_EQ(install.error().code, std::string("android.apk_install_reported_failure"));
+  CHECK(install.error().message.find("INSTALL_FAILED_INVALID_APK") != std::string::npos);
 }
 
 BONK_TEST(android_adb, consent_gates_screenshot_and_input_before_any_process_starts) {
