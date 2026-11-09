@@ -12,7 +12,6 @@ import sys
 
 from lynxdroid.core.logging_setup import configure as configure_logging
 from lynxdroid.core.paths import AppPaths
-from lynxdroid.settings import SettingsStore
 from lynxdroid.version import version_string
 
 
@@ -64,7 +63,6 @@ def run_gui(*, paths: AppPaths | None = None, backend_kind: str | None = None) -
 
     paths = paths or AppPaths.resolve()
     paths.ensure()
-    settings_store = SettingsStore(paths)
     configure_logging(paths.log_file, console_level=None)
 
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
@@ -75,10 +73,11 @@ def run_gui(*, paths: AppPaths | None = None, backend_kind: str | None = None) -
     if hasattr(app, "setDesktopFileName"):
         app.setDesktopFileName("lynxdroid")
 
-    from lynxdroid.gui.main_window import MainWindow
+    from lynxdroid.gui.launcher import LauncherWindow
 
-    window = MainWindow(paths=paths, settings_store=settings_store, backend_kind=backend_kind)
-    window.show()
+    # backend_kind remains a compatibility argument; the launcher has no backend.
+    window = LauncherWindow(paths=paths)
+    window.showMaximized()
     return app.exec()
 
 

@@ -271,3 +271,42 @@ jobs:
             lynxdroid --help | grep -q "$cmd" || { echo "missing: $cmd"; exit 1; }
           done
           echo "all documented commands present"
+
+  launcher-qt:
+    name: Launcher Qt offscreen
+    runs-on: ubuntu-latest
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: python -m pip install -e '.[gui,dev]'
+      - name: Require working Qt and test actual widgets
+        run: |
+          python -c 'from PySide6.QtWidgets import QApplication; app = QApplication([])'
+          python -m pytest tests/gui/test_launcher_ui.py -q
+      - name: Capture launcher preview
+        run: |
+          python - <<'PY'
+          import tempfile
+          from pathlib import Path
+          from PySide6.QtWidgets import QApplication
+          from lynxdroid.core.paths import AppPaths
+          from lynxdroid.gui.launcher import LauncherWindow
+          app = QApplication([])
+          with tempfile.TemporaryDirectory() as tmp:
+              paths = AppPaths.resolve(Path(tmp))
+              paths.ensure()
+              window = LauncherWindow(paths)
+              window.resize(1280, 800)
+              window.show()
+              app.processEvents()
+              if not window.grab().save('launcher-preview.png'):
+                  raise SystemExit('screenshot failed')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: launcher-preview
+          path: launcher-preview.png

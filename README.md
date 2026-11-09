@@ -30,6 +30,28 @@ images, and does not pretend to be a virtual machine.
                 └──────────────────────────────┘
 ```
 
+## New direction: standalone launcher
+
+The desktop entry and `lynxdroid gui` now open the **standalone launcher**,
+without starting or contacting Waydroid. It can show a local APK library,
+filter it, add or remove file references, and switch to full screen with F11
+(Esc exits full screen). Adding an APK does **not** install or run it.
+The independent Android runtime, game compatibility, performance and actual
+Android application execution are **not implemented or verified**. The
+Waydroid-specific CLI and old code below are historical and are not the new
+launcher engine. Existing user files are preserved.
+
+Install the GUI and start it:
+
+```bash
+pip install -e '.[gui]'
+lynxdroid gui
+```
+
+The Python Qt runtime and desktop graphics libraries must be installed. The
+launcher stores its library under the user's XDG data directory and never
+deletes an APK when removing its reference.
+
 ## Honest status first
 
 Read this before anything else. It is the difference between "works" and
@@ -37,7 +59,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (875) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (889) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -114,7 +136,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 875 tests, no display needed
+pytest                               # 889 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

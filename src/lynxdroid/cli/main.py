@@ -287,7 +287,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     # gui ---------------------------------------------------------------
     p_gui = sub.add_parser("gui", help="launch the graphical shell")
-    p_gui.add_argument("--backend", choices=["waydroid", "fake"], default=None)
+    p_gui.add_argument(
+        "--backend", choices=["waydroid", "fake"], default=None, help=argparse.SUPPRESS
+    )
     p_gui.add_argument(
         "--offscreen",
         action="store_true",

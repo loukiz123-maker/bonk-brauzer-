@@ -7,13 +7,13 @@ name = "lynxdroid"
 # Single source of truth: the version lives in src/lynxdroid/version.py and is
 # read from there, so the package and the metadata cannot drift apart.
 dynamic = ["version"]
-description = "LynxDroid - own control layer for an Android container (Waydroid) on the host Linux kernel"
+description = "LynxDroid desktop launcher; standalone Android runtime in development"
 readme = "README.md"
 requires-python = ">=3.10"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [{ name = "LynxDroid project" }]
-keywords = ["android", "waydroid", "wayland", "linux", "container", "keymap"]
+keywords = ["android", "launcher", "linux", "games"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "Environment :: Console",
@@ -52,7 +52,7 @@ version = { attr = "lynxdroid.version.__version__" }
 where = ["src"]
 
 [tool.setuptools.package-data]
-lynxdroid = ["py.typed", "data/*.json"]
+lynxdroid = ["py.typed", "data/*.json", "data/*.jpg"]
 
 [tool.pytest.ini_options]
 minversion = "8.0"

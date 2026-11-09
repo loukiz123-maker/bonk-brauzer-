@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 875 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 889 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 875 passed
+pytest                                    # 889 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `875 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `889 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 

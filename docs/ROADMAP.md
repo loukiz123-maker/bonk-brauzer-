@@ -1,5 +1,15 @@
 # Roadmap against the 20-stage plan
 
+## Direction change: standalone runtime
+
+The user has replaced the Waydroid-based goal with an independent Android
+runtime. The **current first milestone** is a standalone fullscreen-capable
+launcher with a real local APK library. It does not use Waydroid and does not
+install or run Android apps. A new runtime architecture, rendering, input,
+Android compatibility and performance validation are **not yet implemented**.
+The table below is historical for the previous Waydroid-based plan and does
+not imply those stages complete the new standalone goal.
+
 State of each stage, in the specification's own vocabulary. Nothing is marked
 done on the basis of "the code exists".
 
@@ -23,7 +33,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 | 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance `UNTESTED`; game error matching, limited network and root observations with manual output review available in CLI/Game help (desktop unverified), unverified property changes disabled (`docs/COMPATIBILITY.md`) |
 | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
 | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
-| 15 | Testing and quality criteria | **DONE** | 875 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+| 15 | Testing and quality criteria | **DONE** | 889 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
 | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
 | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
 | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |

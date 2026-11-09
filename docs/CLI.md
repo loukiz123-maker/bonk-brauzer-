@@ -12,6 +12,10 @@ Global options:
 | `-v`, `--verbose` | debug logging to stderr |
 | `--version` | print the version banner and exit |
 
+> Direction change: `lynxdroid gui` opens the standalone launcher; the older
+> Waydroid-specific commands documented below are legacy and are not the new
+> Android runtime. The launcher itself cannot install or run APKs yet.
+
 ## Exit codes
 
 Stable, script-usable, documented in `--help`:
