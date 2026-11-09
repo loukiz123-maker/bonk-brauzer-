@@ -101,4 +101,13 @@ struct PixelPoint {
     const AdbConfig& config,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 
+/// Polls ADB until sys.boot_completed is 1. This does not start an emulator,
+/// launch an app, or establish app/game readiness. The overall wait is bounded
+/// to 5 minutes; poll interval is 1 ms..30 s and per-command timeout is 1 ms..60 s.
+[[nodiscard]] Result<GuestStatus> wait_for_guest_boot(
+    const AdbConfig& config,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds{120000},
+    std::chrono::milliseconds poll_interval = std::chrono::milliseconds{500},
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
 }  // namespace bonk::android

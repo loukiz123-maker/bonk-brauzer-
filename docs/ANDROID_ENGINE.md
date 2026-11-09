@@ -1,6 +1,6 @@
 # Android-движок: архитектура и проверяемые этапы
 
-**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, ADB guest-state probe, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe и запрос запуска уже установленного приложения по package ID. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала, установки APK и управления произвольным состоянием pointer/key нет.
+**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, ADB guest-state probe и bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe и запрос запуска уже установленного приложения по package ID. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала, установки APK и управления произвольным состоянием pointer/key нет.
 
 ## Исходное состояние репозитория
 
@@ -37,7 +37,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 Пользовательский Android SDK Emulator + AVD
 ```
 
-`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `query_guest_status()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
 
 ## Контракт лаунчера
 
@@ -47,7 +47,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 |---|---|
 | Запуск | `start(profile_id)`; профиль указывает на уже существующий AVD. Ответ содержит отдельные `runtime_state` и `guest_state`. |
 | Остановка | `stop(grace_period)`; сначала штатное завершение, затем явная эскалация. Остановка затрагивает только процессную группу, созданную движком. |
-| Состояние | `Stopped`, `Starting`, `RuntimeRunning`, `GuestBooting`, `Ready`, `Stopping`, `Failed`; поля runtime и guest нельзя смешивать. В текущем коде доступны только состояния процесса `stopped/running/exited/failed`. |
+| Состояние | `Stopped`, `Starting`, `RuntimeRunning`, `GuestBooting`, `Ready`, `Stopping`, `Failed`; поля runtime и guest нельзя смешивать. В текущем коде доступны состояния процесса `stopped/running/exited/failed`; `wait_for_guest_boot()` ограниченно опрашивает ADB до `sys.boot_completed=1`, что всё ещё не означает готовность игры. |
 | Кадры | Сейчас `capture_screenshot_rgba()` возвращает один декодированный PNG RGBA без sequence/timestamp/rotation; лимит 32 MiB сжатого PNG и 16 777 216 пикселей. Это не видеопоток и не гарантия низкой задержки. Будущий IPC/frame API должен добавить stride, sequence, monotonic timestamp и rotation. |
 | Touch | Есть одиночный tap и прямолинейный swipe через `send_swipe_normalized()`: обе пары координат нормализованы в `[0,1]` и округляются в пиксели `[0,width-1] × [0,height-1]`; swipe длится 1 ms..30 s. ADB shell просит Android синтезировать жест, но доставка Down/Move/Up в приложение не подтверждена live-тестом. Нет caller-controlled событий, произвольной траектории, pointer ID, отмены, multitouch или joystick; letterbox/rotation учитывает вызывающий UI. |
 | Клавиши | Сейчас только одиночный `adb shell input keyevent <numeric-code>` (1..65535); KeyDown/KeyUp, repeat и удержание не реализованы. Не передавать сырые клавиши хоста как Android-коды без явного преобразования. |
@@ -59,7 +59,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 
 По предоставленному QA-отчёту, старый `TouchAgentService` создаёт `LocalServerSocket(String)` в абстрактном namespace Android, тогда как Python-клиент подключается к файловому pathname. Эти адресации несовместимы; C++-модуль пока не содержит IPC-клиента и не должен подключаться к агенту, пока стороны не согласуют namespace/address, проверку клиента и версию протокола. Нужен явный handshake и проверка peer/прав до передачи команд. **Решение на текущий этап: интеграцию отложить**; C++ host-side API остаётся самостоятельным до появления исходников агента, AVD и тестового APK для совместного smoke test. Источники из отчёта: [TouchAgentService.java](https://github.com/loukiz123-maker/bonk-brauzer-/blob/8d13e22/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java#L88-L118) и [Android LocalServerSocket API](https://developer.android.com/reference/android/net/LocalServerSocket).
 
-Реализованы построение команды AVD, управление процессом в одном адресном пространстве, проверки выбранных файлов/INI, ADB guest-state query, одиночный PNG snapshot, tap/key и линейный swipe фиксированной длительности. IPC-сокет, автоматический guest monitor, поток кадров и caller-controlled последовательность touch-событий остаются явно незавершёнными.
+Реализованы построение команды AVD, управление процессом в одном адресном пространстве, проверки выбранных файлов/INI, ADB guest-state query и bounded wait boot, одиночный PNG snapshot, tap/key и линейный swipe фиксированной длительности. IPC-сокет, автоматический guest monitor, поток кадров и caller-controlled последовательность touch-событий остаются явно незавершёнными.
 
 ## Этап 1: выполненная работа
 
@@ -104,7 +104,7 @@ Preflight не запускает найденные executable, не загру
 - APK-установка и подключение старого Android-агента не реализованы; запуск уже установленного приложения по package ID добавлен на этапе 5.
 - Все ADB-операции, как и guest-state query, требуют `allow_adb_server_autostart=true` после явного согласия. Таймаут каждой команды — от 1 ms до 60 s; screenshot stdout/stderr ограничены 32 MiB на поток, обычные ADB-команды — 64 KiB на поток.
 - `include/bonk/image/image.hpp`, `src/image/inflate.cpp`, `src/image/png.cpp`: добавлены лимитированный inflate и overload PNG decode с пределом пикселей; PNG decoder также ограничивает распакованные и RGBA-буферы 256 MiB.
-- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, а также точные argv/capture/tap/swipe/key/launch; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
+- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, точные argv/capture/tap/swipe/key/launch и bounded boot polling; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
 
 Настоящие `adb`, Emulator и AVD в окружении отсутствуют, поэтому нет live-проверки формата кадров и успешной доставки tap/swipe/keyevent на госте. ADB user server может быть запущен при первом вызове; запрет по умолчанию сохраняется.
 
@@ -116,6 +116,13 @@ Preflight не запускает найденные executable, не загру
 - Fake ADB проверяет argv и consent gating, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
 
 Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
+
+## Этап 6: bounded ожидание загрузки гостя
+
+- `wait_for_guest_boot()` повторяет guest-state query, пока выбранный serial не сообщит `sys.boot_completed=1`; любые неготовые состояния гостя продолжают опрашиваться до общего дедлайна.
+- По умолчанию общий timeout — 120 s, интервал — 500 ms, timeout каждой ADB-команды — 5 s. Общий timeout ограничен пятью минутами, polling interval — 1 ms..30 s; бюджет одного query уменьшается с учётом того, что он может запустить две ADB-команды. Ошибка timeout содержит последнее наблюдённое состояние.
+- Ожидание не запускает Emulator/AVD и не устанавливает/запускает приложение. `sys.boot_completed=1` — только boot property, а не готовность лаунчера или игры; всё ещё нужен live smoke test.
+- Fake ADB проверяет последовательность `0 → 1`, consent и timeout при отсутствующем serial; это не подтверждение настоящей загрузки Android.
 
 ## Зависимости, лицензии и происхождение
 
@@ -173,6 +180,6 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **307 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 32/32. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка: `make -j2 verify` — **309 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 34/34. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
 
 Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.

@@ -1,5 +1,6 @@
 #include "bonk/android/adb_client.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <cmath>
 #include <cstdint>
@@ -7,6 +8,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <utility>
 
 #include "bonk/android/engine_session.hpp"
@@ -23,6 +25,8 @@ constexpr std::uint32_t kMaxAndroidKeyCode = 65535;
 constexpr std::size_t kMaxAndroidPackageNameBytes = 255;
 constexpr auto kMaxAdbCommandTimeout = std::chrono::minutes{1};
 constexpr auto kMaxAdbSwipeDuration = std::chrono::seconds{30};
+constexpr auto kMaxGuestBootWaitTimeout = std::chrono::minutes{5};
+constexpr auto kMaxGuestBootPollInterval = std::chrono::seconds{30};
 
 bool ascii_alpha(unsigned char character) {
   return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
@@ -243,6 +247,21 @@ Result<CommandOutput> run_adb(const RuntimeCommand& command, std::chrono::millis
         Error::make("android.adb_command_failed", command_failure_message(result.value())));
   }
   return result;
+}
+
+Result<GuestStatus> guest_boot_timeout(const GuestStatus* last_status) {
+  std::string message = "timed out waiting for sys.boot_completed=1";
+  if (last_status != nullptr) {
+    message += "; last observed state was ";
+    message += to_string(last_status->state);
+    if (!last_status->detail.empty()) {
+      message += ": ";
+      constexpr std::size_t kMaxDetailBytes = 256;
+      message += last_status->detail.substr(0, kMaxDetailBytes);
+      if (last_status->detail.size() > kMaxDetailBytes) message += "…";
+    }
+  }
+  return Result<GuestStatus>::failure(Error::make("android.guest_boot_timeout", std::move(message)));
 }
 
 }  // namespace
@@ -489,6 +508,49 @@ Result<GuestStatus> query_guest_status(const AdbConfig& config, std::chrono::mil
     status.detail = "ADB returned an unrecognized sys.boot_completed value";
   }
   return Result<GuestStatus>::success(std::move(status));
+}
+
+Result<GuestStatus> wait_for_guest_boot(const AdbConfig& config, std::chrono::milliseconds timeout,
+                                        std::chrono::milliseconds poll_interval,
+                                        std::chrono::milliseconds command_timeout) {
+  if (timeout.count() <= 0 || timeout > kMaxGuestBootWaitTimeout) {
+    return Result<GuestStatus>::failure(
+        Error::make("android.invalid_timeout", "guest boot wait timeout must be between 1 ms and 5 minutes"));
+  }
+  if (poll_interval.count() <= 0 || poll_interval > kMaxGuestBootPollInterval) {
+    return Result<GuestStatus>::failure(
+        Error::make("android.invalid_poll_interval", "guest boot poll interval must be between 1 ms and 30 seconds"));
+  }
+  const Status command_timeout_valid = validate_timeout(command_timeout);
+  if (command_timeout_valid.is_error()) return Result<GuestStatus>::failure(command_timeout_valid.error());
+
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  GuestStatus last_status;
+  bool have_last_status = false;
+  while (true) {
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) return guest_boot_timeout(have_last_status ? &last_status : nullptr);
+
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    // A guest-state query can use up to two ADB processes (devices + getprop).
+    // Halve the remaining budget so both commands fit within the overall wait.
+    const auto query_command_timeout = std::min(command_timeout, remaining / 2);
+    if (query_command_timeout.count() <= 0) {
+      return guest_boot_timeout(have_last_status ? &last_status : nullptr);
+    }
+
+    const Result<GuestStatus> current = query_guest_status(config, query_command_timeout);
+    if (current.is_error()) return Result<GuestStatus>::failure(current.error());
+    last_status = current.value();
+    have_last_status = true;
+    if (last_status.state == GuestState::BootComplete) return Result<GuestStatus>::success(last_status);
+
+    const auto after_query = std::chrono::steady_clock::now();
+    if (after_query >= deadline) return guest_boot_timeout(&last_status);
+    const auto sleep_budget = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - after_query);
+    if (sleep_budget.count() <= 0) return guest_boot_timeout(&last_status);
+    std::this_thread::sleep_for(std::min(poll_interval, sleep_budget));
+  }
 }
 
 }  // namespace bonk::android

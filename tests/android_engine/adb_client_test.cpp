@@ -63,7 +63,7 @@ std::string shell_quote(std::string_view value) {
 
 class FakeAdb final {
  public:
-  FakeAdb() {
+  explicit FakeAdb(bool simulate_boot_sequence = false) : simulate_boot_sequence_(simulate_boot_sequence) {
     std::string pattern = (std::filesystem::temp_directory_path() / "bonk-fake-adb-XXXXXX").string();
     std::vector<char> mutable_pattern(pattern.begin(), pattern.end());
     mutable_pattern.push_back(0);
@@ -72,15 +72,36 @@ class FakeAdb final {
     directory_ = directory;
     executable_ = directory_ / "adb-fake";
     arguments_file_ = directory_ / "argv.txt";
+    boot_query_count_file_ = directory_ / "boot-query-count";
 
     const std::filesystem::path fixture = std::filesystem::absolute("tests/fixtures/logo.png");
     std::ofstream script(executable_);
     if (!script) return;
     script << "#!/bin/sh" << std::endl
-           << R"(printf '%s ' "$@" > )" << shell_quote(arguments_file_.string()) << std::endl
-           << R"(if [ "${3-}" = "exec-out" ]; then exec /bin/cat )" << shell_quote(fixture.string()) << "; fi"
-           << std::endl
-           << "exit 0" << std::endl;
+           << R"(printf '%s ' "$@" > )" << shell_quote(arguments_file_.string()) << std::endl;
+    if (simulate_boot_sequence_) {
+      script << R"(if [ "${1-}" = "devices" ]; then
+  printf 'List of devices attached\nemulator-5554\tdevice\n'
+elif [ "${4-}" = "getprop" ]; then
+  count=0
+  if [ -f )"
+             << shell_quote(boot_query_count_file_.string())
+             << R"( ]; then
+    count=$(/bin/cat )"
+             << shell_quote(boot_query_count_file_.string()) << ")" << R"(
+  fi
+  count=$((count + 1))
+  printf '%s' "$count" > )"
+             << shell_quote(boot_query_count_file_.string())
+             << R"(
+  if [ "$count" -eq 1 ]; then printf '0\n'; else printf '1\n'; fi
+fi
+)";
+    } else {
+      script << R"(if [ "${3-}" = "exec-out" ]; then exec /bin/cat )" << shell_quote(fixture.string())
+             << R"(; fi)" << std::endl;
+    }
+    script << "exit 0" << std::endl;
     script.close();
     if (!script || ::chmod(executable_.c_str(), S_IRUSR | S_IWUSR | S_IXUSR) != 0) return;
     ready_ = true;
@@ -94,11 +115,14 @@ class FakeAdb final {
   [[nodiscard]] bool ready() const noexcept { return ready_; }
   [[nodiscard]] android::AdbConfig config() const { return {executable_, "emulator-5554", true}; }
   [[nodiscard]] std::string arguments() const { return read_binary(arguments_file_); }
+  [[nodiscard]] std::string boot_query_count() const { return read_binary(boot_query_count_file_); }
 
  private:
   std::filesystem::path directory_;
   std::filesystem::path executable_;
   std::filesystem::path arguments_file_;
+  std::filesystem::path boot_query_count_file_;
+  bool simulate_boot_sequence_ = false;
   bool ready_ = false;
 };
 
@@ -224,6 +248,38 @@ BONK_TEST(android_adb, parses_boot_property_without_claiming_app_readiness) {
   CHECK(android::parse_boot_completed_property("0\n") == android::GuestState::Booting);
   CHECK(android::parse_boot_completed_property("\n") == android::GuestState::Booting);
   CHECK(android::parse_boot_completed_property("unexpected") == android::GuestState::Unknown);
+}
+
+BONK_TEST(android_adb, waits_until_guest_boot_property_completes) {
+  FakeAdb fake{true};
+  REQUIRE(fake.ready());
+
+  const Result<android::GuestStatus> status = android::wait_for_guest_boot(
+      fake.config(), std::chrono::seconds{1}, std::chrono::milliseconds{5}, std::chrono::milliseconds{250});
+  REQUIRE(status.is_ok());
+  CHECK(status.value().state == android::GuestState::BootComplete);
+  CHECK_EQ(fake.boot_query_count(), std::string("2"));
+  CHECK_EQ(fake.arguments(), std::string("-s emulator-5554 shell getprop sys.boot_completed "));
+
+  const Result<android::GuestStatus> invalid_timeout = android::wait_for_guest_boot(
+      fake.config(), std::chrono::milliseconds{0}, std::chrono::milliseconds{5}, std::chrono::milliseconds{250});
+  REQUIRE(invalid_timeout.is_error());
+  CHECK_EQ(invalid_timeout.error().code, std::string("android.invalid_timeout"));
+  const Result<android::GuestStatus> invalid_poll = android::wait_for_guest_boot(
+      fake.config(), std::chrono::seconds{1}, std::chrono::milliseconds{0}, std::chrono::milliseconds{250});
+  REQUIRE(invalid_poll.is_error());
+  CHECK_EQ(invalid_poll.error().code, std::string("android.invalid_poll_interval"));
+}
+
+BONK_TEST(android_adb, times_out_with_last_guest_state_when_boot_does_not_complete) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+
+  const Result<android::GuestStatus> status = android::wait_for_guest_boot(
+      fake.config(), std::chrono::milliseconds{100}, std::chrono::milliseconds{5}, std::chrono::milliseconds{1000});
+  REQUIRE(status.is_error());
+  CHECK_EQ(status.error().code, std::string("android.guest_boot_timeout"));
+  CHECK(status.error().message.find("not-connected") != std::string::npos);
 }
 
 BONK_TEST(android_adb, decodes_a_bounded_png_screenshot_and_checks_chunk_checksums) {
@@ -358,6 +414,11 @@ BONK_TEST(android_adb, requires_explicit_consent_before_any_adb_process_is_start
   const Result<android::GuestStatus> result = android::query_guest_status(config, std::chrono::milliseconds{100});
   REQUIRE(result.is_error());
   CHECK_EQ(result.error().code, std::string("android.adb_server_consent_required"));
+
+  const Result<android::GuestStatus> waited = android::wait_for_guest_boot(
+      config, std::chrono::seconds{1}, std::chrono::milliseconds{100}, std::chrono::milliseconds{100});
+  REQUIRE(waited.is_error());
+  CHECK_EQ(waited.error().code, std::string("android.adb_server_consent_required"));
 }
 
 BONK_TEST(android_adb, reports_missing_adb_after_consent_without_faking_a_guest_state) {
