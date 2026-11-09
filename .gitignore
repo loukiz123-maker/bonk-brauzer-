@@ -1,27 +1,24 @@
-# Build outputs
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
 build/
-build-*/
-compile_commands.json
-CMakeCache.txt
-CMakeFiles/
-Testing/
+dist/
+.venv/
+venv/
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+htmlcov/
 
-# Objects / binaries
-*.o
-*.d
-*.a
-*.so
-*.exe
-*.pdb
-*.ilk
+# Local runtime state that must never be committed
+.lynxdroid/
+*.log
+artifacts/tmp/
 
 # Editors / OS
 .vscode/
 .idea/
-.cache/
 *.swp
 .DS_Store
-
-# Local scratch
-/tmp/
-*.log

@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LynxDroid
+GenericName=Game launcher
+Comment=Manage a local APK library; Android engine in development
+Exec=lynxdroid-gui
+Icon=lynxdroid
+Terminal=false
+Categories=System;Emulator;
+Keywords=android;games;launcher;apk;
+StartupNotify=true
+StartupWMClass=LynxDroid

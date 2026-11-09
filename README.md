@@ -1,155 +1,302 @@
-# Bonk Brauzer
+# LynxDroid
 
-Экспериментальный браузер с **собственным движком**: свой HTML-парсер, свой CSS-каскад, свой
-layout, свой растеризатор и **свой JavaScript-движок**. Без Chromium/Blink, WebKit,
-Gecko, Servo, V8, SpiderMonkey, QuickJS, WebView, Electron и CEF.
+Standalone game launcher for Linux, with an independent Android runtime planned.
+The current application is a launcher prototype, not an Android emulator yet.
 
-Зависимости: **только стандартная библиотека C++20**. Сегодня в проекте ровно ноль внешних
-зависимостей — включая тест-фреймворк, inflate/PNG-кодек, парсер шрифтов, оконный backend
-(протокол X11 реализован напрямую, вместо SDL2/Xlib), **TLS 1.3 с собственной криптографией**
-(SHA-256, HMAC, HKDF, ChaCha20-Poly1305, X25519) и **JavaScript-движок со своим парсером
-и интерпретатором**.
+## New direction: standalone launcher
 
-![Страница, отрисованная движком](docs/screenshot.png)
+The desktop entry and `lynxdroid gui` now open the **standalone launcher**,
+without starting or contacting Waydroid. It can show a local APK library,
+filter it, add one or several APK file references, remove references, copy a file path, open its folder,
+and switch to full screen with F11
+(Esc exits full screen). Adding an APK does **not** install or run it.
+The left-hand sidebar is removed; the right-hand toolbar provides navigation,
+settings, APK import and the control editor. The central desktop is intentionally
+empty until an Android runtime exists. The editor opens
+beside its canvas, and can save a layout draft,
+including a fire marker. Markers can be selected, dragged, edited and deleted.
+Undo and redo support the most recent 50 changes in the current editor session.
+Layouts can be exported to and imported from bounded JSON files. Import changes
+the current draft but does not overwrite the game profile until explicitly saved.
+Each imported APK reference has a separate draft, selected in the editor.
+Selecting an APK in the library and choosing “Настроить управление” opens
+its corresponding draft directly. A
+confirmation protects unsaved edits on navigation. Android app detection is not
+implemented: the desktop draft identity is the local APK path, so moving the
+file creates a different draft. The legacy general draft is preserved separately.
+The draft does not inject input into games. A local dry-run connects supported
+tap, fire and four-key joystick drafts to the existing input engine and encodes touch
+messages using the scrcpy v5 protocol, without opening a connection. The web
+preview demonstrates the same result independently; it does not run that engine.
+In the editor, “Тест клавиш” also lets you press and release mapped keys on
+the canvas offline. It currently supports only tap, fire (including Mouse1/Mouse2) and four-key joystick drafts;
+the test ends on focus loss and never sends input to Android. Engine
+settings, Google Play and Android apps are not implemented.
 
-*Эта картинка получена командой `bonk render tests/fixtures/sample.html -o page.png`:
-HTML был разобран, стилизован, разложен и растеризован целиком этим репозиторием.*
+The independent Android runtime, game compatibility, performance and actual
+Android application execution are **not implemented or verified**. The
+Waydroid-specific CLI and old code below are historical and are not the new
+launcher engine. Existing user files are preserved.
 
-## Статус
+Install the GUI and start it:
 
-| Этап | Содержание | Статус |
+```bash
+pip install -e '.[gui]'
+lynxdroid gui
+```
+
+The Python Qt runtime and desktop graphics libraries must be installed. The
+launcher stores its library under the user's XDG data directory and never
+deletes an APK when removing its reference.
+
+## Previous Waydroid implementation (historical)
+
+The sections below document the earlier Waydroid-based implementation and CLI.
+They are retained for reference; they are not requirements for the new launcher.
+
+## Honest status first
+
+Read this before anything else. It is the difference between "works" and
+"should work".
+
+| Area | State | Evidence |
 |---|---|---|
-| 0 | Каркас, сборка, CI, контракты, план | **готово** |
-| 1 | `net` (URL, HTTP/1.1), `html` (токенайзер + дерево), `dom` (узлы, `querySelector`) | **сделано ядро**, см. [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) |
-| 2 | `css` (селекторы, каскад), `text` (TrueType), `image` (inflate + PNG), `layout` (block/inline), `paint` (растеризация + PNG) | **сделано ядро** |
-| 3 | `shell`: сессия, история, скролл, клики + собственный X11-клиент (без Xlib/SDL) | **сделано ядро**, см. [`docs/STAGE-03.md`](docs/STAGE-03.md) |
-| 2b | `crypto` + `net::tls` + `x509` + gzip: настоящий `https://` | **сделано ядро**, см. [`docs/STAGE-02B.md`](docs/STAGE-02B.md) |
-| 4 | `js` (лексер, парсер, интерпретатор, встроенные объекты) + `bindings` (window/document/элементы/события) | **сделано ядро**, см. [`docs/STAGE-04.md`](docs/STAGE-04.md) |
-| 5 | flexbox/grid, Canvas 2D, формы, cookies, storage | — |
-| 6 | security, процесс на вкладку, devtools, оптимизация | — |
-| 7 | conformance: html5lib-tests, test262, WPT, Acid2 | — |
+| Unit tests (928) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
+| CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
+| GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
+| Waydroid session on CachyOS | **BLOCKED** | target laptop not reachable from here |
+| Intel Iris Xe hardware rendering | **BLOCKED** | no `/dev/dri` here |
+| Real multitouch injection | **BLOCKED** | needs the Android-side agent, see `android_agent/` |
+| Multi-instance | **NOT STARTED** | deliberately, per stage 12 |
 
-Реестр модулей — в коде (`src/core/module.cpp`), печатается бинарником и генерирует
-`docs/modules.generated.md`:
+The specification is explicit: a stage is not finished because code exists, it
+is finished when the documented acceptance test passed **on the target
+machine**. Everything below the "VERIFIED" line above requires your laptop.
 
-```console
-$ bonk modules
-id        stage  status       depends on            title
----------------------------------------------------------------------
-core      0      done         -                     Core utilities
-net       1      in-progress  core                  Networking
-html      1      in-progress  core                  HTML parser
-dom       1      in-progress  core, html            DOM
-text      2      in-progress  core                  Text & fonts
-css       2      in-progress  dom                   CSS
-layout    2      in-progress  css, dom, text        Layout
-paint     2      in-progress  layout, text          Paint
-...
-```
+## What actually runs right now
 
-## Быстрый старт
-
-Нужен компилятор с C++20 (g++ ≥ 12 / clang ≥ 15) и GNU make. Ничего скачивать не нужно.
+Diagnostics are real and read-only. From this container:
 
 ```console
-$ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 271 юнит-тест
-$ make verify             # тесты + selftest + проверка актуальности docs
-$ make MODE=release -j
-$ make SAN=address,undefined test   # ASan + UBSan
+$ lynxdroid doctor --quiet
+▲ WARNING Linux distribution    Debian GNU/Linux 12 (bookworm)
+           next: this build targets CachyOS/Arch; other distributions need
+                 different package and service handling …
+? UNKNOWN Wayland compositor    no graphical session detected
+✘ ERROR   XDG runtime directory missing
+✘ ERROR   Android Binder IPC    this kernel was built without CONFIG_ANDROID_BINDER_IPC
+? UNKNOWN DRM GPU device        /sys/class/drm is absent (no DRM subsystem)
+? UNKNOWN waydroid CLI          waydroid not found and the package manager is unknown
+✘ ERROR   Android images        no Android images installed yet
+
+verdict: BLOCKED - these required checks are not OK:
+  - kernel.binder: this kernel was built without CONFIG_ANDROID_BINDER_IPC
+  - waydroid.binary: waydroid not found and the package manager is unknown
+  …
 ```
 
-CMake-путь (IDE/CI):
+Note the three-way distinction the specification demands: **ERROR** (checked,
+missing), **UNKNOWN** (could not determine), **WARNING** (works with a caveat).
+Nothing is reported as "unsupported" just because we could not look.
 
-```console
-$ cmake -S . -B build-cmake -DCMAKE_BUILD_TYPE=Release
-$ cmake --build build-cmake -j && ctest --test-dir build-cmake --output-on-failure
+## Install
+
+### On CachyOS / Arch (the target)
+
+```bash
+# 1. the Android backend itself (upstream package, not ours)
+sudo pacman -S waydroid
+
+# 2. LynxDroid (this project)
+git clone <this repository> lynxdroid && cd lynxdroid
+./scripts/install.sh                 # venv, install, and it verifies itself
+. .venv/bin/activate
+lynxdroid doctor                     # read-only, changes nothing
 ```
 
-### Отрисовать страницу
+`scripts/install.sh` does the venv, the install and a self-check (the CLI
+starts, the test suite passes). It never runs `sudo` and never touches anything
+outside `.venv/`: installing Waydroid and picking a binder-capable kernel are
+your decisions, so it prints them instead of performing them. The long form, if
+you would rather do it yourself:
 
-```console
-$ bonk render tests/fixtures/sample.html -o page.png --width 900 --height 640
-rendered tests/fixtures/sample.html -> page.png (900x640, nodes=70, css-rules=10,
-         font=/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf, doc-height=562)
+```bash
+python -m venv .venv && . .venv/bin/activate
+pip install -e '.[gui,dev]'          # [gui] pulls PySide6
 ```
 
-Полезные флаги: `--font PATH` (или `BONK_FONT`), `--css extra.css`, `--debug-boxes`
-(контуры всех блочных боксов), `--dump-layout` (дерево боксов с геометрией), `--diagnostics`.
+Kernel requirement: `CONFIG_ANDROID_BINDER_IPC` and (preferably)
+`CONFIG_ANDROID_BINDERFS`. `linux-cachyos`, `linux-cachyos-lts` and `linux-zen`
+provide them; `lynxdroid doctor` tells you what **your** running kernel has
+instead of assuming.
 
-### JavaScript
+### Anywhere else
 
-```console
-$ bonk js 'var s = 0; for (var i = 1; i <= 10; i++) s += i; s'
-55
-$ bonk js script.js                      # файл или выражение — что найдётся на диске
-$ bonk view docs/demo/js.html --screenshot js-demo.png --click 57,286
+The CLI, doctor and the entire test suite need only the standard library:
+
+```bash
+pip install -e .                     # no PySide6, no Qt
+lynxdroid doctor --json | jq .
+pytest                               # 928 collected; Qt tests may skip without native libraries
 ```
 
-`docs/demo/js.html` целиком строится скриптом: карточки через
-`document.createElement/appendChild`, счётчик кликов через `addEventListener`, классы через
-`classList`. Скриншоты: [`docs/demo/js-demo.png`](docs/demo/js-demo.png) (после загрузки) и
-[`docs/demo/js-demo-click.png`](docs/demo/js-demo-click.png) (после клика) — это полный цикл
-JS → DOM → CSS → layout → paint.
+The GUI is an optional extra on purpose: the interesting logic lives in
+`gui/viewmodel.py` and is tested without Qt.
 
-### Остальные команды
+## First run
 
-```console
-$ bonk view page.html         # открыть страницу в окне X11 (свой X11-клиент)
-$ bonk view page.html --screenshot view.png --scroll 120 --click 40,60   # headless
-$ bonk js 'console.log("hi", 1 + 1)'   # запуск скрипта своим JS-движком
-$ bonk dom page.html          # разобранное DOM-дерево в консоль
-$ bonk fetch http://host/     # HTTP/1.1 GET: статус, заголовки, размер тела
-$ bonk modules --stage 2      # что входит в этап
-$ bonk version --full         # версия + тулчейн
-$ bonk selftest               # 23 быстрые проверки инвариантов рантайма
+```bash
+lynxdroid doctor                 # 1. what does this machine actually support?
+lynxdroid image plan             # 2. sources, licence, size, disk check (no download)
+lynxdroid status                 # 3. backend state, layers separately
+lynxdroid start                  # 4. bring Android up (waits for real boot completion)
+lynxdroid show                   #    optionally: open the Android window
+lynxdroid apps list              # 5. installed packages
+lynxdroid display presets        # 6. viewport options
+lynxdroid display set 1280 712 240 --yes
+lynxdroid gui                    # 7. the window
 ```
 
-Коды возврата: `0` — успех, `1` — ошибка рендера/проверки, `2` — ошибка использования.
+To start the window from the application menu instead of a terminal:
 
-## Структура
-
-```
-include/bonk/          публичные заголовки по модулям
-  core/                Result/Status, UTF-8, строки, арена, диагностика, реестр модулей
-  crypto/              свой SHA-256/HMAC/HKDF, ChaCha20-Poly1305, X25519 (проверено на RFC)
-  net/                 url, http, tls (свой TLS 1.3), x509, gzip
-  html/                tokenizer, entities, html (tree builder)
-  dom/                 dom, selector
-  css/                 css (парсер, каскад, computed style)
-  text/                font (TrueType + растеризация глифов)
-  image/               image (свой inflate RFC 1951/1950 + PNG-декодер, хранилище картинок)
-  layout/              layout (block/inline, box model)
-  paint/               canvas (RGBA8 + PNG/PPM), render (боксы → пиксели)
-  shell/               shell (сессия, история, скролл, клики), x11 (свой клиент X11-протокола)
-  js/                  js (лексер, AST, tree-walking интерпретатор, встроенные объекты)
-  bindings/            bindings (window, document, обёртки элементов, события, инлайновые скрипты)
-  apps/                pipeline (HTML → PNG за один вызов), cli, main
-src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
-tests/                 свой фреймворк + 271 тест + tests/fixtures/
-docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
-.github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
+```bash
+./scripts/install-desktop-entry.sh          # user-level, no sudo
+./scripts/install-desktop-entry.sh --remove
 ```
 
-Правила слоёв: `core` не зависит ни от чего; `net`/`html`/`js`/`text` зависят только от `core`;
-`dom` ← `html`; `css` ← `dom`; `layout` ← `css`+`text`; `paint` ← `layout`;
-`bindings` ← `js`+`dom`; UI (`shell`) — сверху.
+The entry is written to `$XDG_DATA_HOME/applications` with an `Exec` line that
+names the interpreter which can actually import the package, so it keeps
+working from a session where no virtualenv is active.
 
-## Документация
+`lynxdroid start` waits for `sys.boot_completed=1` inside the guest. A running
+session process is **not** reported as "Android running" - see `Snapshot`
+readiness layers (`process`, `container`, `android`).
 
-- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) — слои, контракты, модель памяти, потоки.
-- [`docs/STAGE-01-02.md`](docs/STAGE-01-02.md) — что именно работает в сети/HTML/CSS/layout/paint и чего нет.
-- [`docs/STAGE-02B.md`](docs/STAGE-02B.md) — TLS 1.3 своими руками, криптоядро на векторах RFC, gzip, границы проверки сертификатов.
-- [`docs/STAGE-03.md`](docs/STAGE-03.md) — оболочка: сессия, навигация, скролл, клики и свой X11-протокол.
-- [`docs/STAGE-04.md`](docs/STAGE-04.md) — JS-движок и биндинги: что поддержано, что нет, как проверить.
-- [`docs/STAGE-00.md`](docs/STAGE-00.md) — фундамент и инфраструктура.
-- [`docs/ROADMAP.md`](docs/ROADMAP.md) — этапы 0–7 с критериями выхода.
-- [`docs/modules.generated.md`](docs/modules.generated.md) — таблица модулей из кода.
-- [`docs/adr/`](docs/adr/) — архитектурные решения.
+## The four things people confuse
 
-## Соглашения
+Stage 7 of the specification asks for this to be separated, and it is, in code:
 
-- Комментарии и имена в коде — английский; документация — русский.
-- Ошибки: `Result<T>`/`Status`, без исключений в коде движка; ошибки разбора — в `Diagnostics`.
-- Память: индексные пулы в документе + генерационные `NodeId`; никаких сырых указателей в API.
-- Каждый модуль поставляется с юнит-тестами и запускаемым способом проверки результата.
+| Concept | Changed by | Takes effect | Our type |
+|---|---|---|---|
+| Video buffer size | `persist.waydroid.width/height` | after session restart | `DisplayRequest` |
+| Android logical viewport | `wm size` | live, ignored by some apps | `ApplyMode.LIVE` |
+| Density | `wm density` | live | `DisplayRequest.dpi` |
+| Window scale | our window, `fit` mode | immediately | `ViewportGeometry` |
+
+`FitMode.CONTAIN` letterboxes with genuinely black bars, and a pointer on a bar
+returns `None` from `widget_to_android()` - it can never become a touch.
+
+## Keyboard → multitouch
+
+In the desktop **Layout** tab, create a profile for the Android package, select
+**Add key…**, choose Tap or Hold, enter a supported key, drag the new control
+into place, and press **Save**. Use **Add movement…** to bind four keys in
+up, right, down, left order (for example `W, D, S, A`). Select a control and
+choose **Remove** to remove it. Hold and movement require a channel capable
+of held contacts. The Qt workflow
+and real Android input still need testing on the target desktop.
+
+`input/engine.py` is the core of the product. Its guarantees are unit-tested:
+
+1. Every contact that goes down eventually goes up **or** cancels - including
+   on focus loss, profile switch, geometry change and backend failure.
+2. A pointer id is never reused while its contact is open.
+3. D-pad diagonals are normalised: `W+D` never exceeds the configured radius.
+4. Releasing one of two held directions keeps the other.
+5. A tap is one down/up pair at one point; OS auto-repeat cannot flood it.
+6. `set_geometry` / `set_profile` release everything first - no event is ever
+   computed against a half-changed mapping.
+
+What the *transport* can do is a separate, honest question
+(`input/channels.py`):
+
+| Channel | Simultaneous touches | Why |
+|---|---|---|
+| `agent` (our APK) | up to 10 | real `MotionEvent`s; needs `INJECT_EVENTS` |
+| `adb-shell` | **1** | `input tap` is sequential; the UI disables the overlay |
+| `null` | 0 | no backend; events are recorded, not delivered |
+
+The overlay refuses to activate on a single-contact channel instead of
+silently producing taps that make a game unplayable.
+
+## Commands
+
+| Command | What it does |
+|---|---|
+| `lynxdroid doctor [--json] [--strict] [--area X]` | read-only host + backend report |
+| `lynxdroid status [--json]` | lifecycle state with per-layer readiness |
+| `lynxdroid start` / `stop` / `show` | session control, waits for real readiness; `show` opens the Android window |
+| `lynxdroid apps list/launch/install` | package management with consent gates |
+| `lynxdroid display show/set/presets` | viewport properties, previous values recorded |
+| `lynxdroid profiles list/validate/export/rename/import/delete` | layout profiles, atomic writes |
+| `lynxdroid image plan/prepare` | OTA images: consent, checksum honesty, never writes `/var/lib` |
+| `lynxdroid perf` | times our own pipeline in µs; states what it did **not** measure |
+| `lynxdroid gui` | PySide6 shell (also installed as `lynxdroid-gui`) |
+| `lynxdroid version --json` | version and schema numbers |
+
+Exit codes are documented in `--help`: `0` ok, `1` failure, `2` usage,
+`3` missing dependency, `4` permission, `5` unsupported, `6` blocked.
+
+## Security posture in one paragraph
+
+Everything runs as your user. The GUI never needs root. Commands are executed
+with explicit `argv` lists (`shell=True` is banned project-wide), properties
+are namespaced and validated, persistent writes require `consent=True`, APKs
+must be regular files with `PK` magic and a size bound, profile paths are
+resolved and checked against symlink escapes, and the touch agent speaks
+length-prefixed JSON over a **unix socket**, never a TCP port. Details and
+threat model: [`docs/SECURITY.md`](docs/SECURITY.md).
+
+## Documentation
+
+| File | Contents |
+|---|---|
+| [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) | layers, dependency rules, backend contract, data flow |
+| [`docs/REQUIREMENTS.md`](docs/REQUIREMENTS.md) | requirement registry with P0/P1, test, status |
+| [`docs/TESTING.md`](docs/TESTING.md) | what runs where, how to reproduce, target-machine procedures |
+| [`docs/SECURITY.md`](docs/SECURITY.md) | trust boundaries, privileged paths, threat model |
+| [`docs/KNOWN_ISSUES.md`](docs/KNOWN_ISSUES.md) | every limitation, honestly |
+| [`docs/CLI.md`](docs/CLI.md) | full command and exit-code reference |
+| [`docs/SETTINGS.md`](docs/SETTINGS.md) | every setting, its default, and the module that reads it |
+| [`docs/PERFORMANCE.md`](docs/PERFORMANCE.md) | what was measured, in µs; what was not measured and why |
+| [`docs/ROADMAP.md`](docs/ROADMAP.md) | stage-by-stage state against the 20-stage plan |
+| [`android_agent/README.md`](android_agent/README.md) | the Android-side touch agent and its protocol |
+
+## Licences
+
+LynxDroid's own code: MIT (see `LICENSE`). Waydroid: GPL-3.0, used as an
+installed dependency through its public CLI, not linked or vendored. Android
+images: built from LineageOS sources; the GAPPS variant contains
+Google-proprietary parts that this project never redistributes. See
+[`docs/LICENSES.md`](docs/LICENSES.md).
+
+## Not in scope
+
+Screen recording, screenshots, GPS spoofing, bots, anti-cheat circumvention,
+bundled Google Play, redistributed images. The product goal is a working
+Android container with proven input and graphics, not a pretty installer.
+
+### Browser preview of the launcher
+
+Run `python scripts/preview_server.py` and open port 8080 to see the HTML/CSS/JS
+visual copy. It automatically reloads when preview files change. Keep
+`web-preview/` synchronized whenever the Qt launcher changes. The browser
+preview has a separate local library of filenames only; files are not uploaded,
+installed, or shared with the desktop launcher. Browser security prevents it
+from opening the APK folder, showing its real path, or controlling the window.
+The preview does not run Android applications. The artwork is a copy of
+`src/lynxdroid/data/launcher-bg.jpg` and must be updated alongside it.
+The same applies to `desktop-bg.jpg`. Control templates in the preview are
+separate browser data, not shared with the desktop launcher.
+
+The touch-message encoder is adapted from [scrcpy](https://github.com/Genymobile/scrcpy)
+revision `a60891aea193d92e7e5c3942700eca63f9d19a5f`, Apache-2.0; its license
+is in `licenses/scrcpy-APACHE-2.0.txt`. It is a codec, not an Android runtime,
+and has not been tested against a real scrcpy server. An experimental transport
+accepts only a caller-supplied, already connected control socket; it is not
+connected to the launcher, does not start or discover a server, and cannot
+confirm injection. It is tested with local socket pairs, not an Android device.
+
+Browser preview profiles are separate from desktop data and use APK filenames
+(browsers do not reveal real paths); names must be unique in the preview.

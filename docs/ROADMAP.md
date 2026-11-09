@@ -1,118 +1,75 @@
-# Дорожная карта
+# Roadmap against the 20-stage plan
 
-Один этап за раз: каждый заканчивается работающей, проверяемой функциональностью и обновлением
-`ModuleInfo::status` в `src/core/module.cpp` (после этого — `make docs`).
+## Direction change: standalone runtime
 
-## Этап 0 — Фундамент ✅
+The user has replaced the Waydroid-based goal with an independent Android
+runtime. The **current first milestone** is a standalone fullscreen-capable
+launcher with a real local APK library. It does not use Waydroid and does not
+install or run Android apps. A new runtime architecture, rendering, input,
+Android compatibility and performance validation are **not yet implemented**.
+The table below is historical for the previous Waydroid-based plan and does
+not imply those stages complete the new standalone goal.
 
-**Готово**
+State of each stage, in the specification's own vocabulary. Nothing is marked
+done on the basis of "the code exists".
 
-- Workspace: `include/bonk`, `src/<module>`, `tests`, `docs`, CI.
-- Сборка: `Makefile` (канонический, без зависимостей) + `CMakeLists.txt` (IDE/CI).
-- Ядро: `Result/Status`, UTF-8 (WHATWG-совместимое декодирование), ASCII-строки, арена,
-  диагностика, реестр модулей, версия, selftest.
-- CLI `bonk` с командами `modules`, `version`, `selftest`, `help`; коды возврата 0/1/2.
-- Тест-фреймворк (~180 строк) + 62 теста; ASan/UBSan чисто.
-- CI: `make` × {gcc, clang} × {debug, release}, санитайзеры, `-Werror`, `cmake`+`ctest`,
-  проверка актуальности генерируемой документации.
+Legend: **DONE** = implemented and verified by automated tests · **PARTIAL** =
+implemented, target-machine verification outstanding · **BLOCKED** = needs the
+CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 
-**Критерий выхода**: `make verify` зелёный на чистом клоне. ✔
+| Stage | Subject | State | Notes |
+|---|---|---|---|
+| 1 | Quality rules, requirement registry, stage gates | **DONE** (criteria checked) | `docs/REQUIREMENTS.md` with P0/P1, test, status; `docs/STAGE-CRITERIA.md` lists every criterion as HERE, CI or TARGET, and `tests/test_stage_criteria.py` fails when a HERE criterion cites a test that does not exist |
+| 2 | Goal and target machine profile | **DONE** (2.3 open) | facts and a verdict kept apart: `doctor` reports what it saw, `profile` decides what it means; five preconditions, worst-verdict rule, `UNKNOWN` never rounded up to `READY`; the CachyOS run (`profile --json`) is still outstanding |
+| 3 | CachyOS / kernel diagnostics | **PARTIAL** | `lynxdroid doctor` complete and read-only; verified in a Debian container, target run pending |
+| 4 | Architecture, images, backend contract | **DONE** | `backend/contract.py`, `backend/images.py` with consent gate; process/trust-boundary diagram in `ARCHITECTURE.md §1` |
+| 5 | First real Android start | **BLOCKED** | start/stop implemented with real boot detection; cannot run without the laptop |
+| 6 | Window, image, scaling | **PARTIAL** | geometry engine verified (44 tests); Qt window written, never displayed here |
+| 7 | Resolution, DPI, properties | **DONE** | four concepts separated, validation + apply modes + rollback values; live verification blocked |
+| 8 | Base input, Wayland verification | **PARTIAL** | engine + channels done; multitouch transport needs the agent on a device |
+| 9 | Keyboard layout editor | **PARTIAL** | model, codec, store, CLI; GUI add/remove tap, hold or keyboard movement, drag-and-drop, selection and unsaved-changes handling implemented in Qt-free `gui/editor.py` and window callback tests (85 tests); the widgets themselves have never been displayed |
+| 10 | Simultaneous presses, multitouch | **PARTIAL** | state machine and pointer allocation verified; real device test blocked |
+| 11 | Intel Iris Xe, laptop optimisation | **BLOCKED** | host GPU checks written; nothing can be measured without the GPU |
+| 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance `UNTESTED`; game error matching, limited network and root observations with manual output review available in CLI/Game help (desktop unverified), unverified property changes disabled (`docs/COMPATIBILITY.md`) |
+| 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
+| 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
+| 15 | Testing and quality criteria | **DONE** | 928 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+| 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
+| 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
+| 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |
+| 19 | C++ port and verification | **NOT STARTED** | gated on stage 17, per stage 17's own rule |
+| 20 | Build, results, sources | **PARTIAL** | docs written; `scripts/install.sh` is reproducible and runs in CI on a clean runner, but a verified install **on CachyOS** is still pending |
 
-## Этап 1 — net + html + dom
+## Why the C++ stage has not begun
 
-- `url`: парсер по WHATWG (схемы, host/IDNA-заготовка, percent-encoding, relative + base).
-- `net`: DNS (`getaddrinfo`), TCP, HTTP/1.1 (chunked, keep-alive, redirects, gzip), cookies,
-  кэш, стриминг тела; TLS — свой минимум (TLS 1.3: ClientHello, X25519, AES-GCM) или
-  документированный системный бэкенд.
-- `html`: полный токенайзер + tree builder (insertion modes, foster parenting, entities).
-- `dom`: Node/Element/Text/Document, генерационные `NodeId`, атрибуты, `innerHTML`,
-  `querySelector` (пока простой: tag/id/class), события capture/bubble, MutationObserver.
-- CLI: `bonk fetch URL --dump-dom`, `bonk fetch URL --dump-tree`, `--diagnostics`.
+Stage 17 is explicit: "Without an end-to-end check on the user's device, the
+C++ migration does not begin." This environment has no Waydroid, no GPU, no
+Wayland and no access to the laptop. Starting a C++ rewrite now would produce a
+second unverified implementation, which is precisely what the specification
+forbids.
 
-**Сделано (ядро)**: `net::Url` (WHATWG-подмножество + RFC 3986), HTTP/1.1 (chunked, redirects,
-таймауты), HTML-токенайзер и tree builder с неявными html/head/body и implied end tags,
-DOM на индексных пулах с генерационными `NodeId`, `querySelector` с атрибутными и
-псевдо-селекторами. Подробности и пробелы — [`STAGE-01-02.md`](STAGE-01-02.md).
+The Python code is nevertheless structured for that migration: layers map 1:1
+onto planned C++ targets, and the JSON profile schema is the compatibility
+contract that both sides will be tested against.
 
-**Сделано (2b)**: свой TLS 1.3 (ChaCha20-Poly1305 + x25519) на собственном криптоядре,
-X.509 (SAN/срок/имя хоста), gzip/deflate — `https://` работает.
+## What would move each BLOCKED stage
 
-**Осталось до выхода с этапа**: проверка подписи сертификатов и цепочки доверия,
-cookies/кэш/keep-alive, foster parenting + adoption agency, события и MutationObserver,
-прогон html5lib-tests.
-
-## Этап 2 — css + text + layout + paint
-
-- `text`: TTF/OTF (offset table, cmap, glyf, loca, hmtx), растеризация глифов с
-  antialiasing, кернинг, перенос строк, bidi-заготовка.
-- `css`: токенайзер, парсер (правила, at-rules), селекторы (class/id/attr/комбинаторы/
-  псевдоклассы), специфичность, каскад, наследование, единицы, `var()`, `@media`, `@font-face`.
-- `layout`: box model, block/inline formatting, margin collapsing, float, positioning,
-  line boxes, переполнение/скролл.
-- `paint`: CPU-растеризатор (fill, borders, radius, gradient, shadow, clip), PNG-декодер
-  (inflate свой), peek в JPEG/GIF/WebP, stacking contexts, вывод в PPM/PNG для проверки.
-- CLI: `bonk render URL -o out.png --width 1024 --height 768`.
-
-**Сделано (ядро)**: CSS-парсер, каскад со специфичностью и наследованием, `@media`,
-computed values с `em/rem`; TrueType-парсер и растеризация глифов с антиалиасингом;
-блочный и inline-layout со схлопыванием margin'ов, переносом строк и `text-align`;
-программный растеризатор с альфа-смешиванием и свой PNG-энкодер.
-`bonk render tests/fixtures/sample.html -o page.png` рисует страницу (см. README).
-
-**Осталось до выхода с этапа**: декодеры PNG/JPEG/GIF/WebP для `<img>`, шейпинг и bidi,
-`var()`/`calc()`, псевдоэлементы, эталонные скриншоты для регрессий.
-
-## Этап 3 — shell
-
-- Окно (SDL2), вкладки, адресная строка с поиском, назад/вперёд/обновить, история, закладки,
-  загрузки, настройки, тёмная тема, полноэкранный режим, скролл колесом/клавиатурой, хиты по
-  ссылкам и полям.
-
-**Критерий выхода**: двумя кликами можно открыть локальную страницу, перейти по ссылке,
-прокрутить её, открыть вторую вкладку.
-
-## Этап 4 — js + bindings
-
-- `js`: лексер, парсер в AST, tree-walking интерпретатор, объектная модель (прототипы,
-  замыкания, accessor-свойства), `Object/Array/String/Number/Math/JSON/console/Error`,
-  `setTimeout`. **Сделано ядро** (`src/js/{parse,interp}.cpp`, `include/bonk/js/js.hpp`).
-- `bindings`: `window`, `document`, обёртки элементов (`textContent`, `innerHTML`, `classList`,
-  `style`, `appendChild`, …), события с всплытием, инлайновые `<script>`.
-  **Сделано ядро** (`src/bindings/bindings.cpp`).
-- Впереди (этап 5–7): `class`, `switch`, regex, `Promise`/`async`, `Map/Set/Date`, байткод,
-  tracing GC, `fetch`/`XHR`/`localStorage`, Canvas 2D, микро- и макротаски.
-
-**Критерий выхода**: проходит подмножество test262 (базовый синтаксис + встроенные объекты),
-страница со счётчиком на `addEventListener` и `fetch` работает.
-Сейчас: счётчик на `addEventListener` работает (`tests/bindings/bindings_test.cpp`,
-`docs/demo/js-demo-click.png`), test262 и `fetch` — впереди.
-
-## Этап 5 — flexbox/grid, Canvas, формы, cookies, storage
-
-Flexbox и Grid в `layout`, Canvas 2D в `paint`+`bindings`, формы (`input`, `select`,
-`textarea`, отправка GET/POST), cookies в `net`, `localStorage`/`sessionStorage`.
-
-**Критерий выхода**: типовой лендинг на flexbox+grid с формой и сохранением состояния.
-
-## Этап 6 — безопасность, процессы, devtools
-
-Same-Origin Policy, CORS, CSP (базово), mixed content, индикатор HTTPS, процесс на вкладку +
-IPC, devtools (консоль, инспектор DOM/CSS, сеть), профилирование и оптимизация.
-
-**Критерий выхода**: кросс-доменный `fetch` без CORS-заголовков блокируется; падение вкладки
-не убивает браузер; devtools показывает сетевой waterfall.
-
-## Этап 7 — конформность
-
-Acid2, html5lib-tests (полностью), test262, WPT (по возможностям) и непрерывные баг-фиксы.
-
----
-
-## Риски и как их снимаем
-
-| Риск | Снятие |
+| Stage | Unblocking evidence |
 |---|---|
-| TLS «с нуля» — самая дорогая часть `net` | этап 1 даёт HTTP; TLS — отдельный подэтап 1b с тестами против локального сервера, допускается документированный системный бэкенд |
-| Шрифты: TTF-парсер и hinting | начинаем с растеризации без hinting, hinting — опция; фикстуры со сравнением с эталонными bitmap'ами |
-| JS-движок съедает больше всех времени | строгий порядок: парсер → интерпретатор → встроенные объекты; оптимизации только после test262-подмножества |
-| Производительность layout | арена + пул layout-боксов, ре-лейаут по «грязным» поддеревьям, бенчмарк в CI с порогом |
+| 3, 5 | `lynxdroid doctor --json` and `lynxdroid start` output from the CachyOS laptop |
+| 6, 17 | a screenshot of the window and a note on which coordinates landed where |
+| 8, 10 | a touch-test app showing two simultaneous contacts, with the agent installed |
+| 11 | `dumpsys SurfaceFlinger` renderer line plus a 1080p/720p comparison |
+| 12 | confirmation that a second instance is not required for the MVP |
+| 13 | a baseline run recorded with the procedure in `TESTING.md` |
+
+## Next concrete steps
+
+1. **Verify on the target machine.** Until then everything above is a claim,
+   and this document says so.
+2. Finish the layout editor: drag-and-drop, resize handles, per-element
+   inspector, orientation-specific variants.
+3. Expose aim mode and analog d-pad in the UI (engine support already exists
+   and is tested).
+4. Only then: the C++/Qt 6 port, module by module, each one gated on a
+   Python-vs-C++ comparison on shared fixtures.

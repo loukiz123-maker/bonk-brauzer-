@@ -1,0 +1,115 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lynxdroid"
+# Single source of truth: the version lives in src/lynxdroid/version.py and is
+# read from there, so the package and the metadata cannot drift apart.
+dynamic = ["version"]
+description = "LynxDroid desktop launcher; standalone Android runtime in development"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "licenses/scrcpy-APACHE-2.0.txt"]
+authors = [{ name = "LynxDroid project" }]
+keywords = ["android", "launcher", "linux", "games"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Environment :: Console",
+  "Environment :: X11 Applications :: Qt",
+  "Intended Audience :: End Users/Desktop",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3 :: Only",
+  "Topic :: Desktop Environment",
+]
+
+# Runtime dependencies: none. The control layer is standard library only.
+# The graphical shell needs PySide6 and is declared as an extra so that the
+# CLI, doctor and all unit tests run on a machine without Qt installed.
+dependencies = []
+
+[project.optional-dependencies]
+gui = ["PySide6>=6.6"]
+# Floors are the versions this repository was verified with; CI installs
+# these or newer. Ruff's rule set changes between releases, so the floor is
+# deliberately close to tested, and pyproject pins the rule selection.
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.10"]
+
+[project.scripts]
+lynxdroid = "lynxdroid.cli.main:main"
+
+[project.gui-scripts]
+lynxdroid-gui = "lynxdroid.gui.app:main"
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.dynamic]
+version = { attr = "lynxdroid.version.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+lynxdroid = ["py.typed", "data/*.json", "data/*.jpg"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+addopts = "-ra --strict-markers --strict-config"
+markers = [
+  "gui: needs PySide6 (skipped automatically when Qt is absent)",
+  "privileged: would touch system state; never runs in CI",
+  "target: must run on the user's CachyOS machine, never in a container",
+]
+filterwarnings = ["error"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+  "E", "F", "W",      # pycodestyle / pyflakes
+  "I",                # import sorting
+  "B",                # bugbear
+  "UP",               # pyupgrade
+  "SIM",              # simplify
+  "RET",              # return
+  "C4",               # comprehensions
+  "PTH",              # use pathlib
+  "RUF",              # ruff-specific
+  "S",                # bandit security
+  "T20",              # no print in library code
+  "ARG",              # unused arguments
+  "DTZ",              # naive datetimes
+]
+# Justified exceptions, each with the reason it cannot be "fixed":
+#   S603/S607  subprocess with an explicit argv list is the whole point; see core/proc.py
+#   S310       the only urllib use is the consented OTA download with hardcoded https URLs
+#   ARG001..5  CLI handlers share one signature (args, paths, store) by design; Qt signal
+#              handlers receive arguments they do not use (Qt's API, not ours)
+#   RUF001     "×" (MULTIPLICATION SIGN) is intentional in UI text: "1280×720"
+ignore = ["S603", "S607", "S310", "ARG001", "ARG002", "ARG005", "RUF001"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S106", "ARG001", "ARG002"]
+"src/lynxdroid/cli/*" = ["T20"]
+"src/lynxdroid/gui/*" = ["T20"]
+# The atomic-replace call is named explicitly so failure-injection tests can
+# patch it; Path.replace() hides it behind a method call. See storage.py.
+"src/lynxdroid/core/storage.py" = ["PTH105"]
+
+[tool.mypy]
+python_version = "3.10"
+packages = ["lynxdroid"]
+strict = true
+warn_unreachable = true
+disallow_any_generics = true
+no_implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = ["PySide6.*"]
+ignore_missing_imports = true
