@@ -6,3 +6,6 @@
 .tool-rail{width:54px;flex:none;display:flex;flex-direction:column;gap:8px;padding:12px 5px;background:#10151e;border-left:1px solid #253344}.tool-rail button{background:transparent;border:0;border-radius:6px;padding:10px 5px;color:#a5b5c7;font-size:19px}.tool-rail button:hover{color:#79e8da;background:#19313c}.tool-spacer{flex:1}.page.editor-page{padding:0;min-height:calc(100vh - 68px);display:flex;flex-direction:column;background:#18191b}.page.editor-page[hidden]{display:none}.editor-page .editor-layout{flex:1;min-height:450px}.editor-page .editor-side{padding:4px}.editor-page .dialog-title{flex:none}@media(max-width:700px){.tool-rail{width:42px;padding:10px 3px}.editor-page .editor-layout{min-height:650px}}
 
 .tool-rail .nav {text-align:center}.tool-rail .nav.active{background:#19313c;color:#79e8da}
+
+/* White button labels, including the right-hand toolbar. Disabled actions remain muted. */
+button:enabled{color:#fff}.primary:enabled{color:#fff;background:#146d70;border-color:#146d70}.primary:hover:enabled{background:#20848a}.tool-rail button:enabled,.tool-rail button:hover:enabled,.tool-rail .nav.active{color:#fff}

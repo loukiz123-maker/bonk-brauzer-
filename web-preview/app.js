@@ -75,7 +75,11 @@ async function fullscreen() {
   catch { message('Полный экран недоступен в этом браузере или окне предпросмотра.'); }
 }
 $('#fullscreen').addEventListener('click', fullscreen);
-document.addEventListener('fullscreenchange', () => { $('#fullscreen').textContent = document.fullscreenElement ? '⛶  Выйти из полного экрана' : '⛶  Полный экран'; });
+document.addEventListener('fullscreenchange', () => {
+  const title = document.fullscreenElement ? 'Выйти из полного экрана (Esc)' : 'Полный экран (F11)';
+  $('#fullscreen').textContent = document.fullscreenElement ? '❐' : '⛶';
+  $('#fullscreen').title = title; $('#fullscreen').setAttribute('aria-label', title);
+});
 document.addEventListener('keydown', (event) => { if (event.key === 'F11') { event.preventDefault(); fullscreen(); } });
 render();
 // Draft layouts are stored only in this browser, never applied to Android.

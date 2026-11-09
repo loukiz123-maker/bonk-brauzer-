@@ -116,9 +116,12 @@ def test_import_search_and_remove_without_deleting_file(
 
 
 def test_fullscreen_and_escape(window, qt_app) -> None:
-    window.toggle_fullscreen()
+    assert window.fullscreen_button.parentWidget() is window.controls_tool.parentWidget()
+    assert window.fullscreen_button.text() == "⛶"
+    window.fullscreen_button.click()
     qt_app.processEvents()
     assert window.isFullScreen() and window.escape_shortcut.isEnabled()
+    assert window.fullscreen_button.text() == "❐"
     window.escape_shortcut.activated.emit()
     qt_app.processEvents()
     assert not window.isFullScreen() and not window.escape_shortcut.isEnabled()

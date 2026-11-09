@@ -37,20 +37,20 @@ QFrame#header { background: #101823; border-bottom: 1px solid #253344; }
 QFrame#sidebar { background: #0d1520; border-right: 1px solid #253344; }
 QFrame#tools { background: #10151e; border-left: 1px solid #253344; }
 QPushButton#tool { background: transparent; border: 0; border-radius: 6px;
-    padding: 10px 5px; font-size: 19px; color: #a5b5c7; }
-QPushButton#tool:hover, QPushButton#tool:checked { background: #19313c; color: #79e8da; }
+    padding: 10px 5px; font-size: 19px; color: #ffffff; }
+QPushButton#tool:hover, QPushButton#tool:checked { background: #19313c; color: #ffffff; }
 QFrame#card { background: #141f2d; border: 1px solid #293b4c; border-radius: 14px; }
 QLabel#brand { color: #f4f9ff; font-size: 19px; font-weight: 800; }
 QLabel#title { font-size: 30px; font-weight: 800; color: #f7fbff; }
 QLabel#section { font-size: 20px; font-weight: 700; }
 QLabel#muted { color: #a5b5c7; }
 QLabel#badge { color: #81e4cf; background: #173638; border-radius: 9px; padding: 6px 10px; }
-QPushButton { background: #1b2a3a; border: 1px solid #30475b;
+QPushButton { color: #ffffff; background: #1b2a3a; border: 1px solid #30475b;
     border-radius: 9px; padding: 10px 16px; font-weight: 600; }
 QPushButton:hover:enabled { background: #263d50; border-color: #65d5d0; }
 QPushButton:disabled { color: #718092; background: #18212d; border-color: #26313f; }
-QPushButton#primary { background: #58d7cb; color: #071b1e; border: 0; font-weight: 800; }
-QPushButton#primary:hover { background: #83eee2; }
+QPushButton#primary { background: #146d70; color: #ffffff; border: 0; font-weight: 800; }
+QPushButton#primary:hover { background: #20848a; }
 QPushButton#nav { text-align: left; background: transparent; border: 0; padding: 13px 15px; }
 QPushButton#nav:checked { background: #19313c; color: #79e8da; }
 QLineEdit, QListWidget { background: #111b28; border: 1px solid #293b4c;
@@ -103,9 +103,6 @@ class LauncherWindow(QMainWindow):
         top.addWidget(label("LAUNCHER  /  EARLY ACCESS", "muted"))
         top.addStretch()
         top.addWidget(label("ДВИЖОК В РАЗРАБОТКЕ", "badge"))
-        self.fullscreen_button = QPushButton("⛶  Полный экран")
-        self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
-        top.addWidget(self.fullscreen_button)
         minimize = QPushButton("—")
         minimize.setToolTip("Свернуть окно")
         minimize.clicked.connect(self.showMinimized)
@@ -128,6 +125,12 @@ class LauncherWindow(QMainWindow):
         tools.setFixedWidth(54)
         tools_layout = QVBoxLayout(tools)
         tools_layout.setContentsMargins(5, 12, 5, 12)
+        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button.setObjectName("tool")
+        self.fullscreen_button.setToolTip("Полный экран (F11)")
+        self.fullscreen_button.setAccessibleName("Полный экран")
+        self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
+        tools_layout.addWidget(self.fullscreen_button)
         self.home_button = QPushButton("⌂")
         self.library_button = QPushButton("▦")
         self.about_button = QPushButton("ⓘ")
@@ -384,7 +387,8 @@ class LauncherWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
-        self.fullscreen_button.setText(
-            "❐  Оконный режим" if self.isFullScreen() else "⛶  Полный экран"
-        )
+        self.fullscreen_button.setText("❐" if self.isFullScreen() else "⛶")
+        title = "Выйти из полного экрана (Esc)" if self.isFullScreen() else "Полный экран (F11)"
+        self.fullscreen_button.setToolTip(title)
+        self.fullscreen_button.setAccessibleName(title)
         self.escape_shortcut.setEnabled(self.isFullScreen())
