@@ -37,6 +37,9 @@ def window(qt_app, tmp_path: Path):
     yield widget
     widget.close()
     qt_app.processEvents()
+    import shiboken6
+
+    shiboken6.delete(widget)
 
 
 def test_navigation_and_disabled_launch(window, qt_app) -> None:
