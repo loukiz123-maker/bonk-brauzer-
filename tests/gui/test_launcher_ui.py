@@ -417,3 +417,28 @@ def test_import_export_layout_is_undoable_and_does_not_save_profile(
     editor.import_button.click()
     assert warnings == ["Ошибка импорта"] and editor.controls[0]["key"] == "G"
     shiboken6.delete(editor)
+
+
+def test_live_mouse_fire_press_and_release(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("Mouse1")
+    editor.place(0.5, 0.5)
+    editor.live_button.click()
+    assert editor.test_engine is not None
+    QTest.mousePress(editor.canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 100))
+    assert len(editor.test_engine.active_pointers) == 1
+    assert "MOUSE1" in editor.status.text()
+    QTest.mouseRelease(editor.canvas, Qt.MouseButton.LeftButton, pos=QPoint(100, 100))
+    assert not editor.test_engine.active_pointers
+    editor.end_live_test()
+    editor.close()
+    shiboken6.delete(editor)

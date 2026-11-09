@@ -117,7 +117,7 @@ function validateTest() {
   for (const control of controls) {
     if (!['Нажатие', 'Огонь', 'Джойстик'].includes(control.kind)) return 'Поддерживаются только нажатие, огонь и джойстик.';
     const keys = controlKeys(control);
-    if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k))) return 'Укажите латинские буквы или цифры. Для джойстика — четыре через запятую.';
+    if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k) && !(control.kind !== 'Джойстик' && ['mouse1', 'mouse2'].includes(k)))) return 'Укажите букву, цифру, Mouse1 или Mouse2. Для джойстика — четыре буквы через запятую.';
     if (control.kind === 'Джойстик' && (control.x < 0.089 || control.x > 0.911 || control.y < 0.089 || control.y > 0.911)) return 'Разместите джойстик немного дальше от края.';
     allKeys.push(...keys);
   }
@@ -128,7 +128,7 @@ function renderControls() {
   const canvas = $('#canvas'); canvas.querySelectorAll('.marker, .touch-point').forEach(m => m.remove());
   controls.forEach((c, index) => {
     const keys = controlKeys(c); const active = keys.some(k => liveHeld.has(k));
-    const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', active); marker.textContent = c.kind === 'Джойстик' ? '✥' : c.key; marker.title = `${c.kind}: ${c.key}`; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker);
+    const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', active); marker.textContent = c.kind === 'Джойстик' ? '✥' : c.key.toLowerCase() === 'mouse1' ? 'ЛКМ' : c.key.toLowerCase() === 'mouse2' ? 'ПКМ' : c.key; marker.title = `${c.kind}: ${c.key}`; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker);
     if (active && c.kind === 'Джойстик') {
       const dx = Number(liveHeld.has(keys[1])) - Number(liveHeld.has(keys[3]));
       const dy = Number(liveHeld.has(keys[2])) - Number(liveHeld.has(keys[0]));
@@ -189,8 +189,8 @@ function canvasPosition(event) {
   return {x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))};
 }
 $('#canvas').addEventListener('pointerdown', event => {
+  if (liveTest) { $('#canvas').focus(); $('#canvas').setPointerCapture(event.pointerId); return; }
   if (event.button !== 0) return;
-  if (liveTest) { $('#canvas').focus(); return; }
   const rect = $('#canvas').getBoundingClientRect();
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   let hit = null;
@@ -212,7 +212,7 @@ $('#canvas').addEventListener('pointermove', event => {
   $('#editor-status').textContent = 'Элемент перемещён • не сохранено'; renderControls();
 });
 $('#canvas').addEventListener('pointerup', () => { dragging = false; });
-$('#canvas').addEventListener('pointercancel', () => { dragging = false; });
+$('#canvas').addEventListener('pointercancel', () => { dragging = false; endLiveTest(); });
 $('#apply-control').addEventListener('click', () => {
   if (selectedControl === null) return;
   const key = $('#control-key').value.trim();
@@ -238,29 +238,48 @@ $('#live-test').addEventListener('click', () => {
   const error = validateTest();
   if (error) { $('#editor-status').textContent = `Проверка невозможна: ${error}`; return; }
   liveTest = true; $('#live-test').textContent = 'Остановить тест'; $('#canvas').focus();
-  $('#editor-status').textContent = 'Тест без Android: нажмите клавишу на поле. Esc — выход.';
+  $('#editor-status').textContent = 'Тест без Android: нажмите клавишу или мышь на поле. Esc — выход.';
 });
-$('#canvas').addEventListener('keydown', event => {
-  if (!liveTest) return;
-  if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
-  const key = event.key.toLowerCase();
-  if (!/^[a-z0-9]$/.test(key) || event.repeat || livePressed.has(key)) return;
+function testDown(key) {
+  if (livePressed.has(key)) return;
   const control = controls.find(c => controlKeys(c).includes(key));
   if (!control) return;
-  event.preventDefault(); livePressed.add(key);
+  livePressed.add(key);
   const wasActive = controlKeys(control).some(k => liveHeld.has(k));
   if (control.kind === 'Огонь' || control.kind === 'Джойстик') liveHeld.add(key);
   const events = control.kind === 'Нажатие' ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
   $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${events} • удерживается: ${activeTouchCount()}`; renderControls();
+}
+function testUp(key) {
+  if (!livePressed.has(key)) return;
+  livePressed.delete(key);
+  if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${activeTouchCount()}`;
+  renderControls();
+}
+$('#canvas').addEventListener('keydown', event => {
+  if (!liveTest) return;
+  if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
+  const key = event.key.toLowerCase();
+  if (!/^[a-z0-9]$/.test(key) || event.repeat) return;
+  event.preventDefault(); testDown(key);
 });
 $('#canvas').addEventListener('keyup', event => {
   if (!liveTest) return;
   const key = event.key.toLowerCase();
-  if (!livePressed.has(key)) return;
-  livePressed.delete(key);
-  if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${activeTouchCount()}`;
-  renderControls(); event.preventDefault();
+  if (!/^[a-z0-9]$/.test(key)) return;
+  testUp(key); event.preventDefault();
 });
+$('#canvas').addEventListener('mousedown', event => {
+  if (!liveTest) return;
+  const key = event.button === 0 ? 'mouse1' : event.button === 2 ? 'mouse2' : '';
+  if (key) { event.preventDefault(); testDown(key); }
+});
+window.addEventListener('mouseup', event => {
+  if (!liveTest) return;
+  const key = event.button === 0 ? 'mouse1' : event.button === 2 ? 'mouse2' : '';
+  if (key) testUp(key);
+});
+$('#canvas').addEventListener('contextmenu', event => { if (liveTest) event.preventDefault(); });
 $('#canvas').addEventListener('blur', endLiveTest);
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');

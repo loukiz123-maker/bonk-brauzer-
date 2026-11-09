@@ -34,7 +34,7 @@ def test_unsupported_kinds_and_keys_are_not_silently_simulated() -> None:
     with pytest.raises(ValueError):
         draft_engine([draft("Камера")])
     with pytest.raises(ValueError):
-        draft_engine([draft(key="Mouse1")])
+        draft_engine([draft(key="Mouse3")])
     with pytest.raises(ValueError):
         draft_engine([draft(), draft("Нажатие", "f")])
 
@@ -110,3 +110,14 @@ def test_draft_joystick_opposite_keys_return_to_center() -> None:
     assert (event.x, event.y) == (480, 810)
     assert len(engine.release_all("focus lost")) == 1
     assert not engine.active_pointers
+
+
+def test_mouse_fire_and_tap_are_mapped_without_a_channel() -> None:
+    engine = draft_engine([draft("Огонь", "Mouse1"), draft("Нажатие", "Mouse2")])
+    assert [event.action for event in engine.key_down("mouse1")] == [Action.DOWN]
+    assert [event.action for event in engine.key_down("mouse2")] == [Action.DOWN, Action.UP]
+    assert len(engine.active_pointers) == 1
+    assert [event.action for event in engine.key_up("mouse1")] == [Action.UP]
+    assert not engine.active_pointers
+    with pytest.raises(ValueError):
+        draft_engine([draft("Огонь", "mouse1"), draft("Нажатие", "MOUSE1")])

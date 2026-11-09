@@ -50,10 +50,14 @@ class Canvas(QWidget):
         self.setToolTip("Нажмите на поле для добавления; перетащите элемент для перемещения")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
-        if event.button() != Qt.MouseButton.LeftButton:
-            return
         if self.editor.test_engine is not None:
             self.setFocus()
+            name = self._mouse_key(event.button())
+            if name:
+                self.editor.live_key(name, down=True)
+            event.accept()
+            return
+        if event.button() != Qt.MouseButton.LeftButton:
             return
         x, y = event.position().x(), event.position().y()
         for index in range(len(self.editor.controls) - 1, -1, -1):
@@ -76,7 +80,21 @@ class Canvas(QWidget):
             )
             self.drag_recorded = self.drag_recorded or moved
 
+    @staticmethod
+    def _mouse_key(button: Qt.MouseButton) -> str:
+        if button == Qt.MouseButton.LeftButton:
+            return "mouse1"
+        if button == Qt.MouseButton.RightButton:
+            return "mouse2"
+        return ""
+
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if self.editor.test_engine is not None:
+            name = self._mouse_key(event.button())
+            if name:
+                self.editor.live_key(name, down=False)
+            event.accept()
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
 
@@ -125,6 +143,8 @@ class Canvas(QWidget):
             x, y = int(item["x"] * self.width()), int(item["y"] * self.height())
             painter.drawEllipse(x - 22, y - 22, 44, 44)
             caption = "✥" if item["kind"] == "Джойстик" else item["key"]
+            if caption.lower() in ("mouse1", "mouse2"):
+                caption = "ЛКМ" if caption.lower() == "mouse1" else "ПКМ"
             painter.drawText(x - 19, y - 9, 38, 18, int(Qt.AlignmentFlag.AlignCenter), caption)
         if self.editor.test_engine is not None:
             painter.setPen(QColor("#ffffff"))
@@ -189,7 +209,7 @@ class ControlEditor(QDialog):
         self.key.setMaxLength(16)
         self.key.setPlaceholderText("Клавиша, например F")
         side.addWidget(self.key)
-        key_hint = QLabel("Джойстик: вверх, вправо, вниз, влево — W,D,S,A")
+        key_hint = QLabel("Джойстик: W,D,S,A. Мышь: Mouse1 — левая, Mouse2 — правая.")
         key_hint.setWordWrap(True)
         side.addWidget(key_hint)
         self.kind.currentTextChanged.connect(self._kind_changed)
@@ -371,7 +391,7 @@ class ControlEditor(QDialog):
             return
         self.live_button.setText("Остановить тест")
         self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
-        self.status.setText("Тест без Android: нажмите клавишу на поле. Esc — выход.")
+        self.status.setText("Тест без Android: нажмите клавишу или мышь на поле. Esc — выход.")
 
     def end_live_test(self) -> None:
         if self.test_engine is None:
@@ -383,7 +403,11 @@ class ControlEditor(QDialog):
         self.canvas.update()
 
     def live_key(self, key: str, *, down: bool, repeat: bool = False) -> None:
-        if self.test_engine is None or len(key) != 1 or not key.isascii() or not key.isalnum():
+        if self.test_engine is None:
+            return
+        if key not in ("mouse1", "mouse2") and (
+            len(key) != 1 or not key.isascii() or not key.isalnum()
+        ):
             return
         try:
             events = (

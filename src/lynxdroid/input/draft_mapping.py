@@ -32,8 +32,8 @@ def draft_engine(
                 raise ValueError("Клавиши джойстика должны отличаться")
             dpad_keys = (parts[0], parts[1], parts[2], parts[3])
         else:
-            if not re.fullmatch(r"[A-Za-z0-9]", key):
-                raise ValueError("Для проверки используйте одну латинскую букву или цифру")
+            if not re.fullmatch(r"[A-Za-z0-9]", key) and key.lower() not in ("mouse1", "mouse2"):
+                raise ValueError("Используйте латинскую букву, цифру, Mouse1 или Mouse2")
         x, y = control.get("x"), control.get("y")
         if (
             not isinstance(x, (int, float))
