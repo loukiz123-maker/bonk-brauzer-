@@ -100,3 +100,5 @@ def test_launcher_art_is_packaged() -> None:
     image = files("lynxdroid").joinpath("data/launcher-bg.jpg")
     assert image.is_file()
     assert image.read_bytes().startswith(b"\xff\xd8\xff")
+    preview_image = Path(__file__).resolve().parents[2] / "web-preview" / "launcher-bg.jpg"
+    assert preview_image.read_bytes() == image.read_bytes(), "Update browser preview artwork too"

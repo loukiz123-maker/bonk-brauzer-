@@ -253,3 +253,14 @@ Google-proprietary parts that this project never redistributes. See
 Screen recording, screenshots, GPS spoofing, bots, anti-cheat circumvention,
 bundled Google Play, redistributed images. The product goal is a working
 Android container with proven input and graphics, not a pretty installer.
+
+### Browser preview of the launcher
+
+Run `python scripts/preview_server.py` and open port 8080 to see the HTML/CSS/JS
+visual copy. It automatically reloads when preview files change. Keep
+`web-preview/` synchronized whenever the Qt launcher changes. The browser
+preview has a separate local library of filenames only; files are not uploaded,
+installed, or shared with the desktop launcher. Browser security prevents it
+from opening the APK folder, showing its real path, or controlling the window.
+The preview does not run Android applications. The artwork is a copy of
+`src/lynxdroid/data/launcher-bg.jpg` and must be updated alongside it.

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>LynxDroid — предпросмотр лаунчера</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app">
+  <header class="header">
+    <div class="brand">◆ &nbsp;LYNXDROID</div><div class="edition">LAUNCHER&nbsp; / &nbsp;EARLY<br>ACCESS</div>
+    <div class="header-spacer"></div><span class="badge">ДВИЖОК В<br>РАЗРАБОТКЕ</span>
+    <button id="fullscreen" title="Полный экран">⛶ &nbsp;Полный экран</button>
+    <button class="window-button" disabled title="Браузер не позволяет сворачивать окно приложения">—</button>
+    <button class="window-button" disabled title="Браузер не позволяет закрывать вкладку приложения">✕</button>
+  </header>
+  <div class="body">
+    <aside class="sidebar">
+      <div class="nav-label">МЕНЮ</div>
+      <nav aria-label="Навигация">
+        <button class="nav active" data-page="home">⌂ &nbsp; Главная</button>
+        <button class="nav" data-page="library">▦ &nbsp; Библиотека</button>
+        <button class="nav" data-page="about">◉ &nbsp; О проекте</button>
+      </nav>
+      <div class="sidebar-foot">НЕЗАВИСИМЫЙ ПРОЕКТ<br>Без Waydroid</div>
+    </aside>
+    <main>
+      <section id="home" class="page">
+        <h2>Добро пожаловать</h2>
+        <div class="hero">
+          <div class="hero-content"><div class="eyebrow">ВАШЕ ИГРОВОЕ ПРОСТРАНСТВО</div>
+            <h1>Игра начинается здесь</h1>
+            <p>Соберите APK в одном месте. Собственный Android-движок ещё создаётся.</p>
+            <div class="hero-actions"><button class="primary add-apk">＋ &nbsp;Добавить APK</button><button data-go="library">Моя библиотека &nbsp; →</button></div>
+          </div>
+        </div>
+        <h2 class="library-heading">Ваша библиотека</h2>
+        <div class="summary-card"><div class="muted"><span id="count">APK в библиотеке: 0</span><br>Запуск станет доступен после создания движка.</div><button data-go="library">Открыть →</button></div>
+      </section>
+      <section id="library" class="page" hidden>
+        <h1>Библиотека</h1><p class="muted description">Здесь хранятся названия выбранных APK. Это не установка игр.</p>
+        <div class="preview-note">Веб-предпросмотр: отдельная библиотека браузера. Файлы не загружаются на сервер и не добавляются в настольный лаунчер.</div>
+        <div class="controls"><input id="search" type="search" placeholder="Поиск по имени файла…" aria-label="Поиск по имени файла"><button class="primary add-apk">＋ &nbsp;Добавить APK</button><button id="refresh">Обновить</button></div>
+        <div id="list" class="list" role="listbox" aria-label="Библиотека APK"></div>
+        <p id="library-note" class="muted"></p>
+        <div class="actions"><button disabled title="Собственный Android-движок ещё не реализован">▶ &nbsp;Запустить</button><button id="remove" disabled>Удалить из библиотеки</button><button disabled title="Браузер не предоставляет доступ к папке APK">Открыть папку</button><button disabled title="Браузер не раскрывает путь к файлу">Копировать путь</button></div>
+      </section>
+      <section id="about" class="page" hidden><h1>О проекте</h1><div class="about-card"><h2>LynxDroid · самостоятельный лаунчер</h2><p class="muted">Лаунчер не использует Waydroid. Сейчас доступны библиотека APK, поиск и управление окном. Запуск Android-приложений ещё не реализован.</p><p class="muted">Полный экран: F11 &nbsp;•&nbsp; Выход из полного экрана: Esc</p><p class="muted">Это браузерная копия для просмотра дизайна. Системные действия доступны только в настольной версии.</p></div></section>
+    </main>
+  </div>
+</div>
+<input id="file" type="file" accept=".apk,application/vnd.android.package-archive" hidden>
+<div id="message" role="status" aria-live="polite"></div>
+<script src="app.js"></script>
+</body>
+</html>
