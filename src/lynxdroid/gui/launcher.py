@@ -38,7 +38,7 @@ QFrame#sidebar { background: #0d1520; border-right: 1px solid #253344; }
 QFrame#tools { background: #10151e; border-left: 1px solid #253344; }
 QPushButton#tool { background: transparent; border: 0; border-radius: 6px;
     padding: 10px 5px; font-size: 19px; color: #a5b5c7; }
-QPushButton#tool:hover { background: #19313c; color: #79e8da; }
+QPushButton#tool:hover, QPushButton#tool:checked { background: #19313c; color: #79e8da; }
 QFrame#card { background: #141f2d; border: 1px solid #293b4c; border-radius: 14px; }
 QLabel#brand { color: #f4f9ff; font-size: 19px; font-weight: 800; }
 QLabel#title { font-size: 30px; font-weight: 800; color: #f7fbff; }
@@ -118,25 +118,6 @@ class LauncherWindow(QMainWindow):
 
         body = QHBoxLayout()
         body.setSpacing(0)
-        sidebar = QFrame()
-        sidebar.setObjectName("sidebar")
-        sidebar.setFixedWidth(205)
-        nav = QVBoxLayout(sidebar)
-        nav.setContentsMargins(14, 28, 14, 20)
-        nav.addWidget(label("МЕНЮ", "muted"))
-        self.home_button = QPushButton("⌂   Главная")
-        self.library_button = QPushButton("▦   Библиотека")
-        self.about_button = QPushButton("◉   О проекте")
-        for button in (self.home_button, self.library_button, self.about_button):
-            button.setObjectName("nav")
-            button.setCheckable(True)
-            nav.addWidget(button)
-        self.home_button.clicked.connect(lambda: self._show_page(0))
-        self.library_button.clicked.connect(lambda: self._show_page(1))
-        self.about_button.clicked.connect(lambda: self._show_page(2))
-        nav.addStretch()
-        nav.addWidget(label("НЕЗАВИСИМЫЙ ПРОЕКТ\nБез Waydroid", "muted"))
-        body.addWidget(sidebar)
         self.pages = QStackedWidget()
         self.pages.addWidget(self._home_page())
         self.pages.addWidget(self._library_page())
@@ -147,6 +128,22 @@ class LauncherWindow(QMainWindow):
         tools.setFixedWidth(54)
         tools_layout = QVBoxLayout(tools)
         tools_layout.setContentsMargins(5, 12, 5, 12)
+        self.home_button = QPushButton("⌂")
+        self.library_button = QPushButton("▦")
+        self.about_button = QPushButton("ⓘ")
+        for button, title in (
+            (self.home_button, "Главная"),
+            (self.library_button, "Библиотека"),
+            (self.about_button, "О проекте"),
+        ):
+            button.setObjectName("tool")
+            button.setToolTip(title)
+            button.setAccessibleName(title)
+            button.setCheckable(True)
+            tools_layout.addWidget(button)
+        self.home_button.clicked.connect(lambda: self._show_page(0))
+        self.library_button.clicked.connect(lambda: self._show_page(1))
+        self.about_button.clicked.connect(lambda: self._show_page(2))
         self.controls_tool = QPushButton("⌨")
         self.controls_tool.setObjectName("tool")
         self.controls_tool.setToolTip("Редактор управления")

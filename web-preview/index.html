@@ -15,15 +15,6 @@
     <button class="window-button" disabled title="Браузер не позволяет закрывать вкладку приложения">✕</button>
   </header>
   <div class="body">
-    <aside class="sidebar">
-      <div class="nav-label">МЕНЮ</div>
-      <nav aria-label="Навигация">
-        <button class="nav active" data-page="home">⌂ &nbsp; Главная</button>
-        <button class="nav" data-page="library">▦ &nbsp; Библиотека</button>
-        <button class="nav" data-page="about">◉ &nbsp; О проекте</button>
-      </nav>
-      <div class="sidebar-foot">НЕЗАВИСИМЫЙ ПРОЕКТ<br>Без Waydroid</div>
-    </aside>
     <main>
       <section id="home" class="desktop page">
         <div class="desktop-status">LYNXDROID &nbsp;•&nbsp; ДВИЖОК В РАЗРАБОТКЕ</div>
@@ -54,6 +45,9 @@
 </section>
     </main>
     <aside class="tool-rail" aria-label="Боковая панель инструментов">
+      <button class="nav active" data-page="home" title="Главная" aria-label="Главная">⌂</button>
+      <button class="nav" data-page="library" title="Библиотека" aria-label="Библиотека">▦</button>
+      <button class="nav" data-page="about" title="О проекте" aria-label="О проекте">ⓘ</button>
       <button id="open-controls" title="Редактор управления" aria-label="Редактор управления">⌨</button>
       <div class="tool-spacer"></div>
       <button id="open-settings" title="Настройки" aria-label="Настройки">⚙</button>

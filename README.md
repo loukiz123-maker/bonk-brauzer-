@@ -10,7 +10,8 @@ without starting or contacting Waydroid. It can show a local APK library,
 filter it, add one or several APK file references, remove references, copy a file path, open its folder,
 and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
-The right-hand toolbar opens settings and the control editor. The editor opens
+The left-hand sidebar is removed; the right-hand toolbar provides navigation,
+settings and the control editor. The editor opens
 beside its canvas, and can save a layout draft,
 including a fire marker. Unsaved edits are discarded on leaving the editor.
 The draft does not inject input into games. Engine

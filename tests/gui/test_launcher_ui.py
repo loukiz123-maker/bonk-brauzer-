@@ -54,6 +54,9 @@ def test_navigation_and_disabled_launch(window, qt_app) -> None:
         opened.append(dialog.windowTitle())
         dialog.close()
 
+    assert window.findChild(type(window.centralWidget()), "sidebar") is None
+    assert window.home_button.parentWidget() is window.controls_tool.parentWidget()
+    assert window.library_button.parentWidget() is window.settings_tool.parentWidget()
     QTimer.singleShot(0, close_settings)
     window.settings_tool.click()
     assert opened == ["Настройки LynxDroid"]
