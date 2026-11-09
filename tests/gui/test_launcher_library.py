@@ -92,3 +92,11 @@ def test_bad_schema_and_relative_paths_are_rejected(library: Library) -> None:
 def test_saved_file_is_private(library: Library, tmp_path: Path) -> None:
     library.add(apk(tmp_path))
     assert library.path.stat().st_mode & 0o777 == 0o600
+
+
+def test_launcher_art_is_packaged() -> None:
+    from importlib.resources import files
+
+    image = files("lynxdroid").joinpath("data/launcher-bg.jpg")
+    assert image.is_file()
+    assert image.read_bytes().startswith(b"\xff\xd8\xff")

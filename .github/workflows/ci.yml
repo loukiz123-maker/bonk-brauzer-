@@ -161,6 +161,8 @@ jobs:
       # A runner has no Waydroid and no binder, so doctor legitimately exits 1
       # (failure) or 6 (blocked) here. What we assert is that the report is
       # well-formed and that the exit code is one of the documented values.
+      - name: Launcher artwork is present in the installed wheel
+        run: /tmp/venv/bin/python -c "from importlib.resources import files; assert files('lynxdroid').joinpath('data/launcher-bg.jpg').is_file()"
       - name: The doctor report from the wheel is valid JSON
         run: |
           set +e
@@ -291,16 +293,13 @@ jobs:
             python -c "from pathlib import Path; print('::error::Qt startup: ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
             exit 1
           }
-          for test in test_navigation_and_disabled_launch test_import_search_and_remove_without_deleting_file test_fullscreen_and_escape; do
-          python -X faulthandler -m pytest "tests/gui/test_launcher_ui.py::$test" -q --tb=short > qt-check.log 2>&1 || {
+          python -X faulthandler -m pytest tests/gui/test_launcher_ui.py -q --tb=short > qt-check.log 2>&1 || {
             status=$?
             export QT_TEST_EXIT="$status"
             python -c "import os; from pathlib import Path; print('::error::Qt tests exit ' + os.environ['QT_TEST_EXIT'] + ': ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
-            echo "::error::Failing test: $test"
             exit "$status"
           }
           cat qt-check.log
-          done
       - name: Capture launcher preview
         run: |
           python - <<'PY'
@@ -320,11 +319,6 @@ jobs:
               screenshot = window.grab()
               if not screenshot.save('launcher-preview.png'):
                   raise SystemExit('screenshot failed')
-              screenshot.scaled(640, 400).save('launcher-small.jpg', quality=55)
-              import base64
-              encoded = base64.b64encode(Path('launcher-small.jpg').read_bytes()).decode()
-              for i in range(0, len(encoded), 3000):
-                  print(f'::notice title=preview-{i // 3000:03d}::' + encoded[i:i+3000])
               import shiboken6
               shiboken6.delete(window)
           PY

@@ -67,13 +67,10 @@ class TestScriptRespectsTheProjectsRules:
             # those paths is not.
             assert not any((">" in line or "install" in line) for line in writes), forbidden
 
-    def test_it_reports_the_doctor_exit_code_instead_of_failing_on_it(self) -> None:
-        """A machine without Waydroid is not a broken install: `doctor` exits
-        1 there by design, and the script must not treat that as its own
-        failure."""
+    def test_it_does_not_require_waydroid(self) -> None:
         text = SCRIPT.read_text(encoding="utf-8")
-        assert "doctor_status=0" in text
-        assert "|| doctor_status=$?" in text
+        assert "waydroid" not in text.lower()
+        assert "lynxdroid doctor" not in text
 
 
 class TestAgreesWithTheReadme:

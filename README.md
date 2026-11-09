@@ -1,34 +1,7 @@
 # LynxDroid
 
-An Android container on the **host Linux kernel**, with our own control layer:
-lifecycle, diagnostics, viewport geometry, keyboard→multitouch mapping and
-layout profiles. Built first in Python (this repository), with a documented
-path to C++/Qt.
-
-The Android userspace itself comes from **Waydroid** and a legally obtained
-LineageOS-based image. LynxDroid does not bundle Android, does not mirror
-images, and does not pretend to be a virtual machine.
-
-```
-                ┌──────────────────────────────┐
-                │  LynxDroid GUI (PySide6)     │  ← our code
-                │  session · display · layout  │
-                └───────────────┬──────────────┘
-                                │ backend contract (Python)
-                ┌───────────────▼──────────────┐
-                │  backend/waydroid            │  ← our adapter
-                │  start · stop · props · apps │
-                └───────────────┬──────────────┘
-                                │ `waydroid`, `systemctl`, `waydroid shell`
-                ┌───────────────▼──────────────┐
-                │  Waydroid  ·  Android 13     │  ← upstream, not ours
-                │  LineageOS image in LXC      │
-                └───────────────┬──────────────┘
-                                │ binder / namespaces / DRM
-                ┌───────────────▼──────────────┐
-                │  CachyOS kernel  ·  KWin     │  ← the host
-                └──────────────────────────────┘
-```
+Standalone game launcher for Linux, with an independent Android runtime planned.
+The current application is a launcher prototype, not an Android emulator yet.
 
 ## New direction: standalone launcher
 
@@ -52,6 +25,11 @@ The Python Qt runtime and desktop graphics libraries must be installed. The
 launcher stores its library under the user's XDG data directory and never
 deletes an APK when removing its reference.
 
+## Previous Waydroid implementation (historical)
+
+The sections below document the earlier Waydroid-based implementation and CLI.
+They are retained for reference; they are not requirements for the new launcher.
+
 ## Honest status first
 
 Read this before anything else. It is the difference between "works" and
@@ -59,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (889) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (890) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -136,7 +114,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 889 tests, no display needed
+pytest                               # 890 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
