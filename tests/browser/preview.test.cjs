@@ -47,7 +47,16 @@ test('concurrent APK additions in two tabs do not overwrite one another', async 
     const errors = [];
     for (const page of [first, second]) page.on('pageerror', error => errors.push(error.message));
     for (const page of [first, second]) await page.evaluate(() => { window.debugChanges = []; document.querySelector('#file').addEventListener('change', event => window.debugChanges.push([...event.target.files].map(f => f.name)), true); });
-    await Promise.all([first.locator('#file').setInputFiles(apk('Alpha.apk')), second.locator('#file').setInputFiles(apk('Beta.apk'))]);
+    // Hold the shared lock while both tabs start an import, then release it.
+    // Sequential file-selection automation avoids competing native file
+    // choosers while keeping both storage updates concurrent.
+    await first.evaluate(() => {
+      navigator.locks.request('lynxdroid:lynxdroid-preview-library-v1', () => new Promise(resolve => { window.releaseTestLock = resolve; window.testLockHeld = true; }));
+    });
+    await first.waitForFunction(() => window.testLockHeld);
+    await first.locator('#file').setInputFiles(apk('Alpha.apk'));
+    await second.locator('#file').setInputFiles(apk('Beta.apk'));
+    await first.evaluate(() => window.releaseTestLock());
     try {
       await first.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2, null, {timeout: 8000});
     } catch (error) {
