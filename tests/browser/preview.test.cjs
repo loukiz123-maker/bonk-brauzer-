@@ -42,6 +42,7 @@ async function addMarker(page, x = 200) {
 }
 
 test('concurrent APK additions in two tabs do not overwrite one another', async () => {
+  for (let attempt = 0; attempt < 2; attempt++) {
   const {context, pages: [first, second]} = await freshPages(2);
   try {
     const errors = [];
@@ -74,6 +75,7 @@ test('concurrent APK additions in two tabs do not overwrite one another', async 
     const items = await first.evaluate(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1')));
     assert.deepEqual(items.sort(), ['Alpha.apk', 'Beta.apk']);
   } finally { await context.close(); }
+  }
 });
 
 test('two tabs cannot silently overwrite the same saved profile', async () => {
