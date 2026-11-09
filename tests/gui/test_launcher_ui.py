@@ -603,3 +603,39 @@ def test_two_editors_do_not_overwrite_each_others_profiles(
     assert load_controls(path)[0]["key"] == "J"
     shiboken6.delete(first)
     shiboken6.delete(second)
+
+
+def test_copy_saved_profile_is_confirmed_undoable_and_never_auto_saves(
+    window, qt_app, tmp_path, monkeypatch
+) -> None:
+    import shiboken6
+    from PySide6.QtWidgets import QMessageBox
+
+    from lynxdroid.gui.control_editor import ControlEditor, load_controls
+
+    alpha, beta = tmp_path / "alpha.json", tmp_path / "beta.json"
+    editor = ControlEditor(
+        tmp_path / "general.json", window, games=[("Alpha", alpha), ("Beta", beta)]
+    )
+    editor.place(0.2, 0.3)
+    editor.save()
+    editor.profile_choice.setCurrentIndex(2)
+    editor.key.setText("G")
+    editor.place(0.7, 0.8)
+    editor.copy_source.setCurrentIndex(editor.copy_source.findData(str(alpha)))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+    editor.copy_button.click()
+    assert editor.controls[0]["key"] == "G"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    editor.copy_button.click()
+    assert editor.controls[0]["key"] == "F" and not beta.exists()
+    assert load_controls(alpha)[0]["key"] == "F"
+    editor.undo()
+    assert editor.controls[0]["key"] == "G"
+    alpha.write_bytes(b"\xff")
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    editor.copy_button.click()
+    assert warnings and editor.controls[0]["key"] == "G" and not beta.exists()
+    assert alpha.read_bytes() == b"\xff"
+    shiboken6.delete(editor)

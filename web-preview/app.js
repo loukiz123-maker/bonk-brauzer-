@@ -201,8 +201,28 @@ function loadProfile(key) {
   try { storedProfileBaseline = localStorage.getItem(key); controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
   controlsBaseline = JSON.stringify(controls);
-  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid; renderControls();
+  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid; refreshCopySources(); renderControls();
 }
+function refreshCopySources() {
+  const source = $('#copy-source'); source.replaceChildren();
+  for (const option of $('#control-profile').options) {
+    if (option.value !== activeProfileKey) source.add(new Option(option.textContent, option.value));
+  }
+  source.disabled = !controlsValid || source.options.length === 0;
+  $('#copy-profile').disabled = source.disabled;
+}
+$('#copy-profile').addEventListener('click', () => {
+  if (!controlsValid || !$('#copy-source').value) return;
+  try {
+    const key = $('#copy-source').value;
+    if (localStorage.getItem(key) === null) throw new Error('У этого профиля ещё нет сохранённой раскладки.');
+    const source = readControls(key);
+    if (JSON.stringify(source) === JSON.stringify(controls)) { $('#editor-status').textContent = 'Раскладка уже совпадает с сохранённой копией.'; return; }
+    if (controls.length && !confirm('Скопировать сохранённую раскладку в текущий черновик? Действие можно отменить.')) return;
+    recordChange(); controls = source; selectControl(null);
+    $('#editor-status').textContent = 'Раскладка скопирована в черновик • сохраните для выбранной игры';
+  } catch (error) { message(`Не удалось скопировать раскладку: ${error.message}`); }
+});
 function openControls() {
   if (!$('#editor').hidden) return;
   const select = $('#control-profile'); select.replaceChildren();

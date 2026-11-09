@@ -26,6 +26,8 @@ Reloading asks before discarding unsaved edits, in the desktop editor and previe
 coordinate through persistent `.lock` files. This is an advisory lock: external
 programs that do not use it can still race with a save.
 Each imported APK reference has a separate draft, selected in the editor.
+A saved layout can be copied from another profile into the current draft;
+the copy is undoable and only persists after an explicit save.
 Selecting an APK in the library and choosing “Настроить управление” opens
 its corresponding draft directly. A
 confirmation protects unsaved edits on navigation. Android app detection is not
@@ -68,7 +70,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (936) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (937) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -145,7 +147,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 936 collected; Qt tests may skip without native libraries
+pytest                               # 937 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

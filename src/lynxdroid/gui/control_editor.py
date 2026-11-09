@@ -275,6 +275,20 @@ class ControlEditor(QDialog):
         )
         self.reload_button.clicked.connect(self.reload_profile)
         side.addWidget(self.reload_button)
+        side.addWidget(QLabel("Скопировать сохранённую раскладку из"))
+        self.copy_source = QComboBox()
+        self.copy_source.setSizeAdjustPolicy(
+            QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+        )
+        self.copy_source.setMinimumContentsLength(12)
+        self.copy_source.setMaximumWidth(250)
+        side.addWidget(self.copy_source)
+        self.copy_button = QPushButton("Скопировать в черновик")
+        self.copy_button.setToolTip(
+            "Копируются только сохранённые данные; профиль-источник не изменится"
+        )
+        self.copy_button.clicked.connect(self.copy_profile)
+        side.addWidget(self.copy_button)
         note = QLabel(
             "Нажмите на поле для добавления, перетащите элемент для перемещения. "
             "Это шаблон: ввод в игры пока не работает. "
@@ -392,7 +406,48 @@ class ControlEditor(QDialog):
             self.import_button.setEnabled(False)
             self.status.setText(f"Ошибка чтения: {exc}. Сохранение отключено.")
         self._baseline = self._snapshot()
+        self._refresh_copy_sources()
         self.canvas.update()
+
+    def _refresh_copy_sources(self) -> None:
+        self.copy_source.clear()
+        for index in range(self.profile_choice.count()):
+            path = str(self.profile_choice.itemData(index))
+            if path != str(self.path):
+                self.copy_source.addItem(self.profile_choice.itemText(index), path)
+        enabled = not self.read_only and self.copy_source.count() > 0
+        self.copy_source.setEnabled(enabled)
+        self.copy_button.setEnabled(enabled)
+
+    def copy_profile(self) -> None:
+        if self.read_only or self.copy_source.currentIndex() < 0:
+            return
+        try:
+            source = read_profile(Path(str(self.copy_source.currentData())))
+            if source is None:
+                raise ValueError("У этого профиля ещё нет сохранённой раскладки.")
+        except (OSError, LynxError, ValueError) as exc:
+            QMessageBox.warning(self, "Не удалось скопировать раскладку", str(exc))
+            return
+        if source == self.controls:
+            self.status.setText("Раскладка уже совпадает с сохранённой копией.")
+            return
+        if (
+            self.controls
+            and QMessageBox.question(
+                self,
+                "Заменить черновик?",
+                "Скопировать сохранённую раскладку в текущий черновик? Действие можно отменить.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        self._record_change()
+        self.controls = copy.deepcopy(source)
+        self.select(None)
+        self.status.setText("Раскладка скопирована в черновик • сохраните для выбранной игры")
 
     def reload_profile(self) -> None:
         if self.can_discard():

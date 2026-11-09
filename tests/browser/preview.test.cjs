@@ -260,3 +260,36 @@ test('browser without Web Locks refuses writes without losing drafts', async () 
     assert.equal(await page.locator('#canvas .marker').count(), 1);
   } finally { await context.close(); }
 });
+
+test('copying a saved game layout is confirmed, undoable and never auto-saves', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.locator('#file').setInputFiles([apk('Alpha.apk'), apk('Beta.apk')]);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2);
+    await page.click('#open-controls');
+    await addMarker(page);
+    await page.click('#save-controls');
+    await page.waitForSelector('#editor-status:text("Раскладка сохранена")');
+    const alpha = 'lynxdroid-preview-game-v1:Alpha.apk';
+    const beta = 'lynxdroid-preview-game-v1:Beta.apk';
+    const savedAlpha = await page.evaluate(key => localStorage.getItem(key), alpha);
+    await page.selectOption('#control-profile', beta);
+    await page.locator('#control-key').fill('G'); await addMarker(page);
+    await page.selectOption('#copy-source', alpha);
+    page.once('dialog', dialog => dialog.dismiss());
+    await page.click('#copy-profile');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    page.once('dialog', dialog => dialog.accept());
+    await page.click('#copy-profile');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'F');
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), beta), null);
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), alpha), savedAlpha);
+    await page.click('#undo-control');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    await page.evaluate(key => localStorage.setItem(key, '{broken'), alpha);
+    await page.click('#copy-profile');
+    await page.waitForSelector('#message:text("Не удалось скопировать")');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    assert.equal(await page.evaluate(key => localStorage.getItem(key), beta), null);
+  } finally { await context.close(); }
+});
