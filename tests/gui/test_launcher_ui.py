@@ -489,6 +489,9 @@ def test_invalid_utf8_profiles_and_library_are_protected(window, qt_app, tmp_pat
     editor = ControlEditor(path, window)
     assert editor.read_only and not editor.save_button.isEnabled()
     assert path.read_bytes() == b"\xff"
+    path.write_text('{"schema": 1, "controls": []}', encoding="utf-8")
+    editor.reload_button.click()
+    assert not editor.read_only and editor.save_button.isEnabled()
     shiboken6.delete(editor)
 
 
@@ -587,5 +590,16 @@ def test_two_editors_do_not_overwrite_each_others_profiles(
     first.apply_selected()
     first.save()
     assert load_controls(path)[0]["key"] == "H"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.No)
+    second.reload_button.click()
+    assert second.controls[0]["key"] == "G" and second._snapshot() != second._baseline
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    second.reload_button.click()
+    assert second.controls[0]["key"] == "H" and second._snapshot() == second._baseline
+    second.select(0)
+    second.key.setText("J")
+    second.apply_selected()
+    second.save()
+    assert load_controls(path)[0]["key"] == "J"
     shiboken6.delete(first)
     shiboken6.delete(second)

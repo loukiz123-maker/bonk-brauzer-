@@ -21,7 +21,8 @@ the current draft but does not overwrite the game profile until explicitly saved
 The desktop library serializes updates across launcher windows; if another
 window is writing, retry the operation. The desktop editor detects a changed
 profile and refuses to overwrite it; export
-unsaved work and reopen the profile to resolve a conflict. Launcher instances
+unsaved work and use “Обновить раскладку” to reload the stored profile.
+Reloading asks before discarding unsaved edits, in the desktop editor and preview. Launcher instances
 coordinate through persistent `.lock` files. This is an advisory lock: external
 programs that do not use it can still race with a save.
 Each imported APK reference has a separate draft, selected in the editor.

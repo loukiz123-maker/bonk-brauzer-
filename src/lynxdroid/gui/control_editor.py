@@ -269,6 +269,12 @@ class ControlEditor(QDialog):
         for title, profile_path in games or []:
             self.profile_choice.addItem(title, str(profile_path))
         side.addWidget(self.profile_choice)
+        self.reload_button = QPushButton("Обновить раскладку")
+        self.reload_button.setToolTip(
+            "Загрузить профиль заново; несохранённые изменения требуют подтверждения"
+        )
+        self.reload_button.clicked.connect(self.reload_profile)
+        side.addWidget(self.reload_button)
         note = QLabel(
             "Нажмите на поле для добавления, перетащите элемент для перемещения. "
             "Это шаблон: ввод в игры пока не работает. "
@@ -387,6 +393,10 @@ class ControlEditor(QDialog):
             self.status.setText(f"Ошибка чтения: {exc}. Сохранение отключено.")
         self._baseline = self._snapshot()
         self.canvas.update()
+
+    def reload_profile(self) -> None:
+        if self.can_discard():
+            self._load_profile(self.path)
 
     def change_profile(self, index: int) -> None:
         if index == self._profile_index or index < 0:

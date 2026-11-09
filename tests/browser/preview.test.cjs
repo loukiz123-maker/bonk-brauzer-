@@ -81,6 +81,16 @@ test('two tabs cannot silently overwrite the same saved profile', async () => {
     await second.waitForSelector('#editor-status:text("изменена в другой вкладке")');
     assert.equal(await second.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), saved);
     assert.equal(await second.locator('#canvas .marker').count(), 1);
+    const before = await second.locator('#canvas .marker').evaluate(el => el.style.left);
+    second.once('dialog', dialog => dialog.dismiss());
+    await second.click('#reload-profile');
+    assert.equal(await second.locator('#canvas .marker').evaluate(el => el.style.left), before);
+    second.once('dialog', dialog => dialog.accept());
+    await second.click('#reload-profile');
+    const firstPosition = await first.locator('#canvas .marker').evaluate(el => el.style.left);
+    assert.equal(await second.locator('#canvas .marker').evaluate(el => el.style.left), firstPosition);
+    await second.click('#save-controls');
+    await second.waitForSelector('#editor-status:text("Раскладка сохранена")');
   } finally { await context.close(); }
 });
 
@@ -157,6 +167,11 @@ test('corrupt profile remains read-only and is never overwritten', async () => {
     assert.equal(await page.locator('#import-controls').isDisabled(), true);
     await addMarker(page);
     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), '{broken');
+    await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{"schema":1,"controls":[]}'));
+    page.once('dialog', dialog => dialog.accept());
+    await page.click('#reload-profile');
+    assert.equal(await page.locator('#canvas .marker').count(), 0);
+    assert.equal(await page.locator('#save-controls').isEnabled(), true);
   } finally { await context.close(); }
 });
 

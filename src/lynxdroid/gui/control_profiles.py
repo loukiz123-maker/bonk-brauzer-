@@ -107,7 +107,7 @@ def save_profile(
             if read_profile(path) != expected:
                 raise ProfileConflict(
                     "Раскладка изменилась в другом окне. "
-                    "Экспортируйте черновик и откройте профиль заново."
+                    "Экспортируйте черновик и нажмите «Обновить раскладку»."
                 )
             write_json(path, {"schema": 1, "controls": controls})
     except BlockingIOError as exc:

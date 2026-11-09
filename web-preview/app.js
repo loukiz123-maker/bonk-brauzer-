@@ -211,6 +211,7 @@ function openControls() {
   activeProfileIndex = entries.length ? (selected !== null ? selected + 1 : 1) : 0;
   select.selectedIndex = activeProfileIndex; loadProfile(select.value); page('editor');
 }
+$('#reload-profile').addEventListener('click', () => { if (canDiscard()) loadProfile(activeProfileKey); });
 $('#open-controls').addEventListener('click', openControls);
 $('#edit-selected-controls').addEventListener('click', openControls);
 $('#control-profile').addEventListener('change', event => {
@@ -384,7 +385,7 @@ $('#save-controls').addEventListener('click', async () => {
   try {
     await withStorageLock(key, () => {
       if (generation !== profileGeneration) throw new Error('Профиль изменился');
-      if (localStorage.getItem(key) !== baseline) throw new Error('Раскладка изменена в другой вкладке. Экспортируйте черновик и откройте профиль заново');
+      if (localStorage.getItem(key) !== baseline) throw new Error('Раскладка изменена в другой вкладке. Экспортируйте черновик и нажмите «Обновить раскладку»');
       readControls(key);
       const serialized = JSON.stringify({schema:1, controls: JSON.parse(snapshot)});
       localStorage.setItem(key, serialized); storedProfileBaseline = serialized; controlsBaseline = snapshot;
