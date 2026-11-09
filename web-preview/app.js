@@ -18,29 +18,83 @@ function message(text) {
   clearTimeout(message.timer);
   message.timer = setTimeout(() => box.classList.remove('visible'), 5000);
 }
-function readLibrary() {
-  const data = JSON.parse(localStorage.getItem(storageKey) || '[]');
+function validateLibrary(data) {
   if (!Array.isArray(data) || data.length > 500 || !data.every(name => typeof name === 'string') || new Set(data).size !== data.length) throw new Error('invalid library');
   return data;
+}
+function readLibrary() {
+  return validateLibrary(JSON.parse(localStorage.getItem(storageKey) || '[]'));
 }
 async function withStorageLock(key, action) {
   if (!navigator.locks) throw new Error('Браузер не поддерживает защиту от конфликтов вкладок');
   return navigator.locks.request(`lynxdroid:${key}`, action);
 }
+// localStorage snapshots can be stale across renderer processes even after a
+// Web Lock is acquired. IndexedDB is the authoritative library snapshot;
+// localStorage remains a compatibility mirror and cross-tab notification.
+let libraryDatabase;
+function openLibraryDatabase() {
+  if (!libraryDatabase) libraryDatabase = new Promise((resolve, reject) => {
+    const request = indexedDB.open('lynxdroid-preview-library-v1', 1);
+    request.onupgradeneeded = () => request.result.createObjectStore('state');
+    request.onerror = () => reject(request.error || new Error('IndexedDB недоступна'));
+    request.onblocked = () => reject(new Error('IndexedDB заблокирована другой вкладкой'));
+    request.onsuccess = () => resolve(request.result);
+  });
+  return libraryDatabase;
+}
+async function librarySnapshot() {
+  const db = await openLibraryDatabase();
+  return new Promise((resolve, reject) => {
+    const request = db.transaction('state', 'readonly').objectStore('state').get(storageKey);
+    request.onsuccess = () => { try { resolve(request.result === undefined ? null : validateLibrary(request.result)); } catch (error) { reject(error); } };
+    request.onerror = () => reject(request.error || new Error('Не удалось прочитать библиотеку'));
+  });
+}
+async function writeLibrarySnapshot(next) {
+  const db = await openLibraryDatabase();
+  await new Promise((resolve, reject) => {
+    const tx = db.transaction('state', 'readwrite');
+    tx.objectStore('state').put(next, storageKey);
+    tx.oncomplete = resolve;
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error('Не удалось сохранить библиотеку'));
+  });
+}
+async function initialiseLibrary() {
+  if (!storageAvailable || !navigator.locks) return;
+  try {
+    await withStorageLock(storageKey, async () => {
+      const mirror = readLibrary(); // Do not replace corrupt user data.
+      const saved = await librarySnapshot();
+      if (saved === null) await writeLibrarySnapshot(mirror);
+      else { localStorage.setItem(storageKey, JSON.stringify(saved)); entries = saved; render(); }
+    });
+  } catch (error) {
+    storageAvailable = false; render();
+    message(`Библиотека недоступна: ${error.message}. Данные не изменены.`);
+  }
+}
+const libraryReady = initialiseLibrary();
 async function updateLibrary(change) {
+  await libraryReady;
   if (!storageAvailable) { message('Библиотека браузера недоступна или повреждена. Данные не изменены.'); return false; }
   try {
-    await withStorageLock(storageKey, () => {
-      const current = readLibrary();
-      const next = change(current);
-      localStorage.setItem(storageKey, JSON.stringify(next)); entries = next;
+    await withStorageLock(storageKey, async () => {
+      readLibrary(); // Preserve a damaged compatibility mirror rather than overwrite it.
+      const current = await librarySnapshot();
+      if (current === null) throw new Error('Библиотека не инициализирована');
+      const next = validateLibrary(change(current));
+      await writeLibrarySnapshot(next);
+      entries = next;
+      try { localStorage.setItem(storageKey, JSON.stringify(next)); }
+      catch { storageAvailable = false; message('Библиотека сохранена, но синхронизация вкладок недоступна.'); }
     });
     return true;
   } catch (error) { message(`Не удалось сохранить библиотеку: ${error.message}`); return false; }
 }
 window.addEventListener('storage', event => {
   if (event.key !== storageKey && event.key !== null) return;
-  try { entries = readLibrary(); storageAvailable = true; selected = null; render(); }
+  try { entries = validateLibrary(JSON.parse(event.newValue || '[]')); selected = null; render(); }
   catch { storageAvailable = false; selected = null; render(); message('Библиотека повреждена; запись отключена.'); }
 });
 function page(name) {

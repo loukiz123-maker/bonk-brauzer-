@@ -293,3 +293,18 @@ test('copying a saved game layout is confirmed, undoable and never auto-saves', 
     assert.equal(await page.evaluate(key => localStorage.getItem(key), beta), null);
   } finally { await context.close(); }
 });
+
+
+test('a stale localStorage mirror cannot erase a committed APK', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.locator('#file').setInputFiles(apk('Alpha.apk'));
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').includes('Alpha.apk'));
+    // Simulate a renderer whose localStorage snapshot is behind IndexedDB.
+    await page.evaluate(() => localStorage.setItem('lynxdroid-preview-library-v1', '[]'));
+    await page.locator('#file').setInputFiles(apk('Beta.apk'));
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2);
+    const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1')));
+    assert.deepEqual(saved.sort(), ['Alpha.apk', 'Beta.apk']);
+  } finally { await context.close(); }
+});

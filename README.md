@@ -26,6 +26,9 @@ Reloading asks before discarding unsaved edits, in the desktop editor and previe
 coordinate through persistent `.lock` files. This is an advisory lock: external
 programs that do not use it can still race with a save.
 Each imported APK reference has a separate draft, selected in the editor.
+The browser preview uses IndexedDB as the authoritative APK-name library and
+mirrors it to localStorage for compatibility; it needs Web Locks and IndexedDB
+for writes. Existing localStorage libraries are migrated on first use.
 A saved layout can be copied from another profile into the current draft;
 the copy is undoable and only persists after an explicit save.
 Selecting an APK in the library and choosing “Настроить управление” opens
