@@ -102,12 +102,40 @@ function readControls(key = activeProfileKey) {
   if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
   return data.controls;
 }
+function controlKeys(control) {
+  return control.kind === 'Джойстик' ? control.key.split(',').map(k => k.trim().toLowerCase()) : [control.key.toLowerCase()];
+}
+function validateTest() {
+  const allKeys = [];
+  for (const control of controls) {
+    if (!['Нажатие', 'Огонь', 'Джойстик'].includes(control.kind)) return 'Поддерживаются только нажатие, огонь и джойстик.';
+    const keys = controlKeys(control);
+    if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k))) return 'Укажите латинские буквы или цифры. Для джойстика — четыре через запятую.';
+    if (control.kind === 'Джойстик' && (control.x < 0.089 || control.x > 0.911 || control.y < 0.089 || control.y > 0.911)) return 'Разместите джойстик немного дальше от края.';
+    allKeys.push(...keys);
+  }
+  if (new Set(allKeys).size !== allKeys.length) return 'Клавиши не должны повторяться.';
+  return '';
+}
 function renderControls() {
-  const canvas = $('#canvas'); canvas.querySelectorAll('.marker').forEach(m => m.remove());
-  controls.forEach((c, index) => { const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', liveHeld.has(c.key.toLowerCase())); marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
+  const canvas = $('#canvas'); canvas.querySelectorAll('.marker, .touch-point').forEach(m => m.remove());
+  controls.forEach((c, index) => {
+    const keys = controlKeys(c); const active = keys.some(k => liveHeld.has(k));
+    const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', active); marker.textContent = c.kind === 'Джойстик' ? '✥' : c.key; marker.title = `${c.kind}: ${c.key}`; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker);
+    if (active && c.kind === 'Джойстик') {
+      const dx = Number(liveHeld.has(keys[1])) - Number(liveHeld.has(keys[3]));
+      const dy = Number(liveHeld.has(keys[2])) - Number(liveHeld.has(keys[0]));
+      const length = Math.hypot(dx, dy) || 1;
+      const dot = document.createElement('div'); dot.className = 'touch-point';
+      dot.style.left = `${(c.x + dx / length * 0.09 * 1080 / 1920) * 100}%`;
+      dot.style.top = `${(c.y + dy / length * 0.09) * 100}%`; canvas.append(dot);
+    }
+  });
   $('#apply-control').disabled = selectedControl === null;
   $('#delete-control').disabled = selectedControl === null;
 }
+function activeTouchCount() { return controls.filter(c => controlKeys(c).some(k => liveHeld.has(k))).length; }
+$('#control-kind').addEventListener('change', () => { if ($('#control-kind').value === 'Джойстик' && $('#control-key').value.trim() === 'F') $('#control-key').value = 'W,D,S,A'; });
 $('#open-settings').addEventListener('click', () => $('#settings-dialog').showModal());
 function canDiscard() {
   return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
@@ -187,9 +215,8 @@ function endLiveTest() {
 }
 $('#live-test').addEventListener('click', () => {
   if (liveTest) { endLiveTest(); return; }
-  if (controls.some(c => !['Нажатие', 'Огонь'].includes(c.kind))) { $('#editor-status').textContent = 'Проверка невозможна: пока поддерживаются только нажатие и огонь.'; return; }
-  const keys = controls.map(c => c.key.toLowerCase());
-  if (keys.some(k => !/^[a-z0-9]$/.test(k)) || new Set(keys).size !== keys.length) { $('#editor-status').textContent = 'Укажите разные латинские буквы или цифры для каждой кнопки.'; return; }
+  const error = validateTest();
+  if (error) { $('#editor-status').textContent = `Проверка невозможна: ${error}`; return; }
   liveTest = true; $('#live-test').textContent = 'Остановить тест'; $('#canvas').focus();
   $('#editor-status').textContent = 'Тест без Android: нажмите клавишу на поле. Esc — выход.';
 });
@@ -198,32 +225,33 @@ $('#canvas').addEventListener('keydown', event => {
   if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
   const key = event.key.toLowerCase();
   if (!/^[a-z0-9]$/.test(key) || event.repeat || livePressed.has(key)) return;
-  const control = controls.find(c => c.key.toLowerCase() === key);
+  const control = controls.find(c => controlKeys(c).includes(key));
   if (!control) return;
   event.preventDefault(); livePressed.add(key);
-  if (control.kind === 'Огонь') liveHeld.add(key);
-  $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${control.kind === 'Огонь' ? 1 : 2} • удерживается: ${liveHeld.size}`; renderControls();
+  const wasActive = controlKeys(control).some(k => liveHeld.has(k));
+  if (control.kind === 'Огонь' || control.kind === 'Джойстик') liveHeld.add(key);
+  const events = control.kind === 'Нажатие' ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
+  $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${events} • удерживается: ${activeTouchCount()}`; renderControls();
 });
 $('#canvas').addEventListener('keyup', event => {
   if (!liveTest) return;
   const key = event.key.toLowerCase();
   if (!livePressed.has(key)) return;
   livePressed.delete(key);
-  if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${liveHeld.size}`;
+  if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${activeTouchCount()}`;
   renderControls(); event.preventDefault();
 });
 $('#canvas').addEventListener('blur', endLiveTest);
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
-  if (controls.some(c => !['Нажатие', 'Огонь'].includes(c.kind))) { status.textContent = 'Проверка невозможна: пока поддерживаются только нажатие и огонь.'; return; }
-  if (controls.some(c => !/^[a-z0-9]$/i.test(c.key)) || !/^[a-z0-9]$/i.test($('#test-key').value.trim())) { status.textContent = 'Для проверки используйте одну латинскую букву или цифру.'; return; }
-  const keys = controls.map(c => c.key.toLowerCase());
-  if (new Set(keys).size !== keys.length) { status.textContent = 'Проверка невозможна: клавиша назначена несколько раз.'; return; }
-  const control = controls.find(c => c.key.toLowerCase() === $('#test-key').value.trim().toLowerCase());
+  const error = validateTest();
+  if (error) { status.textContent = `Проверка невозможна: ${error}`; return; }
+  if (!/^[a-z0-9]$/i.test($('#test-key').value.trim())) { status.textContent = 'Для проверки введите одну латинскую букву или цифру.'; return; }
+  const control = controls.find(c => controlKeys(c).includes($('#test-key').value.trim().toLowerCase()));
   if (!control) { status.textContent = 'Демо без Android: клавиша не назначена. Ничего не отправлено.'; return; }
   const x = Math.min(1919, Math.floor(control.x * 1920));
   const y = Math.min(1079, Math.floor(control.y * 1080));
-  status.textContent = `Демо без Android: 2 события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
+  status.textContent = `Демо без Android: ${control.kind === 'Джойстик' ? 3 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
 });
 $('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); selectControl(null); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
 $('#reset-controls').addEventListener('click', () => { controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });

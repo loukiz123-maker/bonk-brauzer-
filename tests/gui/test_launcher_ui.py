@@ -292,3 +292,28 @@ def test_live_control_test_holds_and_releases_without_a_channel(window, qt_app, 
     assert "Ничего не отправлено" in editor.status.text()
     editor.close()
     shiboken6.delete(editor)
+
+
+def test_live_joystick_default_and_direction_keys(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    editor.kind.setCurrentText("Джойстик")
+    assert editor.key.text() == "W,D,S,A"
+    editor.place(0.5, 0.5)
+    editor.live_button.click()
+    QTest.keyPress(editor.canvas, Qt.Key.Key_W)
+    assert editor.test_engine is not None
+    assert len(editor.test_engine.active_pointers) == 1
+    assert "событий: 2" in editor.status.text()
+    QTest.keyRelease(editor.canvas, Qt.Key.Key_W)
+    assert not editor.test_engine.active_pointers
+    editor.end_live_test()
+    editor.close()
+    shiboken6.delete(editor)

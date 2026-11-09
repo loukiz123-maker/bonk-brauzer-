@@ -73,3 +73,40 @@ def test_profile_path_is_stable_and_distinguishes_same_names(tmp_path) -> None:
     assert path.parent == tmp_path / "control-profiles"
     with pytest.raises(ValueError):
         control_profile_path(tmp_path, Path("Game.apk"))
+
+
+def test_draft_joystick_uses_four_direction_keys_and_releases() -> None:
+    engine = draft_engine([draft("Джойстик", "W,D,S,A")])
+    events = engine.key_down("w")
+    assert [e.action for e in events] == [Action.DOWN, Action.MOVE]
+    diagonal = engine.key_down("d")
+    assert [e.action for e in diagonal] == [Action.MOVE]
+    assert diagonal[0].x > 480 and diagonal[0].y < 810
+    assert [e.action for e in engine.key_up("w")] == [Action.MOVE]
+    assert [e.action for e in engine.key_up("d")] == [Action.UP]
+    assert not engine.active_pointers
+
+
+def test_draft_joystick_rejects_invalid_and_overlapping_keys() -> None:
+    with pytest.raises(ValueError):
+        draft_engine([draft("Джойстик", "W,W,S,A")])
+    with pytest.raises(ValueError):
+        draft_engine([draft("Джойстик", "W,A,S")])
+    with pytest.raises(ValueError):
+        draft_engine([draft("Джойстик", "W,D,S,A"), draft("Огонь", "W")])
+
+
+def test_draft_joystick_cannot_extend_beyond_edge() -> None:
+    data = draft("Джойстик", "W,D,S,A")
+    data["x"] = 0.01
+    with pytest.raises(ValueError):
+        draft_engine([data])
+
+
+def test_draft_joystick_opposite_keys_return_to_center() -> None:
+    engine = draft_engine([draft("Джойстик", "W,D,S,A")])
+    engine.key_down("w")
+    event = engine.key_down("s")[0]
+    assert (event.x, event.y) == (480, 810)
+    assert len(engine.release_all("focus lost")) == 1
+    assert not engine.active_pointers

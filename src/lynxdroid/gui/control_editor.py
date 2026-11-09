@@ -134,7 +134,15 @@ class Canvas(QWidget):
             )
             x, y = int(item["x"] * self.width()), int(item["y"] * self.height())
             painter.drawEllipse(x - 22, y - 22, 44, 44)
-            painter.drawText(x - 19, y - 9, 38, 18, int(Qt.AlignmentFlag.AlignCenter), item["key"])
+            caption = "✥" if item["kind"] == "Джойстик" else item["key"]
+            painter.drawText(x - 19, y - 9, 38, 18, int(Qt.AlignmentFlag.AlignCenter), caption)
+        if self.editor.test_engine is not None:
+            painter.setPen(QColor("#ffffff"))
+            painter.setBrush(QColor("#8ff7e3"))
+            for contact in self.editor.test_engine.active_pointers.values():
+                x = round(contact.x / 1920 * self.width())
+                y = round(contact.y / 1080 * self.height())
+                painter.drawEllipse(x - 6, y - 6, 12, 12)
 
 
 class ControlEditor(QDialog):
@@ -188,6 +196,10 @@ class ControlEditor(QDialog):
         self.key.setMaxLength(16)
         self.key.setPlaceholderText("Клавиша, например F")
         side.addWidget(self.key)
+        key_hint = QLabel("Джойстик: вверх, вправо, вниз, влево — W,D,S,A")
+        key_hint.setWordWrap(True)
+        side.addWidget(key_hint)
+        self.kind.currentTextChanged.connect(self._kind_changed)
         self.apply_button = QPushButton("Изменить выбранный")
         self.apply_button.setEnabled(False)
         self.apply_button.clicked.connect(self.apply_selected)
@@ -225,6 +237,10 @@ class ControlEditor(QDialog):
             self.profile_choice.setCurrentIndex(1)
         self._load_profile(Path(str(self.profile_choice.currentData())))
         self.profile_choice.currentIndexChanged.connect(self.change_profile)
+
+    def _kind_changed(self, kind: str) -> None:
+        if kind == "Джойстик" and self.key.text().strip() == "F":
+            self.key.setText("W,D,S,A")
 
     def _snapshot(self) -> str:
         return json.dumps(self.controls, ensure_ascii=False, sort_keys=True)
