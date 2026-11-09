@@ -21,6 +21,8 @@ from PySide6.QtWidgets import (
 
 from lynxdroid.core.errors import DataCorrupted, LynxError
 from lynxdroid.core.storage import read_json, write_json
+from lynxdroid.input.draft_mapping import draft_engine
+from lynxdroid.input.scrcpy_touch import encode_touch
 
 KINDS = ("Нажатие", "Двойное нажатие", "Мультитач", "Джойстик", "Камера", "Перетаскивание", "Огонь")
 
@@ -102,6 +104,13 @@ class ControlEditor(QDialog):
         self.key.setMaxLength(16)
         self.key.setPlaceholderText("Клавиша, например F")
         side.addWidget(self.key)
+        self.test_key = QLineEdit()
+        self.test_key.setMaxLength(1)
+        self.test_key.setPlaceholderText("Клавиша для проверки")
+        side.addWidget(self.test_key)
+        self.test_button = QPushButton("Проверить без Android")
+        self.test_button.clicked.connect(self.test_mapping)
+        side.addWidget(self.test_button)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         side.addWidget(self.status)
@@ -139,6 +148,26 @@ class ControlEditor(QDialog):
         )
         self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
         self.canvas.update()
+
+    def test_mapping(self) -> None:
+        try:
+            engine = draft_engine(self.controls)
+            key = self.test_key.text().strip().lower()
+            if len(key) != 1 or not key.isascii() or not key.isalnum():
+                raise ValueError("Введите одну латинскую букву или цифру")
+            events = engine.key_down(key) + engine.key_up(key)
+            for event in events:
+                encode_touch(event, 1920, 1080)
+        except ValueError as exc:
+            self.status.setText(f"Проверка невозможна: {exc}")
+            return
+        if events:
+            self.status.setText(
+                f"Тест без Android: {len(events)} событий касания, "
+                f"позиция {int(events[0].x)} × {int(events[0].y)}. Ничего не отправлено."
+            )
+        else:
+            self.status.setText("Тест без Android: клавиша не назначена. Ничего не отправлено.")
 
     def undo(self) -> None:
         if self.controls:

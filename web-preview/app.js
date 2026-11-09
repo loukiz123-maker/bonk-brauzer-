@@ -111,6 +111,18 @@ $('#canvas').addEventListener('click', event => {
   controls.push({kind: $('#control-kind').value, key, x: Math.max(0, Math.min(1, (event.clientX - rect.left) / rect.width)), y: Math.max(0, Math.min(1, (event.clientY - rect.top) / rect.height))});
   $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls();
 });
+$('#test-mapping').addEventListener('click', () => {
+  const status = $('#editor-status');
+  if (controls.some(c => !['Нажатие', 'Огонь'].includes(c.kind))) { status.textContent = 'Проверка невозможна: пока поддерживаются только нажатие и огонь.'; return; }
+  if (controls.some(c => !/^[a-z0-9]$/i.test(c.key)) || !/^[a-z0-9]$/i.test($('#test-key').value.trim())) { status.textContent = 'Для проверки используйте одну латинскую букву или цифру.'; return; }
+  const keys = controls.map(c => c.key.toLowerCase());
+  if (new Set(keys).size !== keys.length) { status.textContent = 'Проверка невозможна: клавиша назначена несколько раз.'; return; }
+  const control = controls.find(c => c.key.toLowerCase() === $('#test-key').value.trim().toLowerCase());
+  if (!control) { status.textContent = 'Демо без Android: клавиша не назначена. Ничего не отправлено.'; return; }
+  const x = Math.min(1919, Math.floor(control.x * 1920));
+  const y = Math.min(1079, Math.floor(control.y * 1080));
+  status.textContent = `Демо без Android: 2 события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
+});
 $('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
 $('#reset-controls').addEventListener('click', () => { controls = []; $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
 $('#save-controls').addEventListener('click', () => {

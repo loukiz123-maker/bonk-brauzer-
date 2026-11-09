@@ -173,6 +173,9 @@ def test_control_editor_saves_layout_and_refuses_corrupt_data(window, qt_app, tm
     editor.kind.setCurrentText("Огонь")
     editor.key.setText("F")
     editor.place(0.25, 0.75)
+    editor.test_key.setText("F")
+    editor.test_button.click()
+    assert "2 событий" in editor.status.text() and "480 × 810" in editor.status.text()
     editor.save_button.click()
     assert load_controls(path) == [{"kind": "Огонь", "key": "F", "x": 0.25, "y": 0.75}]
     editor.undo()
