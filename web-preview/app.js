@@ -94,6 +94,9 @@ let activeProfileIndex = 0;
 let controlsBaseline = '[]';
 let selectedControl = null;
 let dragging = false;
+let dragRecorded = false;
+let undoStack = [];
+let redoStack = [];
 let liveTest = false;
 const liveHeld = new Set();
 const livePressed = new Set();
@@ -133,6 +136,8 @@ function renderControls() {
   });
   $('#apply-control').disabled = selectedControl === null;
   $('#delete-control').disabled = selectedControl === null;
+  $('#undo-control').disabled = undoStack.length === 0;
+  $('#redo-control').disabled = redoStack.length === 0;
 }
 function activeTouchCount() { return controls.filter(c => controlKeys(c).some(k => liveHeld.has(k))).length; }
 $('#control-kind').addEventListener('change', () => { if ($('#control-kind').value === 'Джойстик' && $('#control-key').value.trim() === 'F') $('#control-key').value = 'W,D,S,A'; });
@@ -146,7 +151,7 @@ function loadProfile(key) {
   try { controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
   controlsBaseline = JSON.stringify(controls);
-  selectedControl = null; dragging = false; $('#save-controls').disabled = !controlsValid; renderControls();
+  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; renderControls();
 }
 $('#open-controls').addEventListener('click', () => {
   if (!$('#editor').hidden) return;
@@ -163,6 +168,11 @@ $('#control-profile').addEventListener('change', event => {
 });
 $('#close-editor').addEventListener('click', () => page('home'));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
+function recordChange() {
+  undoStack.push(JSON.stringify(controls));
+  if (undoStack.length > 50) undoStack.shift();
+  redoStack = [];
+}
 function selectControl(index) {
   selectedControl = index;
   if (index !== null) { $('#control-kind').value = controls[index].kind; $('#control-key').value = controls[index].key; }
@@ -181,15 +191,18 @@ $('#canvas').addEventListener('pointerdown', event => {
   for (let i = controls.length - 1; i >= 0; i--) {
     if (Math.hypot(x - controls[i].x * rect.width, y - controls[i].y * rect.height) <= 22) { hit = i; break; }
   }
-  if (hit !== null) { selectControl(hit); dragging = true; $('#canvas').setPointerCapture(event.pointerId); return; }
+  if (hit !== null) { selectControl(hit); dragging = true; dragRecorded = false; $('#canvas').setPointerCapture(event.pointerId); return; }
   const key = $('#control-key').value.trim();
   if (!key || controls.length >= 100) { $('#editor-status').textContent = 'Укажите клавишу; максимум 100 элементов.'; return; }
-  controls.push({kind: $('#control-kind').value, key, ...canvasPosition(event)});
+  recordChange(); controls.push({kind: $('#control-kind').value, key, ...canvasPosition(event)});
   selectControl(controls.length - 1); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
 });
 $('#canvas').addEventListener('pointermove', event => {
   if (!dragging || selectedControl === null) return;
-  Object.assign(controls[selectedControl], canvasPosition(event));
+  const position = canvasPosition(event);
+  if (controls[selectedControl].x === position.x && controls[selectedControl].y === position.y) return;
+  if (!dragRecorded) { recordChange(); dragRecorded = true; }
+  Object.assign(controls[selectedControl], position);
   $('#editor-status').textContent = 'Элемент перемещён • не сохранено'; renderControls();
 });
 $('#canvas').addEventListener('pointerup', () => { dragging = false; });
@@ -198,12 +211,13 @@ $('#apply-control').addEventListener('click', () => {
   if (selectedControl === null) return;
   const key = $('#control-key').value.trim();
   if (!key) { $('#editor-status').textContent = 'Укажите клавишу'; return; }
-  Object.assign(controls[selectedControl], {kind: $('#control-kind').value, key});
+  if (controls[selectedControl].kind === $('#control-kind').value && controls[selectedControl].key === key) return;
+  recordChange(); Object.assign(controls[selectedControl], {kind: $('#control-kind').value, key});
   $('#editor-status').textContent = 'Элемент изменён • не сохранено'; renderControls();
 });
 $('#delete-control').addEventListener('click', () => {
   if (selectedControl === null) return;
-  controls.splice(selectedControl, 1); selectControl(null);
+  recordChange(); controls.splice(selectedControl, 1); selectControl(null);
   $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
 });
 function endLiveTest() {
@@ -253,8 +267,20 @@ $('#test-mapping').addEventListener('click', () => {
   const y = Math.min(1079, Math.floor(control.y * 1080));
   status.textContent = `Демо без Android: ${control.kind === 'Джойстик' ? 3 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
 });
-$('#undo-control').addEventListener('click', () => { if (controls.length) controls.pop(); selectControl(null); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`; renderControls(); });
-$('#reset-controls').addEventListener('click', () => { controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено'; renderControls(); });
+$('#undo-control').addEventListener('click', () => {
+  if (!undoStack.length) return;
+  endLiveTest(); redoStack.push(JSON.stringify(controls)); controls = JSON.parse(undoStack.pop());
+  selectControl(null); $('#editor-status').textContent = 'Действие отменено • сохраните изменения';
+});
+$('#redo-control').addEventListener('click', () => {
+  if (!redoStack.length) return;
+  endLiveTest(); undoStack.push(JSON.stringify(controls)); controls = JSON.parse(redoStack.pop());
+  selectControl(null); $('#editor-status').textContent = 'Действие повторено • сохраните изменения';
+});
+$('#reset-controls').addEventListener('click', () => {
+  if (!controls.length) return;
+  recordChange(); controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено';
+});
 $('#save-controls').addEventListener('click', () => {
   if (!controlsValid) return;
   try { readControls(); localStorage.setItem(activeProfileKey, JSON.stringify({schema:1, controls})); controlsBaseline = JSON.stringify(controls); $('#editor-status').textContent = `Сохранено элементов: ${controls.length}`; }

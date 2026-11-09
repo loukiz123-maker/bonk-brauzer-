@@ -214,6 +214,11 @@ def test_control_editor_select_drag_edit_and_delete(window, qt_app, tmp_path) ->
     assert len(editor.controls) == 1
     assert editor.controls[0]["x"] == pytest.approx(0.7, abs=0.01)
     assert editor.controls[0]["y"] == pytest.approx(0.6, abs=0.01)
+    editor.undo_button.click()
+    assert editor.controls[0]["x"] == pytest.approx(0.25)
+    editor.redo_button.click()
+    assert editor.controls[0]["x"] == pytest.approx(0.7, abs=0.01)
+    editor.select(0)
     editor.kind.setCurrentText("Огонь")
     editor.key.setText("G")
     editor.apply_button.click()
@@ -222,6 +227,10 @@ def test_control_editor_select_drag_edit_and_delete(window, qt_app, tmp_path) ->
     assert load_controls(path)[0]["key"] == "G"
     editor.delete_button.click()
     assert not editor.controls and not editor.delete_button.isEnabled()
+    editor.undo_button.click()
+    assert editor.controls[0]["key"] == "G"
+    editor.redo_button.click()
+    assert not editor.controls
     editor.save_button.click()
     assert load_controls(path) == []
     editor.close()
@@ -316,4 +325,29 @@ def test_live_joystick_default_and_direction_keys(window, qt_app, tmp_path) -> N
     assert not editor.test_engine.active_pointers
     editor.end_live_test()
     editor.close()
+    shiboken6.delete(editor)
+
+
+def test_history_is_bounded_and_isolated_between_profiles(window, qt_app, tmp_path) -> None:
+    import shiboken6
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(
+        tmp_path / "general.json", window, games=[("First", tmp_path / "first.json")]
+    )
+    editor.place(0.5, 0.5)
+    for i in range(60):
+        editor.move_selected(0.1 + i / 100, 0.5)
+    assert len(editor._undo_stack) == 50
+    editor.undo_button.click()
+    assert editor.redo_button.isEnabled()
+    editor.select(0)
+    editor.move_selected(0.9, 0.5)
+    assert not editor.redo_button.isEnabled()
+    editor.save_button.click()
+    editor.profile_choice.setCurrentIndex(0)
+    assert not editor.controls and not editor.undo_button.isEnabled()
+    editor.profile_choice.setCurrentIndex(1)
+    assert len(editor.controls) == 1 and not editor.undo_button.isEnabled()
     shiboken6.delete(editor)
