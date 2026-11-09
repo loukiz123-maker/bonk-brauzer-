@@ -351,3 +351,27 @@ test('unavailable IndexedDB leaves a legacy profile untouched and read-only', as
     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), legacy);
   } finally { await context.close(); }
 });
+
+test('simultaneous saves of one profile have exactly one winner', async () => {
+  const {context, pages: [first, second]} = await freshPages(2);
+  try {
+    await Promise.all([first.click('#open-controls'), second.click('#open-controls')]);
+    await addMarker(first, 170); await addMarker(second, 320);
+    await first.evaluate(() => {
+      navigator.locks.request('lynxdroid:lynxdroid-preview-controls-v1', () => new Promise(resolve => {
+        window.releaseProfileLock = resolve; window.profileLockHeld = true;
+      }));
+    });
+    await first.waitForFunction(() => window.profileLockHeld);
+    await first.click('#save-controls');
+    await second.click('#save-controls');
+    await first.waitForFunction(async () => (await navigator.locks.query()).pending.filter(lock => lock.name === 'lynxdroid:lynxdroid-preview-controls-v1').length === 2);
+    await first.evaluate(() => window.releaseProfileLock());
+    await Promise.all([first, second].map(page => page.waitForFunction(() => !document.querySelector('#editor').inert)));
+    const statuses = await Promise.all([first, second].map(page => page.locator('#editor-status').textContent()));
+    assert.equal(statuses.filter(status => status.includes('Раскладка сохранена')).length, 1);
+    assert.equal(statuses.filter(status => status.includes('изменена в другой вкладке')).length, 1);
+    assert.equal(await first.locator('#canvas .marker').count(), 1);
+    assert.equal(await second.locator('#canvas .marker').count(), 1);
+  } finally { await context.close(); }
+});
