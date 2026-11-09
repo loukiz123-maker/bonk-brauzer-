@@ -262,3 +262,33 @@ def test_separate_apk_profiles_and_unsaved_switch(window, qt_app, tmp_path, monk
     assert a != b and load_controls(a)[0]["key"] == "F"
     assert load_controls(b)[0]["key"] == "G"
     editor.close_button.click()
+
+
+def test_live_control_test_holds_and_releases_without_a_channel(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("F")
+    editor.place(0.3, 0.4)
+    editor.live_button.click()
+    assert editor.test_engine is not None
+    QTest.keyPress(editor.canvas, Qt.Key.Key_F)
+    assert len(editor.test_engine.active_pointers) == 1
+    assert "удерживается: 1" in editor.status.text()
+    QTest.keyRelease(editor.canvas, Qt.Key.Key_F)
+    assert not editor.test_engine.active_pointers
+    assert "удерживается: 0" in editor.status.text()
+    QTest.keyPress(editor.canvas, Qt.Key.Key_F)
+    engine = editor.test_engine
+    editor.end_live_test()
+    assert not engine.active_pointers and editor.test_engine is None
+    assert "Ничего не отправлено" in editor.status.text()
+    editor.close()
+    shiboken6.delete(editor)

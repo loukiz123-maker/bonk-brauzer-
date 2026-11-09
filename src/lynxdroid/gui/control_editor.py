@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QMouseEvent, QPainter, QPaintEvent
+from PySide6.QtGui import QColor, QFocusEvent, QKeyEvent, QMouseEvent, QPainter, QPaintEvent
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
@@ -24,6 +24,7 @@ from PySide6.QtWidgets import (
 from lynxdroid.core.errors import DataCorrupted, LynxError
 from lynxdroid.core.storage import read_json, write_json
 from lynxdroid.input.draft_mapping import draft_engine
+from lynxdroid.input.engine import InputEngine
 from lynxdroid.input.scrcpy_touch import encode_touch
 
 KINDS = ("Нажатие", "Двойное нажатие", "Мультитач", "Джойстик", "Камера", "Перетаскивание", "Огонь")
@@ -57,12 +58,16 @@ class Canvas(QWidget):
         super().__init__()
         self.editor = editor
         self.dragging = False
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(420, 260)
         self.setStyleSheet("background:#0c101c; border:1px solid #334258; border-radius:6px")
         self.setToolTip("Нажмите на поле для добавления; перетащите элемент для перемещения")
 
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if event.button() != Qt.MouseButton.LeftButton:
+            return
+        if self.editor.test_engine is not None:
+            self.setFocus()
             return
         x, y = event.position().x(), event.position().y()
         for index in range(len(self.editor.controls) - 1, -1, -1):
@@ -85,13 +90,48 @@ class Canvas(QWidget):
         if event.button() == Qt.MouseButton.LeftButton:
             self.dragging = False
 
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        if self.editor.test_engine is None:
+            super().keyPressEvent(event)
+        elif event.key() == Qt.Key.Key_Escape:
+            self.editor.end_live_test()
+            event.accept()
+        else:
+            self.editor.live_key(event.text().lower(), down=True, repeat=event.isAutoRepeat())
+            event.accept()
+
+    def keyReleaseEvent(self, event: QKeyEvent) -> None:
+        if self.editor.test_engine is None:
+            super().keyReleaseEvent(event)
+        elif not event.isAutoRepeat():
+            self.editor.live_key(event.text().lower(), down=False)
+            event.accept()
+
+    def focusOutEvent(self, event: QFocusEvent) -> None:
+        self.editor.end_live_test()
+        super().focusOutEvent(event)
+
     def paintEvent(self, event: QPaintEvent) -> None:
         super().paintEvent(event)
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
         for index, item in enumerate(self.editor.controls):
-            painter.setPen(QColor("#ffffff" if index == self.editor.selected else "#47d2f0"))
-            painter.setBrush(QColor("#367382" if index == self.editor.selected else "#243e55"))
+            active = self.editor.test_engine is not None and any(
+                c.element_id == f"draft-{index}"
+                for c in self.editor.test_engine.active_pointers.values()
+            )
+            painter.setPen(
+                QColor("#ffffff" if index == self.editor.selected or active else "#47d2f0")
+            )
+            painter.setBrush(
+                QColor(
+                    "#49a8a2"
+                    if active
+                    else "#367382"
+                    if index == self.editor.selected
+                    else "#243e55"
+                )
+            )
             x, y = int(item["x"] * self.width()), int(item["y"] * self.height())
             painter.drawEllipse(x - 22, y - 22, 44, 44)
             painter.drawText(x - 19, y - 9, 38, 18, int(Qt.AlignmentFlag.AlignCenter), item["key"])
@@ -113,6 +153,7 @@ class ControlEditor(QDialog):
         self.resize(880, 520)
         self.controls: list[dict[str, Any]] = []
         self.selected: int | None = None
+        self.test_engine: InputEngine | None = None
         self.read_only = False
         layout = QHBoxLayout(self)
         self.canvas = Canvas(self)
@@ -162,6 +203,9 @@ class ControlEditor(QDialog):
         self.test_button = QPushButton("Проверить без Android")
         self.test_button.clicked.connect(self.test_mapping)
         side.addWidget(self.test_button)
+        self.live_button = QPushButton("Тест клавиш")
+        self.live_button.clicked.connect(self.toggle_live_test)
+        side.addWidget(self.live_button)
         self.status = QLabel("")
         self.status.setWordWrap(True)
         side.addWidget(self.status)
@@ -200,6 +244,7 @@ class ControlEditor(QDialog):
         )
 
     def _load_profile(self, path: Path) -> None:
+        self.end_live_test()
         self.path = path
         self.controls = []
         self.read_only = False
@@ -277,6 +322,48 @@ class ControlEditor(QDialog):
         self.controls.pop(self.selected)
         self.select(None)
         self.status.setText(f"Элементов: {len(self.controls)} • не сохранено")
+
+    def toggle_live_test(self) -> None:
+        if self.test_engine is not None:
+            self.end_live_test()
+            return
+        try:
+            self.test_engine = draft_engine(self.controls)
+        except ValueError as exc:
+            self.status.setText(f"Проверка невозможна: {exc}")
+            return
+        self.live_button.setText("Остановить тест")
+        self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
+        self.status.setText("Тест без Android: нажмите клавишу на поле. Esc — выход.")
+
+    def end_live_test(self) -> None:
+        if self.test_engine is None:
+            return
+        self.test_engine.release_all("test ended")
+        self.test_engine = None
+        self.live_button.setText("Тест клавиш")
+        self.status.setText("Тест остановлен. Ничего не отправлено в Android.")
+        self.canvas.update()
+
+    def live_key(self, key: str, *, down: bool, repeat: bool = False) -> None:
+        if self.test_engine is None or len(key) != 1 or not key.isascii() or not key.isalnum():
+            return
+        try:
+            events = (
+                self.test_engine.key_down(key, repeat=repeat)
+                if down
+                else self.test_engine.key_up(key)
+            )
+        except LynxError as exc:
+            self.end_live_test()
+            self.status.setText(f"Тест остановлен: {exc}")
+            return
+        if events:
+            active = len(self.test_engine.active_pointers)
+            self.status.setText(
+                f"Тест без Android: {key.upper()} • событий: {len(events)} • удерживается: {active}"
+            )
+            self.canvas.update()
 
     def test_mapping(self) -> None:
         try:

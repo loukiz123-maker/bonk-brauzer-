@@ -293,8 +293,10 @@ class LauncherWindow(QMainWindow):
     def _show_page(self, index: int) -> None:
         if self.pages.currentIndex() == 3 and index != 3:
             current = self.pages.currentWidget()
-            if isinstance(current, ControlEditor) and not current.can_discard():
-                return
+            if isinstance(current, ControlEditor):
+                if not current.can_discard():
+                    return
+                current.end_live_test()
         self.pages.setCurrentIndex(index)
         for i, button in enumerate((self.home_button, self.library_button, self.about_button)):
             button.setChecked(i == index)

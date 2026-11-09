@@ -94,6 +94,9 @@ let activeProfileIndex = 0;
 let controlsBaseline = '[]';
 let selectedControl = null;
 let dragging = false;
+let liveTest = false;
+const liveHeld = new Set();
+const livePressed = new Set();
 function readControls(key = activeProfileKey) {
   const data = JSON.parse(localStorage.getItem(key) || '{"schema":1,"controls":[]}');
   if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
@@ -101,7 +104,7 @@ function readControls(key = activeProfileKey) {
 }
 function renderControls() {
   const canvas = $('#canvas'); canvas.querySelectorAll('.marker').forEach(m => m.remove());
-  controls.forEach((c, index) => { const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
+  controls.forEach((c, index) => { const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', liveHeld.has(c.key.toLowerCase())); marker.textContent = c.key; marker.title = c.kind; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker); });
   $('#apply-control').disabled = selectedControl === null;
   $('#delete-control').disabled = selectedControl === null;
 }
@@ -110,6 +113,7 @@ function canDiscard() {
   return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
 }
 function loadProfile(key) {
+  endLiveTest();
   activeProfileKey = key;
   try { controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
@@ -142,6 +146,7 @@ function canvasPosition(event) {
 }
 $('#canvas').addEventListener('pointerdown', event => {
   if (event.button !== 0) return;
+  if (liveTest) { $('#canvas').focus(); return; }
   const rect = $('#canvas').getBoundingClientRect();
   const x = event.clientX - rect.left, y = event.clientY - rect.top;
   let hit = null;
@@ -173,6 +178,41 @@ $('#delete-control').addEventListener('click', () => {
   controls.splice(selectedControl, 1); selectControl(null);
   $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
 });
+function endLiveTest() {
+  if (!liveTest) return;
+  liveTest = false; liveHeld.clear(); livePressed.clear();
+  $('#live-test').textContent = 'Тест клавиш';
+  $('#editor-status').textContent = 'Тест остановлен. Ничего не отправлено в Android.';
+  renderControls();
+}
+$('#live-test').addEventListener('click', () => {
+  if (liveTest) { endLiveTest(); return; }
+  if (controls.some(c => !['Нажатие', 'Огонь'].includes(c.kind))) { $('#editor-status').textContent = 'Проверка невозможна: пока поддерживаются только нажатие и огонь.'; return; }
+  const keys = controls.map(c => c.key.toLowerCase());
+  if (keys.some(k => !/^[a-z0-9]$/.test(k)) || new Set(keys).size !== keys.length) { $('#editor-status').textContent = 'Укажите разные латинские буквы или цифры для каждой кнопки.'; return; }
+  liveTest = true; $('#live-test').textContent = 'Остановить тест'; $('#canvas').focus();
+  $('#editor-status').textContent = 'Тест без Android: нажмите клавишу на поле. Esc — выход.';
+});
+$('#canvas').addEventListener('keydown', event => {
+  if (!liveTest) return;
+  if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
+  const key = event.key.toLowerCase();
+  if (!/^[a-z0-9]$/.test(key) || event.repeat || livePressed.has(key)) return;
+  const control = controls.find(c => c.key.toLowerCase() === key);
+  if (!control) return;
+  event.preventDefault(); livePressed.add(key);
+  if (control.kind === 'Огонь') liveHeld.add(key);
+  $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: ${control.kind === 'Огонь' ? 1 : 2} • удерживается: ${liveHeld.size}`; renderControls();
+});
+$('#canvas').addEventListener('keyup', event => {
+  if (!liveTest) return;
+  const key = event.key.toLowerCase();
+  if (!livePressed.has(key)) return;
+  livePressed.delete(key);
+  if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${liveHeld.size}`;
+  renderControls(); event.preventDefault();
+});
+$('#canvas').addEventListener('blur', endLiveTest);
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
   if (controls.some(c => !['Нажатие', 'Огонь'].includes(c.kind))) { status.textContent = 'Проверка невозможна: пока поддерживаются только нажатие и огонь.'; return; }

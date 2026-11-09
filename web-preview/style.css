@@ -11,3 +11,5 @@
 button:enabled{color:#fff}.primary:enabled{color:#fff;background:#146d70;border-color:#146d70}.primary:hover:enabled{background:#20848a}.tool-rail button:enabled,.tool-rail button:hover:enabled,.tool-rail .nav.active{color:#fff}
 
 .canvas{touch-action:none}.marker.selected{background:#367382;border-color:#fff}.editor-side{overflow-y:auto}
+
+.marker.active{background:#49a8a2;border-color:#fff;box-shadow:0 0 16px #49a8a2}.canvas:focus-visible{outline:2px solid #8fe5dc;outline-offset:2px}
