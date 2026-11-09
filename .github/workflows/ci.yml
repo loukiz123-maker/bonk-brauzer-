@@ -291,13 +291,16 @@ jobs:
             python -c "from pathlib import Path; print('::error::Qt startup: ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
             exit 1
           }
-          python -X faulthandler -m pytest tests/gui/test_launcher_ui.py -q --tb=short > qt-check.log 2>&1 || {
+          for test in test_navigation_and_disabled_launch test_import_search_and_remove_without_deleting_file test_fullscreen_and_escape; do
+          python -X faulthandler -m pytest "tests/gui/test_launcher_ui.py::$test" -q --tb=short > qt-check.log 2>&1 || {
             status=$?
             export QT_TEST_EXIT="$status"
             python -c "import os; from pathlib import Path; print('::error::Qt tests exit ' + os.environ['QT_TEST_EXIT'] + ': ' + Path('qt-check.log').read_text()[-3500:].replace(chr(10), '%0A'))"
+            echo "::error::Failing test: $test"
             exit "$status"
           }
           cat qt-check.log
+          done
       - name: Capture launcher preview
         run: |
           python - <<'PY'
