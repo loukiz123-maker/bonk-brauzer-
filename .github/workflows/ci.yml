@@ -339,7 +339,12 @@ jobs:
           cache-dependency-path: tests/browser/package-lock.json
       - run: npm ci
         working-directory: tests/browser
-      - run: npx playwright install --with-deps chromium
+      - name: Test with runner Chrome
         working-directory: tests/browser
-      - run: npm test
-        working-directory: tests/browser
+        run: |
+          export CHROMIUM_PATH="$(command -v google-chrome || command -v chromium || command -v chromium-browser)"
+          npm test > browser-test.log 2>&1 || {
+            while IFS= read -r line; do echo "::error::$line"; done < browser-test.log
+            exit 1
+          }
+          cat browser-test.log
