@@ -14,7 +14,12 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from enum import Enum
 
-from lynxdroid.backend.compat import FixResult, match_failure, parse_manual_network_output
+from lynxdroid.backend.compat import (
+    FixResult,
+    match_failure,
+    parse_manual_network_output,
+    parse_manual_root_output,
+)
 from lynxdroid.backend.contract import (
     BackendCapabilities,
     BackendState,
@@ -529,4 +534,17 @@ def game_manual_network_message(output: str) -> str:
         + "\n\nA ping failure is inconclusive; a successful hostname ping "
         "does not prove that the game's server is reachable. "
         "A successful route command does not prove a usable route exists."
+    )
+
+
+def game_manual_root_message(output: str) -> str:
+    if not output.strip():
+        return "Paste the complete terminal output first."
+    rows = parse_manual_root_output(output)
+    statuses = "\n".join(f"{name}: {value}" for name, value in rows)
+    return (
+        "Review of pasted output (not independently verified):\n"
+        + statuses
+        + "\n\nThese are limited observations, not proof that root is absent "
+        "or that the game will accept the device. No settings were changed."
     )

@@ -771,3 +771,46 @@ class TestManualNetworkReport:
         code, out, _ = run(capsys, ["game", "network-report", "--json"], root)
         assert code != ExitCode.OK
         assert "limit" in json.loads(out)["error"]["message"]
+
+
+class TestManualRootReport:
+    def test_command_does_not_read_stdin(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO(""))
+        code, out, _ = run(capsys, ["game", "root-report", "--command", "--json"], root)
+        assert code == ExitCode.OK
+        assert json.loads(out)["command"].startswith("sudo waydroid shell --")
+
+    def test_complete_report_does_not_claim_compatibility(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr(
+            "sys.stdin",
+            io.StringIO(
+                "LYNX_ROOT_DEBUG:0:1\nLYNX_ROOT_SECURE:0:0\n"
+                "LYNX_ROOT_TAGS:0:test-keys\nLYNX_ROOT_SU:0\n"
+            ),
+        )
+        code, out, _ = run(capsys, ["game", "root-report", "--json"], root)
+        result = json.loads(out)
+        assert code == ExitCode.OK
+        assert result["verified"] is False
+        assert "do not prove root is absent" in result["note"]
+        assert result["observations"][3]["value"] == "found on shell PATH"
+
+    def test_unknown_is_blocked_not_silently_clean(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("no permission"))
+        code, out, _ = run(capsys, ["game", "root-report"], root)
+        assert code == ExitCode.BLOCKED
+        assert "su: unknown" in out
+
+    def test_oversized_input_is_rejected(self, capsys, root, monkeypatch):
+        import io
+
+        monkeypatch.setattr("sys.stdin", io.StringIO("x" * 1_000_001))
+        code, out, _ = run(capsys, ["game", "root-report", "--json"], root)
+        assert code == ExitCode.USAGE
+        assert "limit" in json.loads(out)["error"]["message"]

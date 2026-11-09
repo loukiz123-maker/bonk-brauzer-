@@ -503,3 +503,22 @@ class TestManualGameNetwork:
             "self._game_manual_input.textChanged.connect(self._clear_game_manual_result)" in source
         )
         assert "vm.game_manual_network_message(self._game_manual_input.toPlainText())" in source
+
+
+class TestManualGameRoot:
+    def test_results_are_unverified_and_do_not_prove_no_root(self) -> None:
+        result = vm.game_manual_root_message(
+            "LYNX_ROOT_DEBUG:0:0\nLYNX_ROOT_SECURE:0:1\nLYNX_ROOT_TAGS:0:release-keys\nLYNX_ROOT_SU:1\n"
+        )
+        assert "not independently verified" in result
+        assert "not proof that root is absent" in result
+        assert "ro.build.tags: release-keys" in result
+
+    def test_empty_and_incomplete_output(self) -> None:
+        assert "Paste" in vm.game_manual_root_message("")
+        assert "ro.secure: unknown" in vm.game_manual_root_message("permission denied")
+
+    def test_gui_wires_button_and_clears_stale_results(self) -> None:
+        source = TestGameHelpWiring.source()
+        assert "root_check.clicked.connect(self._review_game_root_output)" in source
+        assert "self._game_root_input.textChanged.connect(self._clear_game_root_result)" in source

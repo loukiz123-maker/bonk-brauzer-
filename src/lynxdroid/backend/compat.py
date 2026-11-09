@@ -293,6 +293,41 @@ def parse_manual_network_output(output: str) -> list[tuple[str, str]]:
     return rows
 
 
+# Read-only root-related observations. These do not establish whether any
+# specific game will accept the device, nor do they modify Android.
+MANUAL_ROOT_SCRIPT = (
+    r"""v=$(getprop ro.debuggable 2>/dev/null); s=$?; """
+    r"""printf '\nLYNX_ROOT_DEBUG:%s:%s\n' "$s" "$v"; """
+    r"""v=$(getprop ro.secure 2>/dev/null); s=$?; printf '\nLYNX_ROOT_SECURE:%s:%s\n' "$s" "$v"; """
+    r"""v=$(getprop ro.build.tags 2>/dev/null); s=$?; """
+    r"""printf '\nLYNX_ROOT_TAGS:%s:%s\n' "$s" "$v"; """
+    r"""command -v su >/dev/null 2>&1; printf '\nLYNX_ROOT_SU:%s\n' "$?"; """
+)
+MANUAL_ROOT_COMMAND = "sudo waydroid shell -- /system/bin/sh -c " + shlex.quote(MANUAL_ROOT_SCRIPT)
+_ROOT_PROPERTIES = (("ro.debuggable", "DEBUG"), ("ro.secure", "SECURE"), ("ro.build.tags", "TAGS"))
+
+
+def parse_manual_root_output(output: str) -> list[tuple[str, str]]:
+    """Review untrusted user-supplied output; incomplete evidence stays unknown."""
+    lines = output.splitlines()
+    result: list[tuple[str, str]] = []
+    for label, key in _ROOT_PROPERTIES:
+        prefix = f"LYNX_ROOT_{key}:"
+        found = [line.strip()[len(prefix) :] for line in lines if line.strip().startswith(prefix)]
+        match = re.fullmatch(r"0:([A-Za-z0-9_.-]{1,64})", found[0]) if len(found) == 1 else None
+        result.append((label, match.group(1) if match else "unknown"))
+    prefix = "LYNX_ROOT_SU:"
+    found = [line.strip()[len(prefix) :] for line in lines if line.strip().startswith(prefix)]
+    if found == ["0"]:
+        su = "found on shell PATH"
+    elif found == ["1"]:
+        su = "not found on shell PATH; this does not rule out root"
+    else:
+        su = "unknown"
+    result.append(("su", su))
+    return result
+
+
 class CompatFixes:
     """The fixes, and the judgement about what is worth trying.
 

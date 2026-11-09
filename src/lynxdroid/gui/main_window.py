@@ -57,6 +57,7 @@ from PySide6.QtWidgets import (
 
 from lynxdroid.backend.compat import (
     MANUAL_NETWORK_COMMAND,
+    MANUAL_ROOT_COMMAND,
     CompatFixes,
     FixResult,
     network_manual_help,
@@ -489,7 +490,40 @@ class MainWindow(QMainWindow):
             Qt.TextInteractionFlag.TextSelectableByMouse
         )
         layout.addWidget(self._game_manual_result)
+        layout.addWidget(_section("Root detection evidence"))
+        root_note = QLabel(
+            "Read-only checks for build properties and su on the Android shell PATH. "
+            "They do not disable root and cannot guarantee game compatibility. "
+            "Run the command in a terminal with Android running, then paste the output."
+        )
+        root_note.setWordWrap(True)
+        layout.addWidget(root_note)
+        root_command = QPlainTextEdit(MANUAL_ROOT_COMMAND)
+        root_command.setReadOnly(True)
+        root_command.setMaximumHeight(110)
+        layout.addWidget(root_command)
+        self._game_root_input = QPlainTextEdit()
+        self._game_root_input.setPlaceholderText("Paste the complete terminal output here")
+        self._game_root_input.setMaximumHeight(120)
+        self._game_root_input.textChanged.connect(self._clear_game_root_result)
+        layout.addWidget(self._game_root_input)
+        root_check = QPushButton("Review root observations")
+        root_check.clicked.connect(self._review_game_root_output)
+        layout.addWidget(root_check)
+        self._game_root_result = QLabel("Paste output and select Review root observations.")
+        self._game_root_result.setTextFormat(Qt.TextFormat.PlainText)
+        self._game_root_result.setWordWrap(True)
+        self._game_root_result.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(self._game_root_result)
         return _scrolled(page)
+
+    def _clear_game_root_result(self) -> None:
+        self._game_root_result.setText("Review the current pasted output again.")
+
+    def _review_game_root_output(self) -> None:
+        self._game_root_result.setText(
+            vm.game_manual_root_message(self._game_root_input.toPlainText())
+        )
 
     def _clear_game_manual_result(self) -> None:
         self._game_manual_result.setText("Select Review pasted output to analyse the current text.")

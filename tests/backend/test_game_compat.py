@@ -216,3 +216,93 @@ class TestManualNetworkOutput:
             "-c",
             MANUAL_NETWORK_SCRIPT,
         ]
+
+
+class TestManualRootOutput:
+    def test_reports_observations_without_claiming_device_is_safe(self) -> None:
+        from lynxdroid.backend.compat import parse_manual_root_output
+
+        rows = dict(
+            parse_manual_root_output(
+                "LYNX_ROOT_DEBUG:0:1\nLYNX_ROOT_SECURE:0:0\n"
+                "LYNX_ROOT_TAGS:0:test-keys\nLYNX_ROOT_SU:1\n"
+            )
+        )
+        assert rows["ro.debuggable"] == "1"
+        assert rows["ro.build.tags"] == "test-keys"
+        assert "does not rule out root" in rows["su"]
+
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            "",
+            "LYNX_ROOT_DEBUG:1:1",
+            "LYNX_ROOT_DEBUG:0:",
+            "LYNX_ROOT_DEBUG:0:<b>unsafe</b>",
+            "LYNX_ROOT_DEBUG:0:1\nLYNX_ROOT_DEBUG:0:1",
+        ],
+    )
+    def test_missing_failed_or_ambiguous_property_is_unknown(self, marker: str) -> None:
+        from lynxdroid.backend.compat import parse_manual_root_output
+
+        assert dict(parse_manual_root_output(marker))["ro.debuggable"] == "unknown"
+
+    @pytest.mark.parametrize(
+        "marker,expected",
+        [
+            ("LYNX_ROOT_SU:0", "found on shell PATH"),
+            ("LYNX_ROOT_SU:1", "not found on shell PATH; this does not rule out root"),
+            ("LYNX_ROOT_SU:2", "unknown"),
+            ("LYNX_ROOT_SU:0\nLYNX_ROOT_SU:1", "unknown"),
+        ],
+    )
+    def test_su_result_is_not_overstated(self, marker: str, expected: str) -> None:
+        from lynxdroid.backend.compat import parse_manual_root_output
+
+        assert dict(parse_manual_root_output(marker))["su"] == expected
+
+    def test_script_records_real_read_only_command_output_and_failures(self, tmp_path) -> None:
+        import os
+        import subprocess
+
+        from lynxdroid.backend.compat import MANUAL_ROOT_SCRIPT, parse_manual_root_output
+
+        getprop = tmp_path / "getprop"
+        getprop.write_text(
+            '#!/bin/sh\ncase "$1" in ro.debuggable) echo 1;; '
+            "ro.secure) exit 5;; ro.build.tags) echo test-keys;; esac\n"
+        )
+        getprop.chmod(0o755)
+        su = tmp_path / "su"
+        su.write_text('#!/bin/sh\necho executed > "$SU_CALLED"\nexit 1\n')
+        su.chmod(0o755)
+        result = subprocess.run(
+            ["/bin/sh", "-c", MANUAL_ROOT_SCRIPT],
+            text=True,
+            capture_output=True,
+            check=False,
+            env={**os.environ, "PATH": str(tmp_path), "SU_CALLED": str(tmp_path / "called")},
+        )
+        rows = dict(parse_manual_root_output(result.stdout))
+        assert rows == {
+            "ro.debuggable": "1",
+            "ro.secure": "unknown",
+            "ro.build.tags": "test-keys",
+            "su": "found on shell PATH",
+        }
+        assert not (tmp_path / "called").exists()
+
+    def test_manual_command_has_separated_script(self) -> None:
+        import shlex
+
+        from lynxdroid.backend.compat import MANUAL_ROOT_COMMAND, MANUAL_ROOT_SCRIPT
+
+        assert shlex.split(MANUAL_ROOT_COMMAND) == [
+            "sudo",
+            "waydroid",
+            "shell",
+            "--",
+            "/system/bin/sh",
+            "-c",
+            MANUAL_ROOT_SCRIPT,
+        ]

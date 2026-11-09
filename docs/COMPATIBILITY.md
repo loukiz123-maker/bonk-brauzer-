@@ -33,6 +33,23 @@ For connection errors, **Check Android network** attempts the limited probes in
 the background and displays their output without changing settings. Qt wiring
 is statically tested; actual GUI operation still needs verification on a desktop.
 
+## Root-warning observations
+
+In **Game help**, the **Root detection evidence** section gives a read-only
+command for a running Android session. Copy the command to a terminal, run it
+yourself, and paste the complete output to review the three build properties
+and whether `su` was found on the Android shell's PATH. No properties are
+changed and `su` is not executed. An absent `su` on this PATH does not rule
+out root elsewhere, and these observations do not determine whether any game
+will accept the device. Pasted output cannot be independently authenticated.
+Missing, failed or duplicated markers are shown as unknown.
+
+For headless use, obtain the command with `lynxdroid game root-report --command`
+and review saved output with `lynxdroid game root-report --json < root.txt`.
+Exit 0 only means all fields were present and valid; it is not a clean-device
+or game-compatibility verdict. This check has not yet been tested on a real
+Waydroid installation or a real desktop.
+
 ## Correction to earlier releases
 
 `hide-root` and `egl-fallback` are disabled: their effectiveness was never

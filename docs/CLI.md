@@ -150,6 +150,8 @@ only looks like a hang.
 lynxdroid game explain MESSAGE [--json]
 lynxdroid game fix NAME [--yes] [--json]
 lynxdroid game network-report [--json] < network.txt
+lynxdroid game root-report --command
+lynxdroid game root-report [--json] < root.txt
 lynxdroid game revert [--yes] [--json]
 ```
 
@@ -167,6 +169,13 @@ For a headless review, save the complete output of the displayed manual command
 standard input. It returns 0 only when all three guest commands reported zero;
 6 means failed or missing markers, not proof the network is broken. This is
 user-supplied evidence, not independently authenticated.
+
+For a root warning, `game root-report --command` prints a read-only command
+for a running Waydroid instance. Run it yourself, save its output, and review
+it with `game root-report --json < root.txt`. It reports three Android build
+properties and whether `su` is on the shell PATH, not whether a particular
+Android game will run. Exit 0 means all fields had valid markers, not that
+the device passed any root or integrity check; 6 means some are unknown.
 
 See `docs/COMPATIBILITY.md` for limitations and recovery guidance.
 

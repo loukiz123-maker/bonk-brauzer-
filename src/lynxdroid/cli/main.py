@@ -167,6 +167,13 @@ def build_parser() -> argparse.ArgumentParser:
     p_network_report.add_argument("--json", action="store_true")
     p_network_report.set_defaults(func=cmd_game_network_report)
 
+    p_root_report = game_sub.add_parser(
+        "root-report", help="show a read-only command or review pasted root observations"
+    )
+    p_root_report.add_argument("--command", action="store_true", help="print the manual command")
+    p_root_report.add_argument("--json", action="store_true")
+    p_root_report.set_defaults(func=cmd_game_root_report)
+
     p_revert = game_sub.add_parser("revert", help="undo the root-hiding fix")
     p_revert.add_argument("--yes", action="store_true")
     p_revert.add_argument("--json", action="store_true")
@@ -482,6 +489,46 @@ def cmd_game_network_report(args: argparse.Namespace, paths: AppPaths, store: Se
         for name, status in rows:
             print(f"{name}: {status}")
     return int(ExitCode.OK if complete_success else ExitCode.BLOCKED)
+
+
+def cmd_game_root_report(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Review limited root indicators from user-supplied output."""
+    from lynxdroid.backend.compat import MANUAL_ROOT_COMMAND, parse_manual_root_output
+
+    if args.command:
+        if args.json:
+            print(json.dumps({"command": MANUAL_ROOT_COMMAND}, indent=2))
+        else:
+            print(MANUAL_ROOT_COMMAND)
+        return int(ExitCode.OK)
+    limit = 1_000_000
+    text = sys.stdin.read(limit + 1)
+    if len(text) > limit:
+        raise UsageError("root output exceeds the 1,000,000 character limit")
+    rows = parse_manual_root_output(text)
+    complete = all(value != "unknown" for _, value in rows)
+    note = (
+        "User-supplied output is not independently verified. These limited observations "
+        "do not prove root is absent or that a game will accept the device."
+    )
+    if args.json:
+        print(
+            json.dumps(
+                {
+                    "source": "user-supplied",
+                    "verified": False,
+                    "note": note,
+                    "observations": [{"name": name, "value": value} for name, value in rows],
+                },
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+    else:
+        print(note)
+        for name, value in rows:
+            print(f"{name}: {value}")
+    return int(ExitCode.OK if complete else ExitCode.BLOCKED)
 
 
 def cmd_game_fix(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
