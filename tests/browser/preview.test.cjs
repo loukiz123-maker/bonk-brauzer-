@@ -94,6 +94,8 @@ test('two tabs cannot silently overwrite the same saved profile', async () => {
     await first.click('#save-controls');
     await first.waitForSelector('#editor-status:text("Раскладка сохранена")');
     const saved = await first.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1'));
+    // Simulate a stale renderer mirror: the database must still detect conflict.
+    await second.evaluate(() => localStorage.removeItem('lynxdroid-preview-controls-v1'));
     await second.click('#save-controls');
     await second.waitForSelector('#editor-status:text("изменена в другой вкладке")');
     assert.equal(await second.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), saved);
@@ -281,6 +283,7 @@ test('copying a saved game layout is confirmed, undoable and never auto-saves', 
     assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
     page.once('dialog', dialog => dialog.accept());
     await page.click('#copy-profile');
+    await page.waitForSelector('#editor-status:text("Раскладка скопирована")');
     assert.equal(await page.locator('#canvas .marker').textContent(), 'F');
     assert.equal(await page.evaluate(key => localStorage.getItem(key), beta), null);
     assert.equal(await page.evaluate(key => localStorage.getItem(key), alpha), savedAlpha);
@@ -306,5 +309,35 @@ test('a stale localStorage mirror cannot erase a committed APK', async () => {
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2);
     const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1')));
     assert.deepEqual(saved.sort(), ['Alpha.apk', 'Beta.apk']);
+  } finally { await context.close(); }
+});
+
+
+test('legacy profile migrates and reload repairs a stale valid mirror', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    const legacy = JSON.stringify({schema: 1, controls: [{kind: 'Огонь', key: 'K', x: 0.5, y: 0.5}]});
+    await page.evaluate(value => localStorage.setItem('lynxdroid-preview-controls-v1', value), legacy);
+    await page.click('#open-controls');
+    await page.waitForSelector('#canvas .marker:text("K")');
+    await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{"schema":1,"controls":[]}'));
+    await page.click('#reload-profile');
+    await page.waitForSelector('#canvas .marker:text("K")');
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), legacy);
+  } finally { await context.close(); }
+});
+
+test('unavailable IndexedDB leaves a legacy profile untouched and read-only', async () => {
+  const context = await browser.newContext({viewport: {width: 1400, height: 900}});
+  try {
+    await context.addInitScript(() => { indexedDB.open = () => { throw new Error('blocked'); }; });
+    const page = await context.newPage();
+    await page.goto(url);
+    const legacy = '{"schema":1,"controls":[]}';
+    await page.evaluate(value => localStorage.setItem('lynxdroid-preview-controls-v1', value), legacy);
+    await page.click('#open-controls');
+    await page.waitForSelector('#editor-status:text("Сохранение отключено")');
+    assert.equal(await page.locator('#save-controls').isDisabled(), true);
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), legacy);
   } finally { await context.close(); }
 });

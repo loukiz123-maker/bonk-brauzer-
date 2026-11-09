@@ -5,7 +5,7 @@ let entries = [];
 let selected = null;
 let storageAvailable = true;
 try {
-  const saved = JSON.parse(localStorage.getItem(storageKey) || '[]');
+  const saved = JSON.parse(localStorage.getItem(storageKey) ?? '[]');
   if (!Array.isArray(saved) || !saved.every((name) => typeof name === 'string')) throw new Error('invalid data');
   entries = saved;
 } catch {
@@ -23,14 +23,14 @@ function validateLibrary(data) {
   return data;
 }
 function readLibrary() {
-  return validateLibrary(JSON.parse(localStorage.getItem(storageKey) || '[]'));
+  return validateLibrary(JSON.parse(localStorage.getItem(storageKey) ?? '[]'));
 }
 async function withStorageLock(key, action) {
   if (!navigator.locks) throw new Error('Браузер не поддерживает защиту от конфликтов вкладок');
   return navigator.locks.request(`lynxdroid:${key}`, action);
 }
 // localStorage snapshots can be stale across renderer processes even after a
-// Web Lock is acquired. IndexedDB is the authoritative library snapshot;
+// Web Lock is acquired. IndexedDB is the authoritative saved snapshot;
 // localStorage remains a compatibility mirror and cross-tab notification.
 let libraryDatabase;
 function openLibraryDatabase() {
@@ -43,23 +43,28 @@ function openLibraryDatabase() {
   });
   return libraryDatabase;
 }
-async function librarySnapshot() {
+async function readSnapshot(key) {
   const db = await openLibraryDatabase();
   return new Promise((resolve, reject) => {
-    const request = db.transaction('state', 'readonly').objectStore('state').get(storageKey);
-    request.onsuccess = () => { try { resolve(request.result === undefined ? null : validateLibrary(request.result)); } catch (error) { reject(error); } };
-    request.onerror = () => reject(request.error || new Error('Не удалось прочитать библиотеку'));
+    const request = db.transaction('state', 'readonly').objectStore('state').get(key);
+    request.onsuccess = () => resolve(request.result);
+    request.onerror = () => reject(request.error || new Error('Не удалось прочитать данные'));
   });
 }
-async function writeLibrarySnapshot(next) {
+async function writeSnapshot(key, value) {
   const db = await openLibraryDatabase();
   await new Promise((resolve, reject) => {
     const tx = db.transaction('state', 'readwrite');
-    tx.objectStore('state').put(next, storageKey);
+    tx.objectStore('state').put(value, key);
     tx.oncomplete = resolve;
-    tx.onerror = tx.onabort = () => reject(tx.error || new Error('Не удалось сохранить библиотеку'));
+    tx.onerror = tx.onabort = () => reject(tx.error || new Error('Не удалось сохранить данные'));
   });
 }
+async function librarySnapshot() {
+  const value = await readSnapshot(storageKey);
+  return value === undefined ? null : validateLibrary(value);
+}
+async function writeLibrarySnapshot(next) { await writeSnapshot(storageKey, next); }
 async function initialiseLibrary() {
   if (!storageAvailable || !navigator.locks) return;
   try {
@@ -98,6 +103,7 @@ window.addEventListener('storage', event => {
   catch { storageAvailable = false; selected = null; render(); message('Библиотека повреждена; запись отключена.'); }
 });
 function page(name) {
+  if (name !== 'editor' && !$('#editor').hidden && profileBusy) { message('Подождите завершения работы с раскладкой.'); return false; }
   if (!$('#editor').hidden && name !== 'editor' && !canDiscard()) return false;
   if (name !== 'editor') endLiveTest();
   document.querySelectorAll('.page').forEach((el) => { el.hidden = el.id !== name; });
@@ -176,6 +182,7 @@ let activeProfileIndex = 0;
 let controlsBaseline = '[]';
 let storedProfileBaseline = null;
 let profileGeneration = 0;
+let profileBusy = false;
 let selectedControl = null;
 let dragging = false;
 let dragRecorded = false;
@@ -190,7 +197,7 @@ function validateDraft(data) {
   return data.controls;
 }
 function readControls(key = activeProfileKey) {
-  return validateDraft(JSON.parse(localStorage.getItem(key) || '{"schema":1,"controls":[]}'));
+  return validateDraft(JSON.parse(localStorage.getItem(key) ?? '{"schema":1,"controls":[]}'));
 }
 function controlKeys(control) {
   return control.kind === 'Джойстик' ? control.key.split(',').map(k => k.trim().toLowerCase()) : [control.key.toLowerCase()];
@@ -249,13 +256,45 @@ $('#open-settings').addEventListener('click', () => $('#settings-dialog').showMo
 function canDiscard() {
   return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
 }
-function loadProfile(key) {
+function setProfileBusy(busy) {
+  profileBusy = busy;
+  $('#editor').inert = busy;
+}
+function validateStoredProfile(raw) {
+  if (raw === null) return [];
+  if (typeof raw !== 'string') throw new Error('Некорректные данные раскладки');
+  return validateDraft(JSON.parse(raw));
+}
+// Call only while holding the matching Web Lock. A valid legacy localStorage
+// record is migrated once; after that IndexedDB is authoritative.
+async function canonicalProfile(key) {
+  const mirror = localStorage.getItem(key);
+  validateStoredProfile(mirror); // Never silently replace corrupt data.
+  let saved = await readSnapshot(key);
+  if (saved === undefined) { saved = mirror; await writeSnapshot(key, saved); }
+  validateStoredProfile(saved);
+  if (mirror !== saved) {
+    if (saved === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, saved);
+  }
+  return saved;
+}
+async function loadProfile(key) {
   endLiveTest(); profileGeneration++;
-  activeProfileKey = key;
-  try { storedProfileBaseline = localStorage.getItem(key); controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
-  catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
-  controlsBaseline = JSON.stringify(controls);
-  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid; refreshCopySources(); renderControls();
+  activeProfileKey = key; setProfileBusy(true);
+  try {
+    const raw = navigator.locks ? await withStorageLock(key, () => canonicalProfile(key)) : localStorage.getItem(key);
+    controls = validateStoredProfile(raw); storedProfileBaseline = raw; controlsValid = true;
+    $('#editor-status').textContent = `Элементов: ${controls.length}`;
+  } catch {
+    controls = []; storedProfileBaseline = null; controlsValid = false;
+    $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.';
+  } finally {
+    controlsBaseline = JSON.stringify(controls);
+    selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = [];
+    $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid;
+    refreshCopySources(); renderControls(); setProfileBusy(false);
+  }
 }
 function refreshCopySources() {
   const source = $('#copy-source'); source.replaceChildren();
@@ -265,17 +304,21 @@ function refreshCopySources() {
   source.disabled = !controlsValid || source.options.length === 0;
   $('#copy-profile').disabled = source.disabled;
 }
-$('#copy-profile').addEventListener('click', () => {
-  if (!controlsValid || !$('#copy-source').value) return;
+$('#copy-profile').addEventListener('click', async () => {
+  if (!controlsValid || profileBusy || !$('#copy-source').value) return;
+  const key = $('#copy-source').value, generation = profileGeneration;
+  $('#copy-profile').disabled = true;
   try {
-    const key = $('#copy-source').value;
-    if (localStorage.getItem(key) === null) throw new Error('У этого профиля ещё нет сохранённой раскладки.');
-    const source = readControls(key);
+    const raw = navigator.locks ? await withStorageLock(key, () => canonicalProfile(key)) : localStorage.getItem(key);
+    if (generation !== profileGeneration || $('#editor').hidden) { message('Профиль изменился. Копирование отменено.'); return; }
+    if (raw === null) throw new Error('У этого профиля ещё нет сохранённой раскладки.');
+    const source = validateStoredProfile(raw);
     if (JSON.stringify(source) === JSON.stringify(controls)) { $('#editor-status').textContent = 'Раскладка уже совпадает с сохранённой копией.'; return; }
     if (controls.length && !confirm('Скопировать сохранённую раскладку в текущий черновик? Действие можно отменить.')) return;
     recordChange(); controls = source; selectControl(null);
     $('#editor-status').textContent = 'Раскладка скопирована в черновик • сохраните для выбранной игры';
   } catch (error) { message(`Не удалось скопировать раскладку: ${error.message}`); }
+  finally { if (generation === profileGeneration) $('#copy-profile').disabled = !controlsValid || !$('#copy-source').options.length; }
 });
 function openControls() {
   if (!$('#editor').hidden) return;
@@ -453,19 +496,24 @@ $('#export-controls').addEventListener('click', () => {
   $('#editor-status').textContent = 'Экспорт запрошен. Профиль игры не изменён.';
 });
 $('#save-controls').addEventListener('click', async () => {
-  if (!controlsValid) return;
-  const key = activeProfileKey, generation = profileGeneration, baseline = storedProfileBaseline;
+  if (!controlsValid || profileBusy) return;
+  const key = activeProfileKey, baseline = storedProfileBaseline;
   const snapshot = JSON.stringify(controls);
+  setProfileBusy(true);
   try {
-    await withStorageLock(key, () => {
-      if (generation !== profileGeneration) throw new Error('Профиль изменился');
-      if (localStorage.getItem(key) !== baseline) throw new Error('Раскладка изменена в другой вкладке. Экспортируйте черновик и нажмите «Обновить раскладку»');
-      readControls(key);
+    let mirrorFailed = false;
+    await withStorageLock(key, async () => {
+      const current = await canonicalProfile(key);
+      if (current !== baseline) throw new Error('Раскладка изменена в другой вкладке. Экспортируйте черновик и нажмите «Обновить раскладку»');
       const serialized = JSON.stringify({schema:1, controls: JSON.parse(snapshot)});
-      localStorage.setItem(key, serialized); storedProfileBaseline = serialized; controlsBaseline = snapshot;
+      await writeSnapshot(key, serialized);
+      storedProfileBaseline = serialized; controlsBaseline = snapshot;
+      try { localStorage.setItem(key, serialized); }
+      catch { mirrorFailed = true; }
     });
-    $('#editor-status').textContent = 'Раскладка сохранена' + (JSON.stringify(controls) !== snapshot ? ' • есть новые изменения' : '');
+    $('#editor-status').textContent = mirrorFailed ? 'Раскладка сохранена в IndexedDB, но синхронизация localStorage недоступна.' : 'Раскладка сохранена';
   } catch (error) { $('#editor-status').textContent = `Ошибка сохранения: ${error.message}. Исходные данные не изменены.`; }
+  finally { setProfileBusy(false); }
 });
 window.addEventListener('beforeunload', event => {
   if (JSON.stringify(controls) !== controlsBaseline && !$('#editor').hidden) { event.preventDefault(); event.returnValue = ''; }
@@ -473,6 +521,6 @@ window.addEventListener('beforeunload', event => {
 // The local preview server reports a fingerprint; reload on source edits.
 let version;
 async function checkVersion() {
-  try { const response = await fetch('/__version', {cache:'no-store'}); if (!response.ok) return; const next = await response.text(); if (version && version !== next) { if (!$('#editor').hidden && JSON.stringify(controls) !== controlsBaseline) { $('#editor-status').textContent = 'Обновление предпросмотра отложено: сначала сохраните раскладку.'; return; } location.reload(); return; } version = next; } catch { /* Static hosting does not support live reload. */ }
+  try { const response = await fetch('/__version', {cache:'no-store'}); if (!response.ok) return; const next = await response.text(); if (version && version !== next) { if (!$('#editor').hidden && (profileBusy || JSON.stringify(controls) !== controlsBaseline)) { $('#editor-status').textContent = 'Обновление предпросмотра отложено: сначала сохраните раскладку.'; return; } location.reload(); return; } version = next; } catch { /* Static hosting does not support live reload. */ }
 }
 checkVersion(); setInterval(checkVersion, 1500);
