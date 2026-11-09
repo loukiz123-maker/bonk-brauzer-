@@ -194,9 +194,9 @@ test('mouse binding capture and held fire work locally', async () => {
     await addMarker(page);
     assert.equal(await page.locator('#canvas .marker').textContent(), 'ЛКМ');
     await page.click('#live-test');
-    await page.locator('#canvas').scrollIntoViewIfNeeded();
-    const canvas = await page.locator('#canvas').boundingBox();
-    await page.mouse.move(canvas.x + 90, canvas.y + 90);
+    // Hover uses Playwright's visible hit point even when the canvas extends
+    // beyond the viewport after the scrollable editor panel is scrolled.
+    await page.locator('#canvas').hover();
     await page.mouse.down();
     assert.equal(await page.locator('#canvas .marker.active').count(), 1);
     await page.mouse.up();
