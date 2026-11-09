@@ -28,10 +28,8 @@
       <section id="home" class="desktop page">
         <div class="desktop-status">LYNXDROID &nbsp;•&nbsp; ДВИЖОК В РАЗРАБОТКЕ</div>
         <div class="desktop-icons">
-          <button class="desktop-icon" id="open-settings"><span>⚙</span>Настройки</button>
           <button class="desktop-icon" data-go="library"><span>▦</span>Библиотека</button>
           <button class="desktop-icon add-apk"><span>＋</span>Добавить APK</button>
-          <button class="desktop-icon" id="open-controls"><span>⌨</span>Управление</button>
         </div>
         <div class="desktop-summary muted"><span id="count">APK в библиотеке: 0</span><br>Запуск станет доступен после создания движка.</div>
       </section>
@@ -44,15 +42,8 @@
         <div class="actions"><button disabled title="Собственный Android-движок ещё не реализован">▶ &nbsp;Запустить</button><button id="remove" disabled>Удалить из библиотеки</button><button disabled title="Браузер не предоставляет доступ к папке APK">Открыть папку</button><button disabled title="Браузер не раскрывает путь к файлу">Копировать путь</button></div>
       </section>
       <section id="about" class="page" hidden><h1>О проекте</h1><div class="about-card"><h2>LynxDroid · самостоятельный лаунчер</h2><p class="muted">Лаунчер не использует Waydroid. Сейчас доступны библиотека APK, поиск и управление окном. Запуск Android-приложений ещё не реализован.</p><p class="muted">Полный экран: F11 &nbsp;•&nbsp; Выход из полного экрана: Esc</p><p class="muted">Это браузерная копия для просмотра дизайна. Системные действия доступны только в настольной версии.</p></div></section>
-    </main>
-  </div>
-</div>
-<dialog id="settings-dialog" class="settings-dialog">
-  <div class="dialog-title"><strong>⚙ &nbsp;Настройки LynxDroid</strong><button data-close="settings-dialog" aria-label="Закрыть">✕</button></div>
-  <div class="settings-layout"><div class="settings-nav">◈ &nbsp;Экран<br><br>⚙ &nbsp;Движок<br><br>▯ &nbsp;Телефон<br><br>☷ &nbsp;Настройки<br><br>ⓘ &nbsp;О проекте</div><div class="settings-content"><h2>Настройки</h2><p>Движок Android ещё не создан. Разрешение, FPS, профиль телефона и настройки игр пока недоступны.</p><p>Полный экран: F11 &nbsp;•&nbsp; Выход: Esc</p></div></div>
-</dialog>
-<dialog id="editor-dialog" class="editor-dialog">
-  <div class="dialog-title"><strong>⌨ &nbsp;Редактор управления — шаблон</strong><button data-close="editor-dialog" aria-label="Закрыть">✕</button></div>
+      <section id="editor" class="editor-page page" hidden>
+  <div class="dialog-title"><strong>⌨ &nbsp;Редактор управления — шаблон</strong><button id="close-editor" aria-label="Закрыть редактор">✕</button></div>
   <div class="editor-layout"><div id="canvas" class="canvas" aria-label="Поле раскладки"><div class="canvas-hint">Нажмите на поле, чтобы разместить элемент</div></div>
     <div class="editor-side"><h2>РЕДАКТОР УПРАВЛЕНИЯ</h2><p class="muted">Выберите тип и клавишу, затем нажмите на поле. Это шаблон: ввод в игры пока не работает.</p>
       <label>Тип элемента<select id="control-kind"><option>Нажатие</option><option>Двойное нажатие</option><option>Мультитач</option><option>Джойстик</option><option>Камера</option><option>Перетаскивание</option><option>Огонь</option></select></label>
@@ -60,7 +51,20 @@
       <p id="editor-status" class="muted"></p><div class="editor-spacer"></div><button id="undo-control">Убрать последний</button><button id="reset-controls">Очистить</button><button id="save-controls" class="primary">Сохранить шаблон</button>
     </div>
   </div>
+</section>
+    </main>
+    <aside class="tool-rail" aria-label="Боковая панель инструментов">
+      <button id="open-controls" title="Редактор управления" aria-label="Редактор управления">⌨</button>
+      <div class="tool-spacer"></div>
+      <button id="open-settings" title="Настройки" aria-label="Настройки">⚙</button>
+    </aside>
+  </div>
+</div>
+<dialog id="settings-dialog" class="settings-dialog">
+  <div class="dialog-title"><strong>⚙ &nbsp;Настройки LynxDroid</strong><button data-close="settings-dialog" aria-label="Закрыть">✕</button></div>
+  <div class="settings-layout"><div class="settings-nav">◈ &nbsp;Экран<br><br>⚙ &nbsp;Движок<br><br>▯ &nbsp;Телефон<br><br>☷ &nbsp;Настройки<br><br>ⓘ &nbsp;О проекте</div><div class="settings-content"><h2>Настройки</h2><p>Движок Android ещё не создан. Разрешение, FPS, профиль телефона и настройки игр пока недоступны.</p><p>Полный экран: F11 &nbsp;•&nbsp; Выход: Esc</p></div></div>
 </dialog>
+
 <input id="file" type="file" multiple accept=".apk,application/vnd.android.package-archive" hidden>
 <div id="message" role="status" aria-live="polite"></div>
 <script src="app.js"></script>

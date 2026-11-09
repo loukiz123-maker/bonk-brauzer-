@@ -10,8 +10,10 @@ without starting or contacting Waydroid. It can show a local APK library,
 filter it, add one or several APK file references, remove references, copy a file path, open its folder,
 and switch to full screen with F11
 (Esc exits full screen). Adding an APK does **not** install or run it.
-The desktop-style home screen and control editor can save a layout draft,
-including a fire marker. The draft does not inject input into games. Engine
+The right-hand toolbar opens settings and the control editor. The editor opens
+beside its canvas, and can save a layout draft,
+including a fire marker. Unsaved edits are discarded on leaving the editor.
+The draft does not inject input into games. Engine
 settings, Google Play and Android apps are not implemented.
 
 The independent Android runtime, game compatibility, performance and actual

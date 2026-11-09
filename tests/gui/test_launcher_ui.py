@@ -43,10 +43,35 @@ def window(qt_app, tmp_path: Path):
 
 
 def test_navigation_and_disabled_launch(window, qt_app) -> None:
+    from PySide6.QtCore import QTimer
+    from PySide6.QtWidgets import QApplication
+
+    opened = []
+
+    def close_settings() -> None:
+        dialog = QApplication.activeModalWidget()
+        assert dialog is not None
+        opened.append(dialog.windowTitle())
+        dialog.close()
+
+    QTimer.singleShot(0, close_settings)
+    window.settings_tool.click()
+    assert opened == ["Настройки LynxDroid"]
     assert window.pages.currentIndex() == 0
     window.library_button.click()
     assert window.pages.currentIndex() == 1
     assert not window.play_button.isEnabled()
+    window.controls_tool.click()
+    assert window.pages.currentIndex() == 3
+    editor = window.pages.currentWidget()
+    editor.kind.setCurrentText("Огонь")
+    editor.place(0.5, 0.5)
+    assert editor.controls[0]["kind"] == "Огонь"
+    editor.close_button.click()
+    assert window.pages.currentIndex() == 0
+    window.controls_tool.click()
+    assert window.pages.currentIndex() == 3 and window.pages.currentWidget() is not editor
+    assert not window.pages.currentWidget().controls
     window.about_button.click()
     assert window.pages.currentIndex() == 2
     window.home_button.click()

@@ -35,6 +35,10 @@ QWidget { background: #0b1019; color: #e9f0f8;
     font-family: 'Inter', 'DejaVu Sans'; font-size: 13px; }
 QFrame#header { background: #101823; border-bottom: 1px solid #253344; }
 QFrame#sidebar { background: #0d1520; border-right: 1px solid #253344; }
+QFrame#tools { background: #10151e; border-left: 1px solid #253344; }
+QPushButton#tool { background: transparent; border: 0; border-radius: 6px;
+    padding: 10px 5px; font-size: 19px; color: #a5b5c7; }
+QPushButton#tool:hover { background: #19313c; color: #79e8da; }
 QFrame#card { background: #141f2d; border: 1px solid #293b4c; border-radius: 14px; }
 QLabel#brand { color: #f4f9ff; font-size: 19px; font-weight: 800; }
 QLabel#title { font-size: 30px; font-weight: 800; color: #f7fbff; }
@@ -138,6 +142,25 @@ class LauncherWindow(QMainWindow):
         self.pages.addWidget(self._library_page())
         self.pages.addWidget(self._about_page())
         body.addWidget(self.pages, 1)
+        tools = QFrame()
+        tools.setObjectName("tools")
+        tools.setFixedWidth(54)
+        tools_layout = QVBoxLayout(tools)
+        tools_layout.setContentsMargins(5, 12, 5, 12)
+        self.controls_tool = QPushButton("⌨")
+        self.controls_tool.setObjectName("tool")
+        self.controls_tool.setToolTip("Редактор управления")
+        self.controls_tool.setAccessibleName("Редактор управления")
+        self.controls_tool.clicked.connect(self.open_controls)
+        tools_layout.addWidget(self.controls_tool)
+        tools_layout.addStretch()
+        self.settings_tool = QPushButton("⚙")
+        self.settings_tool.setObjectName("tool")
+        self.settings_tool.setToolTip("Настройки")
+        self.settings_tool.setAccessibleName("Настройки")
+        self.settings_tool.clicked.connect(self.open_settings)
+        tools_layout.addWidget(self.settings_tool)
+        body.addWidget(tools)
         layout.addLayout(body, 1)
         self._show_page(0)
 
@@ -152,10 +175,8 @@ class LauncherWindow(QMainWindow):
         box.addWidget(status)
         row = QHBoxLayout()
         for text, callback in (
-            ("⚙\nНастройки", self.open_settings),
             ("▦\nБиблиотека", lambda: self._show_page(1)),
             ("＋\nДобавить APK", self.add_apk),
-            ("⌨\nУправление", self.open_controls),
         ):
             button = QPushButton(text)
             button.setMinimumSize(130, 100)
@@ -190,8 +211,17 @@ class LauncherWindow(QMainWindow):
         dialog.exec()
 
     def open_controls(self) -> None:
-        dialog = ControlEditor(self.control_path, self)
-        dialog.exec()
+        # Reopen from disk, discarding any previously unsaved draft.
+        if self.pages.count() > 3:
+            previous = self.pages.widget(3)
+            if previous is not None:
+                self.pages.removeWidget(previous)
+                previous.deleteLater()
+        editor = ControlEditor(self.control_path, self.pages)
+        editor.setWindowFlags(Qt.WindowType.Widget)
+        editor.close_button.clicked.connect(lambda: self._show_page(0))
+        self.pages.addWidget(editor)
+        self._show_page(3)
 
     def _library_page(self) -> QWidget:
         page = QWidget()

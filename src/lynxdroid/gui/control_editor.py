@@ -86,6 +86,8 @@ class ControlEditor(QDialog):
         self.canvas = Canvas(self)
         layout.addWidget(self.canvas, 1)
         side = QVBoxLayout()
+        self.close_button = QPushButton("✕  Закрыть редактор")
+        side.addWidget(self.close_button)
         side.addWidget(QLabel("РЕДАКТОР УПРАВЛЕНИЯ"))
         note = QLabel(
             "Выберите тип и клавишу, затем нажмите на поле. "

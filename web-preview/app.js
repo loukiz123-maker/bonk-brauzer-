@@ -97,8 +97,9 @@ $('#open-settings').addEventListener('click', () => $('#settings-dialog').showMo
 $('#open-controls').addEventListener('click', () => {
   try { controls = readControls(); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Библиотека шаблона повреждена или недоступна. Сохранение отключено.'; }
-  $('#save-controls').disabled = !controlsValid; renderControls(); $('#editor-dialog').showModal();
+  $('#save-controls').disabled = !controlsValid; renderControls(); page('editor');
 });
+$('#close-editor').addEventListener('click', () => page('home'));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 $('#canvas').addEventListener('click', event => {
   const key = $('#control-key').value.trim();
