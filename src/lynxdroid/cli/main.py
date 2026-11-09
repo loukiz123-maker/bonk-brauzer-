@@ -259,6 +259,13 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p_gui.set_defaults(func=cmd_gui)
 
+    # profile -----------------------------------------------------------
+    p_profile = sub.add_parser(
+        "profile", help="describe this host and say whether Android can run on it"
+    )
+    p_profile.add_argument("--json", action="store_true", help="machine-readable output")
+    p_profile.set_defaults(func=cmd_profile)
+
     # version -----------------------------------------------------------
     p_version = sub.add_parser("version", help="print the version banner")
     p_version.add_argument("--json", action="store_true")
@@ -294,6 +301,49 @@ def cmd_version(args: argparse.Namespace, paths: AppPaths, store: SettingsStore)
     print(f"  config       {paths.config}")
     print(f"  profiles     {paths.profiles_dir}")
     return int(ExitCode.OK)
+
+
+def cmd_profile(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Print the host profile: facts first, then the verdict about them.
+
+    The JSON form is what a user sends back from their laptop, so the verdict
+    and its evidence travel in the same document - a screenshot of prose
+    cannot be compared with anything.
+    """
+    from lynxdroid.doctor.host_profile import Verdict, describe_host
+
+    profile = describe_host()
+    if args.json:
+        print(json.dumps(profile.as_dict(), indent=2))
+    else:
+        print(
+            f"host       {profile.pretty_name} ({profile.os_id}) {profile.kernel} {profile.machine}"
+        )
+        session = f"{profile.session} on {profile.desktop}"
+        if profile.in_container:
+            session += f"  [container: {profile.container_hint}]"
+        print(f"session    {session}")
+        gpu = profile.gpu_driver or "not described"
+        if profile.gpu_renderer_is_iris_xe:
+            gpu += "  (Iris Xe class)"
+        print(f"gpu        {gpu}")
+        print(f"waydroid   {profile.waydroid_version or 'not installed'}")
+        print()
+        for precondition in profile.preconditions:
+            mark = {"READY": "+", "PARTIAL": "~", "UNKNOWN": "?", "BLOCKED": "!"}
+            mark_char = mark[precondition.verdict.value]
+            print(f"  {mark_char} {precondition.id:<9} {precondition.reason}")
+            if precondition.fact is not None:
+                print(f"      observed: {precondition.fact}")
+            if precondition.next_step:
+                print(f"      next:     {precondition.next_step}")
+        print()
+        print(f"verdict    {profile.verdict.value} - {profile.summary()}")
+    # BLOCKED and UNKNOWN both refuse to say "go": doctor --strict follows the
+    # same rule (Report.blockers_for counts UNKNOWN as blocking), and two
+    # commands disagreeing about the same machine would be a defect.
+    clear = profile.verdict in (Verdict.READY, Verdict.PARTIAL)
+    return int(ExitCode.OK if clear else ExitCode.BLOCKED)
 
 
 def cmd_doctor(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

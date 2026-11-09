@@ -10,7 +10,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 | Stage | Subject | State | Notes |
 |---|---|---|---|
 | 1 | Quality rules, requirement registry, stage gates | **DONE** (criteria checked) | `docs/REQUIREMENTS.md` with P0/P1, test, status; `docs/STAGE-CRITERIA.md` lists every criterion as HERE, CI or TARGET, and `tests/test_stage_criteria.py` fails when a HERE criterion cites a test that does not exist |
-| 2 | Goal and target machine profile | **DONE** | platform profile detected, not assumed; `doctor --area environment` |
+| 2 | Goal and target machine profile | **DONE** (2.3 open) | facts and a verdict kept apart: `doctor` reports what it saw, `profile` decides what it means; five preconditions, worst-verdict rule, `UNKNOWN` never rounded up to `READY`; the CachyOS run (`profile --json`) is still outstanding |
 | 3 | CachyOS / kernel diagnostics | **PARTIAL** | `lynxdroid doctor` complete and read-only; verified in a Debian container, target run pending |
 | 4 | Architecture, images, backend contract | **DONE** | `backend/contract.py`, `backend/images.py` with consent gate; process/trust-boundary diagram in `ARCHITECTURE.md §1` |
 | 5 | First real Android start | **BLOCKED** | start/stop implemented with real boot detection; cannot run without the laptop |
@@ -23,7 +23,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 | 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance deliberately `UNTESTED` |
 | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
 | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
-| 15 | Testing and quality criteria | **DONE** | 712 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+| 15 | Testing and quality criteria | **DONE** | 743 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
 | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
 | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
 | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |

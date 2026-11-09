@@ -44,14 +44,39 @@ about whether the product works on the target machine.
 
 ## Stage 2 — goal and target machine profile
 
+The stage has a second half that the first draft of this table missed: knowing
+facts is not the same as judging them. `doctor` lists what it observed;
+`profile` decides what those observations mean for this machine. Both exist,
+and they must not contradict each other.
+
 | # | Criterion | Kind | Evidence |
 |---|---|---|---|
-| 2.1 | The platform profile is detected, never assumed | HERE | `tests/doctor/test_kernel_checks.py` |
+| 2.1 | The platform profile is detected, never assumed | HERE | `tests/doctor/test_kernel_checks.py`, `tests/doctor/test_host_profile.py` |
 | 2.2 | A container host is reported as such, with the limits named | HERE | `tests/test_requirements_registry.py::TestChecksAreTraceable` |
-| 2.3 | `lynxdroid doctor --json` on the CachyOS laptop, output attached to the issue | TARGET | `lynxdroid doctor --json > doctor.json` |
+| 2.3 | `lynxdroid profile --json` on the CachyOS laptop, output attached to the issue | TARGET | `lynxdroid profile --json > profile.json` |
+| 2.4 | Facts and verdict are separate: every precondition carries the fact it was decided from, and an unreadable fact is `None`, never a plausible default | HERE | `tests/doctor/test_host_profile.py::TestUnknownIsNotReady` |
+| 2.5 | The verdict is the worst precondition; `UNKNOWN` is never rounded up to `READY` | HERE | `tests/doctor/test_host_profile.py::TestTheVerdictIsTheWorst` |
+| 2.6 | Every `BLOCKED` and `PARTIAL` names the command that would change it | HERE | `tests/doctor/test_host_profile.py::TestEveryVerdictIsActionable` |
+| 2.7 | `profile` and `doctor --strict` never disagree about the same host | HERE | `tests/doctor/test_host_profile.py::TestTheTwoVerdictsAgree`, `tests/cli/test_cli.py::TestProfileCommand` |
+| 2.8 | A blocked host exits non-zero, so the answer is scriptable | HERE | `tests/cli/test_cli.py::TestProfileCommand` |
 
-**Stage 2 status: 2.1–2.2 HERE, 2.3 open.** Hence `DONE` for detection, with
-the target run recorded in `docs/ROADMAP.md` as outstanding.
+**Stage 2 status: 2.1–2.2 and 2.4–2.8 HERE, 2.3 open.** The verdict half of the
+stage is complete and enforced; the target-laptop run is waiting on the user,
+which is why `docs/ROADMAP.md` marks the stage `DONE` for detection and lists
+2.3 as outstanding. Criterion 2.3 now points at `profile --json` rather than
+`doctor --json`: a report of raw checks from the laptop would tell us what it
+saw, but the point of the stage is a verdict about the machine, and the profile
+document carries both.
+
+One measured disagreement is worth recording, because it is the reason 2.7
+exists. On this container `checks` reports `session.wayland` as `UNKNOWN`
+("no graphical session detected") and `Report.blockers_for` counts `UNKNOWN` as
+blocking, while a first version of `HostProfile` reported the same fact as
+merely unchecked. Both behaviours were defensible in isolation; together they
+were a defect, because a user asking "can I run Android here" would get
+`BLOCKED` from one command and a non-answer from the other. The profile now
+follows `doctor`: an unchecked prerequisite is not a green light, and the two
+commands are pinned together by a test that runs both against the live host.
 
 ## What this document is for
 

@@ -583,3 +583,48 @@ class TestLaunchReportsTheLayout:
         code, out, _ = run(capsys, ["apps", "launch", "com.example.game"], root)
         assert code == ExitCode.OK
         assert "warning" not in out.lower()
+
+
+class TestProfileCommand:
+    """`lynxdroid profile` is the stage-2 deliverable.
+
+    It has to be usable as evidence: a JSON document a user can send back
+    from a laptop they cannot give us a shell on, containing both the facts
+    and the verdict drawn from them.
+    """
+
+    def test_it_prints_a_readable_summary(self, capsys, root: Path) -> None:
+        code, out, _ = run(capsys, ["profile"], root)
+        assert "verdict" in out
+        for heading in ("host", "session", "gpu", "waydroid"):
+            assert heading in out, f"{heading} missing from the summary"
+        assert code in (0, 6), f"unexpected exit code {code}"
+
+    def test_json_is_valid_and_carries_the_evidence(self, capsys, root: Path) -> None:
+        import json
+
+        _code, out, _ = run(capsys, ["profile", "--json"], root)
+        payload = json.loads(out)
+        assert payload["verdict"] in {"READY", "PARTIAL", "BLOCKED", "UNKNOWN"}
+        assert payload["summary"]
+        assert payload["preconditions"], "a verdict without its evidence is an opinion"
+        for precondition in payload["preconditions"]:
+            assert set(precondition) == {"id", "fact", "verdict", "reason", "next_step"}
+
+    def test_a_blocked_host_exits_non_zero(self, capsys, root: Path) -> None:
+        """A script that pipes this must be able to branch on the answer."""
+        import json
+
+        code, out, _ = run(capsys, ["profile", "--json"], root)
+        verdict = json.loads(out)["verdict"]
+        if verdict in {"BLOCKED", "UNKNOWN"}:
+            assert code == 6, f"{verdict} should not exit 0"
+        else:
+            assert code == 0
+
+    def test_the_verdict_matches_doctor_strict(self, capsys, root: Path) -> None:
+        """Two commands, one machine, one answer."""
+        profile_code, _, _ = run(capsys, ["profile", "--json"], root)
+        doctor_code, _, _ = run(capsys, ["doctor", "--strict"], root)
+        if profile_code == 0:
+            assert doctor_code == 0, "profile says go, doctor --strict says stop"

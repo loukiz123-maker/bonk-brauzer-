@@ -60,6 +60,53 @@ ERROR   kernel.binder   this kernel was built without CONFIG_ANDROID_BINDER_IPC
 UNKNOWN gpu.device      /sys/class/drm is absent (no DRM subsystem)
 ```
 
+## profile
+
+The stage-2 deliverable: a description of this machine and a **verdict** about
+whether Android can run on it. Read-only, never privileged.
+
+```
+lynxdroid profile [--json]
+```
+
+Five preconditions are judged separately — `binder`, `wayland`, `gpu`,
+`waydroid`, `disk` — and each carries the fact it was decided from, the reason
+in user terms, and (when it is not satisfied) one command that would change it.
+
+| Verdict | Meaning |
+|---|---|
+| `READY` | every precondition was checked and passed |
+| `PARTIAL` | it can run, with a named limitation (single-touch input, no render node access) |
+| `BLOCKED` | a precondition is known to fail; Android cannot boot |
+| `UNKNOWN` | a precondition could not be checked. **Not** the same as `BLOCKED`, and never rounded up to `READY` |
+
+The verdict is the worst of the five, and `UNKNOWN` counts as not-a-green-light
+— the same rule `doctor --strict` applies. Exit code is `0` for `READY` or
+`PARTIAL`, `6` otherwise, so a script can branch on it.
+
+```console
+$ lynxdroid profile
+host       CachyOS Linux (cachyos) 6.12.4-1-cachyos x86_64
+session    wayland on KDE
+gpu        Iris Xe Graphics [i915]  (Iris Xe class)
+waydroid   1.5.0
+
+  + binder    Android binder devices are present
+  + wayland   a Wayland session with a usable socket
+  + gpu       Intel integrated graphics, the renderer the specification targets
+  + waydroid  an installed backend with an image
+  + disk      enough room for the container's data partition
+
+verdict    READY - this host meets every precondition Android needs
+```
+
+`--json` is what to send back from a machine that cannot be reached otherwise:
+the facts, the verdict and the evidence for it travel in one document.
+
+```console
+$ lynxdroid profile --json > profile.json
+```
+
 ## status
 
 ```
@@ -233,5 +280,5 @@ paths = AppPaths.resolve()
 profile = ProfileStore(paths).load_all()[0]
 geometry = ViewportGeometry(buffer=Size(1920, 1080), surface=Size(960, 540))
 engine = InputEngine(profile, geometry)
-events = engine.key_down("w")           # -> [TouchEvent(down), TouchEvent(move)]
+events = engine.key_down("w")  # -> [TouchEvent(down), TouchEvent(move)]
 ```
