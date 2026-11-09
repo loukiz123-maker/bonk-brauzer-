@@ -7,15 +7,21 @@ from pathlib import Path
 
 import pytest
 
+_QT_APP = None
 
-@pytest.fixture(scope="module")
+
+@pytest.fixture(scope="session")
 def qt_app():
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     try:
         from PySide6.QtWidgets import QApplication
     except ImportError as exc:
         pytest.skip(f"Qt runtime not available: {exc}")
-    return QApplication.instance() or QApplication([])
+    global _QT_APP
+    _QT_APP = QApplication.instance() or QApplication([])
+    yield _QT_APP
+    _QT_APP.closeAllWindows()
+    _QT_APP.processEvents()
 
 
 @pytest.fixture
