@@ -12,11 +12,12 @@ the element somewhere the user did not ask for.
 
 from __future__ import annotations
 
+import uuid
 from dataclasses import dataclass, field, replace
 
 from lynxdroid.display.geometry import ViewportGeometry
 from lynxdroid.gui.viewport import content_rect_contains, hit_test
-from lynxdroid.profiles.model import Element, Profile
+from lynxdroid.profiles.model import Element, ElementType, Profile, ProfileError
 
 
 @dataclass(frozen=True)
@@ -179,3 +180,53 @@ def orientation_swapped(profile: Profile) -> Profile:
     candidate = profile.with_elements(swapped)
     candidate.validate()
     return candidate
+
+
+_SPECIAL_KEYS = {
+    "space": "Space",
+    "return": "Return",
+    "enter": "Enter",
+    "tab": "Tab",
+    "backspace": "Backspace",
+    "shift": "Shift",
+    "control": "Control",
+    "alt": "Alt",
+    "up": "Up",
+    "down": "Down",
+    "left": "Left",
+    "right": "Right",
+}
+
+
+def normalize_control_key(text: str) -> str:
+    """Accept only keys the desktop event mapper can actually produce."""
+    key = text.strip()
+    if len(key) == 1 and key.isascii() and key.isalnum():
+        return key.lower()
+    special = _SPECIAL_KEYS.get(key.lower())
+    if special:
+        return special
+    raise ProfileError(
+        "Use one Latin letter or digit, or Space, Return, Tab, Shift, Control, Alt, "
+        "Backspace, Enter or an arrow name."
+    )
+
+
+def add_key_control(editor: LayoutEditor, key_text: str, *, hold: bool = False) -> Profile:
+    """Add a validated key binding at the centre; never mutate on failure."""
+    key = normalize_control_key(key_text)
+    for element in editor.profile.elements:
+        occupied = [*element.keys, *element.dpad_keys]
+        if element.type is ElementType.MOUSE:
+            occupied.append(element.exit_key)
+        if any(existing.casefold() == key.casefold() for existing in occupied if existing):
+            raise ProfileError(f"key '{key}' is already assigned to '{element.label}'")
+    control = Element(
+        id="control-" + uuid.uuid4().hex[:16],
+        type=ElementType.HOLD if hold else ElementType.TAP,
+        label=key,
+        x=0.5,
+        y=0.5,
+        keys=(key,),
+    )
+    return editor.add(control)

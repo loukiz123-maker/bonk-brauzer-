@@ -167,6 +167,8 @@ not trustworthy about anything else.
 
 | 69 | Dragging moved the painted control but did not update the editor profile; focus loss, profile changes and resizing could discard generated CANCEL events | review of the window-to-engine integration | corrected and covered by extracted real window callback tests; full Qt, delivery channel and real Waydroid still need a desktop test |
 
+| 70 | New GUI profiles had no controls for adding or removing key bindings; switching directly between profiles or closing could discard unsaved edits | review of layout workflow | tap/hold controls and unsaved-change confirmation added, including save-failure handling; full Qt and real input still require desktop testing |
+
 ## Environment issues that are not bugs
 
 * **Waydroid already installed by the user** → we never modify its config or

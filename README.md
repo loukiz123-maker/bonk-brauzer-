@@ -37,7 +37,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (833) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (857) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -114,7 +114,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 833 tests, no display needed
+pytest                               # 857 tests, no display needed
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in
@@ -164,6 +164,12 @@ Stage 7 of the specification asks for this to be separated, and it is, in code:
 returns `None` from `widget_to_android()` - it can never become a touch.
 
 ## Keyboard → multitouch
+
+In the desktop **Layout** tab, create a profile for the Android package, select
+**Add key…**, choose Tap or Hold, enter a supported key, drag the new control
+into place, and press **Save**. Select a control and choose **Remove key** to
+remove it. Hold requires a channel capable of held contacts. The Qt workflow
+and real Android input still need testing on the target desktop.
 
 `input/engine.py` is the core of the product. Its guarantees are unit-tested:
 

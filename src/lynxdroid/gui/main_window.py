@@ -75,7 +75,7 @@ from lynxdroid.core.paths import AppPaths
 from lynxdroid.display.geometry import Rotation, ViewportGeometry
 from lynxdroid.display.resolution import PRESETS
 from lynxdroid.gui import viewmodel as vm
-from lynxdroid.gui.editor import LayoutEditor
+from lynxdroid.gui.editor import LayoutEditor, add_key_control
 from lynxdroid.gui.overlay import GameSurface
 from lynxdroid.gui.theme import Palette, palette_for, stylesheet
 from lynxdroid.gui.workers import Poller, TaskRunner
@@ -387,6 +387,22 @@ class MainWindow(QMainWindow):
         self._element_list = QListWidget()
         self._element_list.currentItemChanged.connect(self._on_element_row_chosen)
         layout.addWidget(self._element_list, 1)
+        element_buttons = QHBoxLayout()
+        self._add_control_button = QPushButton("Add key…")
+        self._add_control_button.clicked.connect(self._add_key_control)
+        self._add_control_button.setEnabled(False)
+        self._remove_control_button = QPushButton("Remove key")
+        self._remove_control_button.clicked.connect(self._remove_key_control)
+        self._remove_control_button.setEnabled(False)
+        element_buttons.addWidget(self._add_control_button)
+        element_buttons.addWidget(self._remove_control_button)
+        layout.addLayout(element_buttons)
+        keys_note = QLabel(
+            "Add a tap or hold, then drag it into position and save. "
+            "Hold requires a touch channel that supports held contacts."
+        )
+        keys_note.setWordWrap(True)
+        layout.addWidget(keys_note)
 
         self._overlay_hint = QLabel("")
         self._overlay_hint.setWordWrap(True)
@@ -1010,7 +1026,7 @@ class MainWindow(QMainWindow):
     # ==================================================================
     # profiles
     # ==================================================================
-    def _load_profiles(self) -> None:
+    def _load_profiles(self, select_id: str | None = None) -> None:
         profiles = self._profile_store.load_all()
         self._profile_list.clear()
         rows = vm.profile_rows(
@@ -1028,13 +1044,20 @@ class MainWindow(QMainWindow):
             item.setData(Qt.ItemDataRole.UserRole, row.id)
             self._profile_list.addItem(item)
         if rows:
-            self._profile_list.setCurrentRow(0)
+            index = next((i for i, row in enumerate(rows) if row.id == select_id), 0)
+            self._profile_list.setCurrentRow(index)
 
     def _on_profile_selected(
-        self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
+        self, current: QListWidgetItem | None, previous: QListWidgetItem | None
     ) -> None:
+        if previous is not None and not self._confirm_profile_change():
+            self._profile_list.blockSignals(True)
+            try:
+                self._profile_list.setCurrentItem(previous)
+            finally:
+                self._profile_list.blockSignals(False)
+            return
         if current is None:
-            self._discard_unsaved()
             self._profile = None
             self._editor = None
             self._surface.set_editor_mode(False)
@@ -1044,14 +1067,26 @@ class MainWindow(QMainWindow):
                 self._engine = None
                 self._sync_aim_mode()
             self._element_list.clear()
+            self._add_control_button.setEnabled(False)
+            self._remove_control_button.setEnabled(False)
+            self._save_profile_button.setEnabled(False)
             return
         profile_id = current.data(Qt.ItemDataRole.UserRole)
         try:
             self._profile = self._profile_store.load(profile_id)
         except Exception as exc:
             self._set_status(f"cannot open profile: {exc}", 15000)
+            if previous is not None:
+                self._profile_list.blockSignals(True)
+                try:
+                    self._profile_list.setCurrentItem(previous)
+                finally:
+                    self._profile_list.blockSignals(False)
             return
         self._editor = LayoutEditor(profile=self._profile, saved=self._profile)
+        self._add_control_button.setEnabled(True)
+        self._remove_control_button.setEnabled(False)
+        self._save_profile_button.setEnabled(False)
         self._surface.set_editor_mode(True)
         self._surface.set_profile(self._profile)
         self._render_elements()
@@ -1064,6 +1099,7 @@ class MainWindow(QMainWindow):
             self._editor.select(element_id or None)
         self._sync_element_row(element_id or None)
         self._surface.set_selected(element_id or None)
+        self._remove_control_button.setEnabled(bool(self._editor and self._editor.selected))
 
     def _on_element_row_chosen(
         self, current: QListWidgetItem | None, _previous: QListWidgetItem | None
@@ -1080,17 +1116,76 @@ class MainWindow(QMainWindow):
         if self._editor is not None:
             self._editor.select(element_id)
         self._surface.set_selected(element_id)
+        self._remove_control_button.setEnabled(bool(self._editor and self._editor.selected))
 
     def _sync_element_row(self, element_id: str | None) -> None:
         """Select the matching row without echoing back into the handler."""
         self._element_list.blockSignals(True)
         try:
+            match = None
             for row in range(self._element_list.count()):
                 item = self._element_list.item(row)
-                if item is not None:
-                    item.setSelected(item.data(Qt.ItemDataRole.UserRole) == element_id)
+                if item is not None and item.data(Qt.ItemDataRole.UserRole) == element_id:
+                    match = item
+                    break
+            if match is None:
+                self._element_list.setCurrentRow(-1)
+            else:
+                self._element_list.setCurrentItem(match)
         finally:
             self._element_list.blockSignals(False)
+
+    def _refresh_edited_profile(self) -> None:
+        if self._editor is None:
+            return
+        self._profile = self._editor.profile
+        self._surface.set_profile(self._profile)
+        self._surface.set_selected(self._editor.selected)
+        self._render_elements()
+        self._sync_element_row(self._editor.selected)
+        self._remove_control_button.setEnabled(bool(self._editor.selected))
+        self._save_profile_button.setEnabled(self._editor.dirty)
+        self._ensure_engine()
+
+    def _add_key_control(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        if self._editor is None:
+            return
+        kind, accepted = QInputDialog.getItem(self, "Add key", "Action:", ["Tap", "Hold"], 0, False)
+        if not accepted:
+            return
+        key, accepted = QInputDialog.getText(
+            self, "Add key", "Key (letter, digit, Space, arrow, etc.):"
+        )
+        if not accepted:
+            return
+        try:
+            add_key_control(self._editor, key, hold=kind == "Hold")
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot add key", str(exc))
+            return
+        self._refresh_edited_profile()
+        self._set_status("Key added. Drag it into position, then save the profile.", 7000)
+
+    def _remove_key_control(self) -> None:
+        if self._editor is None or self._editor.selected is None:
+            return
+        element = self._editor.profile.element(self._editor.selected)
+        if element is None:
+            return
+        answer = QMessageBox.question(
+            self,
+            "Remove key?",
+            f"Remove '{element.label}' from this layout?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._editor.remove_selected()
+        self._refresh_edited_profile()
+        self._set_status("Key removed. Save the profile to keep this change.", 7000)
 
     def _on_element_moved(self, element_id: str, x: float, y: float) -> None:
         """A drag finished a step: mirror it into the list and the dirty state."""
@@ -1159,33 +1254,40 @@ class MainWindow(QMainWindow):
                 6000,
             )
 
-    def _discard_unsaved(self) -> None:
-        """Ask before silently dropping a moved key when the user switches."""
+    def _confirm_profile_change(self) -> bool:
+        """Keep unsaved edits if the user cancels or the save fails."""
         if self._editor is None or not self._editor.dirty:
-            return
+            return True
         answer = QMessageBox.question(
             self,
             "Unsaved layout changes",
-            f"The layout '{self._profile.name if self._profile else ''}' has unsaved "
-            "changes. Save them before switching?",
-            QMessageBox.StandardButton.Save | QMessageBox.StandardButton.Discard,
+            f"The layout '{self._profile.name if self._profile else ''}' has unsaved changes.",
+            QMessageBox.StandardButton.Save
+            | QMessageBox.StandardButton.Discard
+            | QMessageBox.StandardButton.Cancel,
             QMessageBox.StandardButton.Save,
         )
         if answer == QMessageBox.StandardButton.Save:
-            self._save_profile()
+            return self._save_profile()
+        if answer == QMessageBox.StandardButton.Discard:
+            self._editor.reset()
+            self._refresh_edited_profile()
+            return True
+        return False
 
-    def _save_profile(self) -> None:
+    def _save_profile(self) -> bool:
         if self._editor is None or self._profile is None:
-            return
+            return False
         try:
             self._profile_store.save(self._editor.profile)
         except Exception as exc:
             self._set_status(f"cannot save profile: {exc}", 15000)
-            return
+            return False
         self._profile = self._editor.profile
         self._editor.mark_saved(self._profile)
         self._save_profile_button.setEnabled(False)
         self._set_status("layout saved", 4000)
+        return True
 
     def _render_elements(self) -> None:
         self._element_list.clear()
@@ -1211,6 +1313,8 @@ class MainWindow(QMainWindow):
     def _create_profile(self) -> None:
         from PySide6.QtWidgets import QInputDialog
 
+        if not self._confirm_profile_change():
+            return
         name, ok = QInputDialog.getText(self, "New layout profile", "Profile name:")
         if not ok or not name.strip():
             return
@@ -1233,7 +1337,7 @@ class MainWindow(QMainWindow):
         except Exception as exc:
             QMessageBox.warning(self, "Cannot create profile", str(exc))
             return
-        self._load_profiles()
+        self._load_profiles(select_id=profile.id)
 
     def _delete_profile(self) -> None:
         if self._profile is None:
@@ -1255,6 +1359,7 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Cannot delete", str(exc))
             return
         self._profile = None
+        self._editor = None
         self._surface.set_profile(None)
         self._load_profiles()
 
@@ -1358,6 +1463,9 @@ class MainWindow(QMainWindow):
         self._refresh_surface()
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        if not self._confirm_profile_change():
+            event.ignore()
+            return
         if self._engine is not None:
             self._deliver(self._engine.focus_lost("window closed"))
         self._poller.stop()

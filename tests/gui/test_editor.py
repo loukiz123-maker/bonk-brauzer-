@@ -358,6 +358,10 @@ class TestMainWindowEditorIntegration:
             "_refresh_surface",
             "_stop_session",
             "closeEvent",
+            "_confirm_profile_change",
+            "_save_profile",
+            "_refresh_edited_profile",
+            "_on_profile_selected",
         }
         methods = [n for n in main.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
         assert len(methods) == len(wanted)
@@ -368,6 +372,14 @@ class TestMainWindowEditorIntegration:
 
             def closeEvent(self, event):
                 pass
+
+        class MessageBox:
+            StandardButton = SimpleNamespace(Save=1, Discard=2, Cancel=4)
+            answer = 4
+
+            @classmethod
+            def question(cls, *_args):
+                return cls.answer
 
         module = ast.Module(
             body=[
@@ -386,6 +398,7 @@ class TestMainWindowEditorIntegration:
             "Base": Base,
             "InputEngine": InputEngine,
             "BackendState": BackendState,
+            "QMessageBox": MessageBox,
             "log": logging.getLogger(__name__),
         }
         exec(compile(ast.fix_missing_locations(module), "<gui-harness>", "exec"), namespace)  # noqa: S102
@@ -418,6 +431,9 @@ class TestMainWindowEditorIntegration:
         window._snapshot = SimpleNamespace(state=BackendState.RUNNING)
         window._stop_button = SimpleNamespace(setEnabled=lambda enabled: None)
         window._on_snapshot = lambda value: None
+        window._messagebox = MessageBox
+        window._profile_store = SimpleNamespace(save=lambda value: None)
+        window._remove_control_button = SimpleNamespace(setEnabled=lambda value: None)
         return window
 
     def test_drag_updates_editor_saved_profile_and_engine(self) -> None:
@@ -498,3 +514,137 @@ class TestMainWindowEditorIntegration:
         window._engine.key_down("j")
         window.closeEvent(None)
         assert [event.action for event in window.events] == [Action.CANCEL]
+
+    def test_cancelled_switch_restores_previous_selection_and_edits(self) -> None:
+        from types import SimpleNamespace
+
+        window = self.make_window()
+        window._editor.profile = window._editor.profile.move_element("tap-a", 0.2, 0.3)
+        calls = []
+        previous = object()
+        window._profile_list = SimpleNamespace(
+            blockSignals=lambda value: calls.append(("block", value)),
+            setCurrentItem=lambda item: calls.append(("selected", item)),
+        )
+        window._on_profile_selected(object(), previous)
+        assert ("selected", previous) in calls
+        assert window._editor.dirty
+        assert window._editor.profile.element("tap-a").x == 0.2
+
+    def test_failed_save_blocks_profile_switch(self) -> None:
+        from types import SimpleNamespace
+
+        window = self.make_window()
+        window._editor.profile = window._editor.profile.move_element("tap-a", 0.2, 0.3)
+        window._messagebox.answer = window._messagebox.StandardButton.Save
+
+        def fail_save(value):
+            raise OSError("disk full")
+
+        window._profile_store = SimpleNamespace(save=fail_save)
+        assert not window._confirm_profile_change()
+        assert window._editor.dirty
+
+    def test_discard_restores_surface_and_engine(self) -> None:
+        window = self.make_window()
+        saved = window._editor.profile
+        window._editor.profile = saved.move_element("tap-a", 0.2, 0.3)
+        window._messagebox.answer = window._messagebox.StandardButton.Discard
+        assert window._confirm_profile_change()
+        assert window._editor.profile == window.surface_profile == saved
+        assert window._engine.profile == saved
+        assert not window._editor.dirty
+
+    def test_close_can_be_cancelled_without_losing_edits(self) -> None:
+        from types import SimpleNamespace
+
+        window = self.make_window()
+        window._editor.profile = window._editor.profile.move_element("tap-a", 0.2, 0.3)
+        calls = []
+        window.closeEvent(SimpleNamespace(ignore=lambda: calls.append("ignored")))
+        assert calls == ["ignored"] and window._editor.dirty
+
+
+class TestAddKeyControl:
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("A", "a"),
+            ("z", "z"),
+            ("5", "5"),
+            ("  space  ", "Space"),
+            ("LEFT", "Left"),
+            ("shift", "Shift"),
+            ("return", "Return"),
+        ],
+    )
+    def test_normalises_supported_keys(self, raw, expected) -> None:
+        from lynxdroid.gui.editor import normalize_control_key
+
+        assert normalize_control_key(raw) == expected
+
+    @pytest.mark.parametrize("raw", ["", " ", "F11", "Escape", "ё", "Ctrl+K", "not-a-key"])
+    def test_unreachable_keys_are_rejected(self, raw) -> None:
+        from lynxdroid.gui.editor import normalize_control_key
+
+        with pytest.raises(ProfileError):
+            normalize_control_key(raw)
+
+    @pytest.mark.parametrize("hold,kind", [(False, ElementType.TAP), (True, ElementType.HOLD)])
+    def test_adds_selects_and_marks_profile_dirty(self, hold, kind) -> None:
+        from lynxdroid.gui.editor import add_key_control
+
+        old = profile()
+        editor = LayoutEditor(profile=old, saved=old)
+        result = add_key_control(editor, "J", hold=hold)
+        assert len(result.elements) == 1
+        control = result.elements[0]
+        assert control.type == kind and control.keys == ("j",)
+        assert (control.x, control.y) == (0.5, 0.5)
+        assert editor.selected == control.id and editor.dirty
+        assert old.elements == ()
+        result.validate()
+
+    def test_key_conflicts_do_not_mutate_editor(self) -> None:
+        from lynxdroid.gui.editor import add_key_control
+
+        original = profile(tap(keys=("j",)))
+        editor = LayoutEditor(profile=original, saved=original)
+        with pytest.raises(ProfileError, match="already assigned"):
+            add_key_control(editor, "J")
+        assert editor.profile == original and not editor.dirty
+
+    def test_dpad_direction_cannot_be_reused(self) -> None:
+        from lynxdroid.gui.editor import add_key_control
+
+        editor = LayoutEditor(profile=profile(stick()))
+        with pytest.raises(ProfileError, match="already assigned"):
+            add_key_control(editor, "W")
+
+    def test_added_key_can_be_moved_saved_and_reloaded(self, tmp_path) -> None:
+        from lynxdroid.core.paths import AppPaths
+        from lynxdroid.gui.editor import add_key_control
+        from lynxdroid.profiles.store import ProfileStore
+
+        paths = AppPaths.resolve(tmp_path)
+        paths.ensure()
+        old = profile()
+        editor = LayoutEditor(profile=old, saved=old)
+        add_key_control(editor, "a")
+        assert editor.selected is not None
+        editor.profile = editor.profile.move_element(editor.selected, 0.2, 0.7)
+        store = ProfileStore(paths)
+        store.save(editor.profile)
+        loaded = store.load(old.id)
+        assert loaded.elements[0].keys == ("a",)
+        assert (loaded.elements[0].x, loaded.elements[0].y) == (0.2, 0.7)
+
+    def test_remove_does_not_change_saved_profile(self) -> None:
+        from lynxdroid.gui.editor import add_key_control
+
+        old = profile()
+        editor = LayoutEditor(profile=old, saved=old)
+        add_key_control(editor, "a")
+        editor.remove_selected()
+        assert not editor.profile.elements and not editor.dirty
+        assert editor.selected is None
