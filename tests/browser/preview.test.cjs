@@ -472,3 +472,31 @@ test('multitouch markers hold independent contacts and clear on blur', async () 
     await page.keyboard.up('g');
   } finally { await context.close(); }
 });
+
+
+test('camera toggles and dragging follows mouse while held in offline test', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    const draft = {schema: 1, controls: [
+      {kind: 'Камера', key: 'C', x: 0.3, y: 0.5},
+      {kind: 'Перетаскивание', key: 'D', x: 0.6, y: 0.5}
+    ]};
+    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
+    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+    await page.click('#live-test');
+    await page.keyboard.press('c'); await page.keyboard.down('d');
+    assert.equal(await page.locator('#canvas .touch-point').count(), 2);
+    const before = await page.locator('#canvas .touch-point').first().evaluate(el => parseFloat(el.style.left));
+    await page.locator('#canvas').evaluate(el => {
+      el.dispatchEvent(new PointerEvent('pointermove', {clientX: 100, clientY: 100, bubbles: true}));
+      el.dispatchEvent(new PointerEvent('pointermove', {clientX: 120, clientY: 110, bubbles: true}));
+    });
+    const after = await page.locator('#canvas .touch-point').first().evaluate(el => parseFloat(el.style.left));
+    assert.ok(after > before);
+    await page.keyboard.up('d');
+    assert.equal(await page.locator('#canvas .touch-point').count(), 1);
+    await page.keyboard.press('c');
+    assert.equal(await page.locator('#canvas .touch-point').count(), 0);
+  } finally { await context.close(); }
+});

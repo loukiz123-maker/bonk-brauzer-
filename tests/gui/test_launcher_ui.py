@@ -736,3 +736,28 @@ def test_double_tap_offline_timer_and_focus_loss(window, qt_app, tmp_path) -> No
     assert editor.status.text() == status
     editor.end_live_test()
     shiboken6.delete(editor)
+
+
+def test_offline_camera_and_drag_mouse_motion(window, qt_app, tmp_path) -> None:
+    import shiboken6
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.show()
+    qt_app.processEvents()
+    editor.kind.setCurrentText("Камера")
+    editor.key.setText("C")
+    editor.place(0.5, 0.5)
+    editor.live_button.click()
+    QTest.keyClick(editor.canvas, Qt.Key.Key_C)
+    assert editor.test_engine is not None
+    QTest.mouseMove(editor.canvas, QPoint(100, 100))
+    QTest.mouseMove(editor.canvas, QPoint(120, 110))
+    assert next(iter(editor.test_engine.active_pointers.values())).x > 960
+    QTest.keyClick(editor.canvas, Qt.Key.Key_C)
+    assert not editor.test_engine.active_pointers
+    editor.end_live_test()
+    shiboken6.delete(editor)

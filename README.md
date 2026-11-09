@@ -42,16 +42,18 @@ confirmation protects unsaved edits on navigation. Android app detection is not
 implemented: the desktop draft identity is the local APK path, so moving the
 file creates a different draft. The legacy general draft is preserved separately.
 The draft does not inject input into games. A local dry-run connects supported
-tap, timed double-tap, fire, multitouch and four-key joystick drafts to the existing input engine and encodes touch
+tap, timed double-tap, fire, multitouch, four-key joystick, camera and drag drafts to the existing input engine and encodes touch
 messages using the scrcpy v5 protocol, without opening a connection. The web
 preview demonstrates the same result independently; it does not run that engine.
 In the editor, “Тест клавиш” also lets you press and release mapped keys on
 the canvas offline. Double-tap schedules a second simulated tap at least 120 ms later;
 its timer is cancelled on focus loss. This is not a verified Android timing contract.
-It currently supports tap, timed double-tap, fire, multitouch and four-key joystick drafts.
+It supports tap, timed double-tap, fire, multitouch, four-key joystick, camera and drag drafts.
 For multitouch, place one marker per finger and assign each a different key; hold
-them simultaneously. Focus loss releases simulated contacts. Camera and dragging
-are not supported by the test, and no input is sent to Android. Engine
+them simultaneously. Camera is toggled with its key; drag is active while its key
+is held. Move the mouse over the test canvas to move the simulated contacts. This
+uses bounded canvas motion, not pointer lock or a timed swipe macro. Focus loss
+releases simulated contacts. No input is sent to Android. Engine
 settings, Google Play and Android apps are not implemented.
 
 The independent Android runtime, game compatibility, performance and actual
@@ -82,7 +84,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (944) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (947) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -159,7 +161,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 944 collected; Qt tests may skip without native libraries
+pytest                               # 947 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

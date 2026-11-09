@@ -134,6 +134,8 @@ class Canvas(QWidget):
         self.dragging = False
         self.drag_recorded = False
         self.pressed_keys: dict[int, str] = {}
+        self.last_mouse_position: tuple[float, float] | None = None
+        self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMinimumSize(420, 260)
         self.setStyleSheet("background:#0c101c; border:1px solid #334258; border-radius:6px")
@@ -142,6 +144,7 @@ class Canvas(QWidget):
     def mousePressEvent(self, event: QMouseEvent) -> None:
         if self.editor.test_engine is not None:
             self.setFocus()
+            self.last_mouse_position = (event.position().x(), event.position().y())
             name = self._mouse_key(event.button())
             if name:
                 self.editor.live_key(name, down=True)
@@ -162,6 +165,16 @@ class Canvas(QWidget):
         self.editor.place(x / self.width(), y / self.height())
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        position = (event.position().x(), event.position().y())
+        previous = self.last_mouse_position
+        self.last_mouse_position = position
+        if self.editor.test_engine is not None:
+            if previous is not None and self.width() and self.height():
+                self.editor.live_motion(
+                    (position[0] - previous[0]) * 1920 / self.width(),
+                    (position[1] - previous[1]) * 1080 / self.height(),
+                )
+            return
         if self.dragging:
             moved = self.editor.move_selected(
                 event.position().x() / self.width(),
@@ -169,6 +182,10 @@ class Canvas(QWidget):
                 record=not self.drag_recorded,
             )
             self.drag_recorded = self.drag_recorded or moved
+
+    def leaveEvent(self, event: Any) -> None:
+        self.last_mouse_position = None
+        super().leaveEvent(event)
 
     @staticmethod
     def _mouse_key(button: Qt.MouseButton) -> str:
@@ -213,6 +230,7 @@ class Canvas(QWidget):
 
     def focusOutEvent(self, event: QFocusEvent) -> None:
         self.pressed_keys.clear()
+        self.last_mouse_position = None
         self.editor.release_live_inputs()
         super().focusOutEvent(event)
 
@@ -608,8 +626,12 @@ class ControlEditor(QDialog):
             self.status.setText(f"Проверка невозможна: {exc}")
             return
         self.live_button.setText("Остановить тест")
+        self.canvas.last_mouse_position = None
         self.canvas.setFocus(Qt.FocusReason.OtherFocusReason)
-        self.status.setText("Тест без Android: нажмите клавишу или мышь на поле. Esc — выход.")
+        self.status.setText(
+            "Тест без Android: камера — переключатель; "
+            "перетаскивание — удержание и движение мыши. Esc — выход."
+        )
 
     def reject(self) -> None:
         # Embedded dialogs must not hide themselves and desynchronise the page stack.
@@ -674,6 +696,19 @@ class ControlEditor(QDialog):
             self.status.setText(
                 f"Тест без Android: {key.upper()} • событий: {len(events)} • удерживается: {active}"
             )
+            self.canvas.update()
+
+    def live_motion(self, dx: float, dy: float) -> None:
+        if self.test_engine is None:
+            return
+        try:
+            events = self.test_engine.mouse_delta(dx, dy)
+        except LynxError as exc:
+            self.end_live_test()
+            self.status.setText(f"Тест остановлен: {exc}")
+            return
+        if events:
+            self.status.setText(f"Тест без Android: движение • событий: {len(events)}")
             self.canvas.update()
 
     def test_mapping(self) -> None:

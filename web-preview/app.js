@@ -207,7 +207,7 @@ function controlKeys(control) {
 function validateTest() {
   const allKeys = [];
   for (const control of controls) {
-    if (!['Нажатие', 'Двойное нажатие', 'Огонь', 'Мультитач', 'Джойстик'].includes(control.kind)) return 'Поддерживаются нажатие, двойное нажатие, огонь, мультитач и джойстик.';
+    if (!['Нажатие', 'Двойное нажатие', 'Огонь', 'Мультитач', 'Джойстик', 'Камера', 'Перетаскивание'].includes(control.kind)) return 'Неизвестный тип управления.';
     const keys = controlKeys(control);
     if (keys.length !== (control.kind === 'Джойстик' ? 4 : 1) || keys.some(k => !/^[a-z0-9]$/.test(k) && !(control.kind !== 'Джойстик' && ['mouse1', 'mouse2'].includes(k)))) return 'Укажите букву, цифру, Mouse1 или Mouse2. Для джойстика — четыре буквы через запятую.';
     if (control.kind === 'Джойстик' && (control.x < 0.089 || control.x > 0.911 || control.y < 0.089 || control.y > 0.911)) return 'Разместите джойстик немного дальше от края.';
@@ -216,6 +216,9 @@ function validateTest() {
   if (new Set(allKeys).size !== allKeys.length) return 'Клавиши не должны повторяться.';
   return '';
 }
+// Motion coordinates are normalized to the 1920 × 1080 simulated display.
+const liveMotion = new Map();
+let lastMotionPosition = null;
 function renderControls() {
   const list = $('#control-list');
   const labels = controls.map((c, i) => `${i + 1}. ${c.kind} · ${c.key} · ${Math.round(c.x * 100)}%, ${Math.round(c.y * 100)}%`);
@@ -227,6 +230,10 @@ function renderControls() {
   controls.forEach((c, index) => {
     const keys = controlKeys(c); const active = keys.some(k => liveHeld.has(k));
     const marker = document.createElement('div'); marker.className = 'marker'; marker.classList.toggle('selected', index === selectedControl); marker.classList.toggle('active', active); marker.textContent = c.kind === 'Джойстик' ? '✥' : c.key.toLowerCase() === 'mouse1' ? 'ЛКМ' : c.key.toLowerCase() === 'mouse2' ? 'ПКМ' : c.key; marker.title = `${c.kind}: ${c.key}`; marker.style.left = `${c.x * 100}%`; marker.style.top = `${c.y * 100}%`; canvas.append(marker);
+    if (liveMotion.has(index)) {
+      const dot = document.createElement('div'); dot.className = 'touch-point';
+      const point = liveMotion.get(index); dot.style.left = `${point.x * 100}%`; dot.style.top = `${point.y * 100}%`; canvas.append(dot);
+    }
     if (active && c.kind === 'Джойстик') {
       const dx = Number(liveHeld.has(keys[1])) - Number(liveHeld.has(keys[3]));
       const dy = Number(liveHeld.has(keys[2])) - Number(liveHeld.has(keys[0]));
@@ -395,6 +402,18 @@ $('#canvas').addEventListener('pointerdown', event => {
   selectControl(controls.length - 1); $('#editor-status').textContent = `Элементов: ${controls.length} • не сохранено`;
 });
 $('#canvas').addEventListener('pointermove', event => {
+  if (liveTest) {
+    const previous = lastMotionPosition; lastMotionPosition = {x: event.clientX, y: event.clientY};
+    const rect = $('#canvas').getBoundingClientRect();
+    if (previous && rect.width && rect.height && liveMotion.size) {
+      for (const point of liveMotion.values()) {
+        point.x = Math.max(0, Math.min(1919 / 1920, point.x + (event.clientX - previous.x) / rect.width));
+        point.y = Math.max(0, Math.min(1079 / 1080, point.y + (event.clientY - previous.y) / rect.height));
+      }
+      $('#editor-status').textContent = `Тест без Android: движение • событий: ${liveMotion.size}`; renderControls();
+    }
+    return;
+  }
   if (!dragging || selectedControl === null) return;
   const position = canvasPosition(event);
   if (controls[selectedControl].x === position.x && controls[selectedControl].y === position.y) return;
@@ -403,6 +422,7 @@ $('#canvas').addEventListener('pointermove', event => {
   $('#editor-status').textContent = 'Элемент перемещён • не сохранено'; renderControls();
 });
 $('#canvas').addEventListener('pointerup', () => { dragging = false; });
+$('#canvas').addEventListener('pointerleave', () => { lastMotionPosition = null; });
 $('#canvas').addEventListener('pointercancel', () => { dragging = false; endLiveTest(); });
 $('#apply-control').addEventListener('click', () => {
   if (selectedControl === null) return;
@@ -419,7 +439,7 @@ $('#delete-control').addEventListener('click', () => {
 });
 function endLiveTest() {
   if (!liveTest) return;
-  liveTest = false; liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); cancelPendingDouble();
+  liveTest = false; liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); liveMotion.clear(); lastMotionPosition = null; cancelPendingDouble();
   $('#live-test').textContent = 'Тест клавиш';
   $('#editor-status').textContent = 'Тест остановлен. Ничего не отправлено в Android.';
   renderControls();
@@ -428,8 +448,8 @@ $('#live-test').addEventListener('click', () => {
   if (liveTest) { endLiveTest(); return; }
   const error = validateTest();
   if (error) { $('#editor-status').textContent = `Проверка невозможна: ${error}`; return; }
-  liveTest = true; $('#live-test').textContent = 'Остановить тест'; $('#canvas').focus();
-  $('#editor-status').textContent = 'Тест без Android: нажмите клавишу или мышь на поле. Esc — выход.';
+  liveTest = true; lastMotionPosition = null; $('#live-test').textContent = 'Остановить тест'; $('#canvas').focus();
+  $('#editor-status').textContent = 'Тест без Android: камера — переключатель; перетаскивание — удержание и движение мыши. Esc — выход.';
 });
 function testDown(key) {
   if (livePressed.has(key)) return;
@@ -445,6 +465,15 @@ function testDown(key) {
     }, 120);
     pendingDouble.set(key, timer);
   }
+  if (['Камера', 'Перетаскивание'].includes(control.kind)) {
+    const index = controls.indexOf(control);
+    if (control.kind === 'Камера' && liveMotion.has(index)) {
+      liveMotion.delete(index); liveHeld.delete(key);
+    } else {
+      liveMotion.set(index, {x: Math.min(control.x, 1919 / 1920), y: Math.min(control.y, 1079 / 1080)}); liveHeld.add(key);
+    }
+    $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • удерживается: ${activeTouchCount()}`; renderControls(); return;
+  }
   const wasActive = controlKeys(control).some(k => liveHeld.has(k));
   if (['Огонь', 'Мультитач', 'Джойстик'].includes(control.kind)) liveHeld.add(key);
   const events = ['Нажатие', 'Двойное нажатие'].includes(control.kind) ? 2 : control.kind === 'Джойстик' && !wasActive ? 2 : 1;
@@ -453,6 +482,9 @@ function testDown(key) {
 function testUp(key) {
   if (!livePressed.has(key)) return;
   livePressed.delete(key);
+  const index = controls.findIndex(c => controlKeys(c).includes(key));
+  if (index !== -1 && controls[index].kind === 'Камера') return;
+  if (index !== -1 && controls[index].kind === 'Перетаскивание') liveMotion.delete(index);
   if (liveHeld.delete(key)) $('#editor-status').textContent = `Тест без Android: ${key.toUpperCase()} • событий: 1 • удерживается: ${activeTouchCount()}`;
   renderControls();
 }
@@ -481,7 +513,7 @@ window.addEventListener('mouseup', event => {
   if (key) testUp(key);
 });
 $('#canvas').addEventListener('contextmenu', event => { if (liveTest) event.preventDefault(); });
-$('#canvas').addEventListener('blur', () => { if (liveTest) { liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); cancelPendingDouble(); renderControls(); } });
+$('#canvas').addEventListener('blur', () => { if (liveTest) { liveHeld.clear(); livePressed.clear(); physicalKeys.clear(); liveMotion.clear(); lastMotionPosition = null; cancelPendingDouble(); renderControls(); } });
 $('#test-mapping').addEventListener('click', () => {
   const status = $('#editor-status');
   const error = validateTest();
@@ -491,7 +523,7 @@ $('#test-mapping').addEventListener('click', () => {
   if (!control) { status.textContent = 'Демо без Android: клавиша не назначена. Ничего не отправлено.'; return; }
   const x = Math.min(1919, Math.floor(control.x * 1920));
   const y = Math.min(1079, Math.floor(control.y * 1080));
-  status.textContent = `Демо без Android: ${control.kind === 'Джойстик' ? 3 : control.kind === 'Двойное нажатие' ? 4 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
+  status.textContent = `Демо без Android: ${['Джойстик', 'Перетаскивание'].includes(control.kind) ? 3 : control.kind === 'Двойное нажатие' ? 4 : 2} события касания, позиция ${x} × ${y}. Ничего не отправлено.`;
 });
 $('#undo-control').addEventListener('click', () => {
   if (!undoStack.length) return;

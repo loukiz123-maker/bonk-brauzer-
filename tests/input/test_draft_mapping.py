@@ -32,7 +32,7 @@ def test_tap_is_a_down_up_pair() -> None:
 
 def test_unsupported_kinds_and_keys_are_not_silently_simulated() -> None:
     with pytest.raises(ValueError):
-        draft_engine([draft("Камера")])
+        draft_engine([draft("Несуществующий тип")])
     with pytest.raises(ValueError):
         draft_engine([draft(key="Mouse3")])
     with pytest.raises(ValueError):
@@ -180,3 +180,30 @@ def test_multitouch_independent_contacts_and_cleanup() -> None:
     assert len(cancelled) == 1 and cancelled[0].pointer == two.pointer
     assert not engine.active_pointers
     assert engine.key_up("g") == []
+
+
+def test_camera_toggle_and_drag_follow_motion_independently() -> None:
+    engine = draft_engine([draft("Камера", "C"), draft("Перетаскивание", "D")])
+    assert [e.action for e in engine.key_down("c")] == [Action.DOWN, Action.MOVE]
+    engine.key_up("c")
+    assert [e.action for e in engine.key_down("d")] == [Action.DOWN, Action.MOVE]
+    moved = engine.mouse_delta(100, -50)
+    assert len(moved) == 2 and all(e.action is Action.MOVE for e in moved)
+    assert all((e.x, e.y) == (580, 760) for e in moved)
+    assert [e.action for e in engine.key_up("d")] == [Action.UP]
+    assert len(engine.active_pointers) == 1
+    assert [e.action for e in engine.key_down("c")] == [Action.UP]
+    engine.key_up("c")
+    assert not engine.active_pointers
+
+
+def test_motion_clamping_repeats_and_focus_cancel() -> None:
+    engine = draft_engine([draft("Камера", "C")])
+    engine.key_down("c")
+    assert engine.key_down("c") == []
+    event = engine.mouse_delta(10000, -10000)[0]
+    assert (event.x, event.y) == (1919, 0)
+    assert len(engine.release_all("blur")) == 1
+    assert not engine.active_pointers
+    assert engine.mouse_delta(1, 1) == []
+    assert engine.key_down("c")[0].action is Action.DOWN
