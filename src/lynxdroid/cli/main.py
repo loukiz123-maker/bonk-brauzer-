@@ -144,6 +144,29 @@ def build_parser() -> argparse.ArgumentParser:
     p_show.add_argument("--json", action="store_true")
     p_show.set_defaults(func=cmd_show)
 
+    # game --------------------------------------------------------------
+    p_game = sub.add_parser("game", help="why a game refuses to run, and what can be done")
+    game_sub = p_game.add_subparsers(dest="game_command", required=True)
+
+    p_explain = game_sub.add_parser("explain", help="diagnose an error the game showed you")
+    p_explain.add_argument("message", help="the text the game displayed, in quotes")
+    p_explain.add_argument("--json", action="store_true")
+    p_explain.add_argument("--backend", choices=["waydroid", "fake"], default=None)
+    p_explain.set_defaults(func=cmd_game_explain)
+
+    p_fix = game_sub.add_parser("fix", help="apply one compatibility fix")
+    p_fix.add_argument("fix", help="hide-root | egl-fallback | network")
+    p_fix.add_argument("--yes", action="store_true", help="confirm the persistent change")
+    p_fix.add_argument("--json", action="store_true")
+    p_fix.add_argument("--backend", choices=["waydroid", "fake"], default=None)
+    p_fix.set_defaults(func=cmd_game_fix)
+
+    p_revert = game_sub.add_parser("revert", help="undo the root-hiding fix")
+    p_revert.add_argument("--yes", action="store_true")
+    p_revert.add_argument("--json", action="store_true")
+    p_revert.add_argument("--backend", choices=["waydroid", "fake"], default=None)
+    p_revert.set_defaults(func=cmd_game_revert)
+
     # apps --------------------------------------------------------------
     p_apps = sub.add_parser("apps", help="installed Android applications")
     apps_sub = p_apps.add_subparsers(dest="apps_command", required=True)
@@ -384,6 +407,98 @@ def _backend(args: argparse.Namespace, settings_store: SettingsStore) -> Android
     if kind == "fake":
         return FakeBackend()
     return WaydroidBackend(config_for(settings))
+
+
+def cmd_game_explain(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Turn a game's own refusal into a diagnosis and, when possible, a fix.
+
+    The text comes from the user, because that is where it exists: the game
+    shows it in its own window, which we do not read. Passing it in is also
+    what keeps this honest - we diagnose the sentence we were given rather
+    than inventing one.
+    """
+    from lynxdroid.backend.compat import CompatFixes
+    from lynxdroid.backend.contract import user_consented
+
+    backend = _backend(args, store)
+    fixes = CompatFixes(backend, consent=user_consented("game compat", str(args.message)[:80]))
+    advice = fixes.advise(args.message)
+
+    if args.json:
+        print(json.dumps(advice, indent=2, ensure_ascii=False))
+        return int(ExitCode.OK)
+
+    if advice["match"] is None:
+        print("this is not a failure we recognise")
+        print(f"  {advice['advice']}")
+        return int(ExitCode.UNSUPPORTED)
+
+    print(f"diagnosis  {advice['title']}")
+    print(f"  {advice['advice']}")
+    if advice["support"] == "not-fixable":
+        print("\n  this one is not ours to fix: the game itself forbids it.")
+        print("  no setting in this container changes its mind.")
+        return int(ExitCode.UNSUPPORTED)
+    if advice["fix"]:
+        print(f"\n  try: lynxdroid game fix {advice['fix']} --yes")
+    return int(ExitCode.OK)
+
+
+def cmd_game_fix(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Apply one named fix. Persistent changes need an explicit --yes."""
+    from lynxdroid.backend.compat import FIX_IDS, CompatFixes
+    from lynxdroid.backend.contract import user_consented
+
+    if args.fix not in FIX_IDS:
+        raise LynxError(
+            f"unknown fix '{args.fix}'",
+            hint=f"available: {', '.join(FIX_IDS)}",
+        )
+    if not args.yes:
+        raise LynxError(
+            "this changes persistent Android state",
+            hint="add --yes once you have read what it does in 'docs/COMPATIBILITY.md'",
+        )
+    backend = _backend(args, store)
+    # The subject names the change, so a log line can say what was agreed to.
+    consent = user_consented(f"apply the {args.fix} compatibility fix")
+    fixes = CompatFixes(backend, consent=consent)
+    results = fixes.apply_all([args.fix])
+
+    if args.json:
+        print(json.dumps([r.as_dict() for r in results], indent=2, ensure_ascii=False))
+        return int(ExitCode.OK)
+
+    for result in results:
+        print(f"{result.fix}: {result.outcome.value} - {result.message}")
+        for step in result.steps:
+            mark = "done" if step.done else "not "
+            print(f"  [{mark}] {step.action}" + (f"  ({step.detail})" if step.detail else ""))
+    failed = any(r.outcome.value in ("failed", "refused") for r in results)
+    return int(ExitCode.BLOCKED if failed else ExitCode.OK)
+
+
+def cmd_game_revert(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:
+    """Undo the root-hiding fix, because a change you cannot undo is a trap."""
+    from lynxdroid.backend.compat import CompatFixes
+    from lynxdroid.backend.contract import user_consented
+
+    if not args.yes:
+        raise LynxError(
+            "reverting writes the stock values back",
+            hint="add --yes to confirm",
+        )
+    backend = _backend(args, store)
+    fixes = CompatFixes(backend, consent=user_consented("revert the root-hiding fix"))
+    result = fixes.revert_hide_root()
+    if args.json:
+        print(json.dumps(result.as_dict(), indent=2, ensure_ascii=False))
+        return int(ExitCode.OK)
+    print(f"{result.fix}: {result.outcome.value} - {result.message}")
+    for step in result.steps:
+        mark = "done" if step.done else "not "
+        print(f"  [{mark}] {step.action}" + (f"  ({step.detail})" if step.detail else ""))
+    return int(ExitCode.OK if result.outcome.value != "failed" else ExitCode.BLOCKED)
 
 
 def cmd_status(args: argparse.Namespace, paths: AppPaths, store: SettingsStore) -> int:

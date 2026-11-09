@@ -16,6 +16,7 @@ and the GUI must not draw a working control for it.
 from __future__ import annotations
 
 import abc
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from enum import Enum
 
@@ -264,6 +265,14 @@ class AndroidBackend(abc.ABC):
     @abc.abstractmethod
     def set_prop(self, name: str, value: str, *, consent: Consent | None = None) -> bool:
         """Write a property. Requires a :class:`Consent` for persistent values."""
+
+    @abc.abstractmethod
+    def shell_probe(self, command: Sequence[str], *, timeout: float = 10.0) -> tuple[int, str]:
+        """Run one command inside Android; return ``(exit code, output)``.
+
+        Used by the compatibility layer to test the container's own network.
+        A list, not a string, so no caller can smuggle a shell expression in.
+        """
 
     # -- windowing -------------------------------------------------------
     @abc.abstractmethod

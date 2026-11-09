@@ -23,6 +23,7 @@ from __future__ import annotations
 import re
 import subprocess
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -294,6 +295,20 @@ class WaydroidBackend(AndroidBackend):
         if not command or "\x00" in command:
             raise BackendError("invalid shell command", code="invalid-command")
         return self._run(["shell", *command.split()], timeout=timeout)
+
+    def shell_probe(self, command: Sequence[str], *, timeout: float = 10.0) -> tuple[int, str]:
+        """Run one command inside Android; return ``(exit code, output)``.
+
+        Part of :class:`lynxdroid.backend.compat.CompatTarget`. The arguments
+        arrive as a list so that no caller can smuggle a shell expression in a
+        string: Waydroid's own ``shell`` passes them to ``sh`` and we do not
+        add a second interpretation on top.
+        """
+        if not command or any("\x00" in part for part in command):
+            raise BackendError("invalid shell command", code="invalid-command")
+        result = self._run(["shell", *command], timeout=timeout)
+        output = result.stdout.strip() or result.stderr.strip() or result.error or ""
+        return result.returncode, output
 
     def _systemctl(self, *args: str, timeout: float = 20.0) -> proc.RunResult:
         return proc.run(["systemctl", *args], timeout=timeout)
@@ -843,6 +858,14 @@ class FakeBackend(AndroidBackend):
             raise BackendError("consent required", code="consent-required")
         self._props[name] = value
         return True
+
+    def shell_probe(self, command: Sequence[str], *, timeout: float = 10.0) -> tuple[int, str]:
+        """No Android here, so the honest answer is "could not run it"."""
+        raise BackendError(
+            "the test backend has no Android shell",
+            code="no-shell",
+            hint="use a real backend to test the container's network",
+        )
 
     def show_full_ui(self) -> bool:
         return True

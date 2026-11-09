@@ -628,3 +628,63 @@ class TestProfileCommand:
         doctor_code, _, _ = run(capsys, ["doctor", "--strict"], root)
         if profile_code == 0:
             assert doctor_code == 0, "profile says go, doctor --strict says stop"
+
+
+class TestGameCommand:
+    """`lynxdroid game` answers the question the screenshots asked.
+
+    The user's own words were "make it run any game without problems". We
+    cannot promise that, and the command must not pretend to: a game that
+    forbids emulators is reported as unfixable, not as "try again".
+    """
+
+    STANDOFF = (
+        "На вашем устройстве активны root-права. Они могут использоваться для изменения файлов игры"
+    )
+    FREE_FIRE = "Ошибка сетевого подключения Не удалось войти на сервер: 3"
+
+    def test_it_recognises_the_root_refusal(self, capsys, root: Path) -> None:
+        code, out, _ = run(capsys, ["game", "explain", self.STANDOFF], root)
+        assert "root" in out.lower()
+        assert "lynxdroid game fix hide-root" in out
+        assert code == 0
+
+    def test_it_recognises_the_network_refusal(self, capsys, root: Path) -> None:
+        _code, out, _ = run(capsys, ["game", "explain", self.FREE_FIRE], root)
+        assert "network" in out.lower()
+        assert "fix network" in out
+
+    def test_an_unfixable_refusal_exits_unsupported(self, capsys, root: Path) -> None:
+        code, out, _ = run(capsys, ["game", "explain", "Play Integrity check failed"], root)
+        assert code == 5, "an unfixable refusal must not look like a normal answer"
+        assert "not ours to fix" in out
+
+    def test_an_unknown_message_is_admitted(self, capsys, root: Path) -> None:
+        code, out, _ = run(capsys, ["game", "explain", "Error 0xDEADBEEF"], root)
+        assert "not a failure we recognise" in out
+        assert "do not know the cause" in out
+        assert code == 5
+
+    def test_json_carries_the_advice(self, capsys, root: Path) -> None:
+        import json
+
+        _code, out, _ = run(capsys, ["game", "explain", self.STANDOFF, "--json"], root)
+        payload = json.loads(out)
+        assert payload["match"] == "root-detected"
+        assert payload["support"] == "fixable"
+        assert payload["fix"] == "hide-root"
+
+    def test_fix_without_yes_is_refused(self, capsys, root: Path) -> None:
+        code, _out, err = run(capsys, ["game", "fix", "hide-root"], root)
+        assert code != 0
+        assert "--yes" in err
+
+    def test_an_unknown_fix_names_the_real_ones(self, capsys, root: Path) -> None:
+        code, _out, err = run(capsys, ["game", "fix", "defeat-anticheat", "--yes"], root)
+        assert code != 0
+        assert "hide-root" in err
+
+    def test_revert_without_yes_is_refused(self, capsys, root: Path) -> None:
+        code, _out, err = run(capsys, ["game", "revert"], root)
+        assert code != 0
+        assert "--yes" in err

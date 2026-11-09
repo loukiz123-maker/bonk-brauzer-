@@ -20,10 +20,10 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
 | 9 | Keyboard layout editor | **PARTIAL** | model, codec, store, CLI; drag-and-drop, selection and unsaved-changes handling implemented in Qt-free `gui/editor.py` (40 tests); the widgets themselves have never been displayed |
 | 10 | Simultaneous presses, multitouch | **PARTIAL** | state machine and pointer allocation verified; real device test blocked |
 | 11 | Intel Iris Xe, laptop optimisation | **BLOCKED** | host GPU checks written; nothing can be measured without the GPU |
-| 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance deliberately `UNTESTED` |
+| 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance deliberately `UNTESTED`; game refusals are diagnosed by `lynxdroid game explain` and three honest fixes exist (`hide-root`, `egl-fallback`, `network`) — see `docs/COMPATIBILITY.md`. A game that forbids emulators or demands Play Integrity is reported as unfixable, by policy |
 | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
 | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
-| 15 | Testing and quality criteria | **DONE** | 743 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+| 15 | Testing and quality criteria | **DONE** | 783 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
 | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
 | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
 | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |

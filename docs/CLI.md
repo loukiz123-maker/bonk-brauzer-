@@ -144,6 +144,40 @@ window on screen for a session that is already running. It refuses with exit 6
 when Android is not `running`, because asking for a window that cannot appear
 only looks like a hang.
 
+## game
+
+Why a game refused to run, and what can honestly be done about it. The full
+background is in `docs/COMPATIBILITY.md`.
+
+```
+lynxdroid game explain MESSAGE [--json]
+lynxdroid game fix NAME [--yes] [--json]
+lynxdroid game revert [--yes] [--json]
+```
+
+`explain` takes the text the game displayed and maps it to a known cause.
+Exit `0` when there is something to try, `5` when the refusal is not ours to
+fix or not recognised at all — never a false "try again".
+
+| Fix | Changes | Undo |
+|---|---|---|
+| `hide-root` | `ro.debuggable`, `ro.secure`, `ro.build.tags` so ordinary root checks pass | `game revert` |
+| `egl-fallback` | requests the software renderer (slower, but a picture) | set the property back |
+| `network` | nothing — probes the container's own egress from inside Android | n/a |
+
+```console
+$ lynxdroid game explain "На вашем устройстве активны root-права"
+diagnosis  the game detected root access
+  Waydroid runs Android as root and the image is signed with test keys, so the
+  game's ordinary root check succeeds.
+
+  try: lynxdroid game fix hide-root --yes
+```
+
+A game that forbids emulators, or demands a Play Integrity attestation, is
+reported as **not fixable by us**. That is a vendor decision, not a
+configuration mistake, and `hide-root` does not pretend otherwise.
+
 ## apps
 
 ```

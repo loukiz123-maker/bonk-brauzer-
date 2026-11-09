@@ -74,6 +74,9 @@ Columns: **ID** · **P** (priority) · **Requirement** · **Test / evidence** ·
 | P1-NONBLOCK | GUI never blocks on a subprocess | `gui/workers.py`, `Poller` | `В РАБОТЕ` (no display to test on) |
 | P1-MEASURE | Measure latency/throughput rather than claim it | `FrameStats` (median/p95), no numbers invented | `В РАБОТЕ` |
 | P1-APK | Validate APKs before install | `apps/catalog.inspect_apk`, CLI tests | `ПРОВЕРЕН` |
+| P1-GAME-DIAG | A game's own refusal is matched to a named cause, and an unfixable one is reported as unfixable rather than "try again" | `tests/backend/test_game_compat.py::TestSignatureMatching`, `tests/cli/test_cli.py::TestGameCommand` | `ПРОВЕРЕН` (в контейнере; на реальной игре — `ЗАБЛОКИРОВАН`) |
+| P1-GAME-FIX | A compatibility fix names what it changes, needs consent, and can be undone | `tests/backend/test_game_compat.py::TestHideRoot`, `TestRevert` | `ПРОВЕРЕН` |
+| P1-GAME-HONEST | A fix that changed nothing is not reported as applied, and root hiding never claims to defeat attestation | `tests/backend/test_game_compat.py::TestHideRoot::test_it_does_not_claim_to_defeat_attestation` | `ПРОВЕРЕН` |
 | P1-CI | CI builds and runs the suite | `.github/workflows/ci.yml` | `ПРОВЕРЕН` (workflow authored) |
 
 ## Explicitly deferred (stage 12 and later)
