@@ -265,7 +265,8 @@ class ControlEditor(QDialog):
         note = QLabel(
             "Нажмите на поле для добавления, перетащите элемент для перемещения. "
             "Это шаблон: ввод в игры пока не работает. "
-            "Канал scrcpy подготовлен, но не подключён."
+            "Канал scrcpy подготовлен, но не подключён. "
+            "Изменение раскладки останавливает тест."
         )
         note.setWordWrap(True)
         side.addWidget(note)
@@ -535,6 +536,8 @@ class ControlEditor(QDialog):
         self.redo_button.setEnabled(bool(self._redo_stack))
 
     def _record_change(self) -> None:
+        # The test engine is a snapshot. Never keep using it after an edit.
+        self.end_live_test()
         self._undo_stack.append(copy.deepcopy(self.controls))
         if len(self._undo_stack) > 50:
             self._undo_stack.pop(0)

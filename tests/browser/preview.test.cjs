@@ -182,3 +182,29 @@ test('mouse binding capture and held fire work locally', async () => {
     assert.equal(await page.locator('#live-test').textContent(), 'Тест клавиш');
   } finally { await context.close(); }
 });
+
+
+test('changing a binding stops the old live test before applying the edit', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    await page.selectOption('#control-kind', {label: 'Огонь'});
+    await addMarker(page);
+    await page.click('#live-test');
+    await page.keyboard.down('f');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
+    await page.locator('#control-key').fill('G');
+    await page.click('#apply-control');
+    await page.keyboard.up('f');
+    assert.equal(await page.locator('#live-test').textContent(), 'Тест клавиш');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    await page.click('#live-test');
+    await page.keyboard.down('f');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
+    await page.keyboard.up('f');
+    await page.keyboard.down('g');
+    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
+    await page.keyboard.up('g');
+  } finally { await context.close(); }
+});

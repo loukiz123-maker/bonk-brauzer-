@@ -221,6 +221,8 @@ $('#control-profile').addEventListener('change', event => {
 $('#close-editor').addEventListener('click', () => page('home'));
 document.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', () => document.getElementById(button.dataset.close).close()));
 function recordChange() {
+  // Live test bindings must never outlive the draft they were made from.
+  endLiveTest();
   undoStack.push(JSON.stringify(controls));
   if (undoStack.length > 50) undoStack.shift();
   redoStack = [];

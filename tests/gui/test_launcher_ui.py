@@ -529,3 +529,34 @@ def test_live_focus_and_escape_do_not_restart_or_hide_editor(window, qt_app) -> 
     editor.reject()
     assert window.pages.currentWidget() is editor and editor.isVisible()
     editor.controls.clear()
+
+
+def test_edit_stops_old_live_engine_and_releases_contacts(window, qt_app, tmp_path) -> None:
+    import shiboken6
+
+    from lynxdroid.gui.control_editor import ControlEditor
+
+    editor = ControlEditor(tmp_path / "controls.json", window)
+    editor.kind.setCurrentText("Огонь")
+    editor.key.setText("F")
+    editor.place(0.5, 0.5)
+    editor.toggle_live_test()
+    engine = editor.test_engine
+    assert engine is not None
+    editor.live_key("f", down=True)
+    assert engine.active_pointers
+    editor.key.setText("G")
+    editor.apply_selected()
+    assert editor.test_engine is None
+    assert not engine.active_pointers
+    assert editor.live_button.text() == "Тест клавиш"
+    assert editor.controls[0]["key"] == "G"
+    editor.toggle_live_test()
+    assert editor.test_engine is not None
+    editor.live_key("f", down=True)
+    assert not editor.test_engine.active_pointers
+    editor.live_key("g", down=True)
+    assert editor.test_engine.active_pointers
+    editor.reset()
+    assert editor.test_engine is None
+    shiboken6.delete(editor)

@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 927 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 928 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 927 collected; Qt tests may skip without native libraries
+pytest                                    # 928 collected; Qt tests may skip without native libraries
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: 927 collected; thirteen Qt tests skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
+Expected: 928 collected; thirteen Qt tests skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
 
 ### What each suite pins down
 
@@ -208,7 +208,8 @@ The `browser-preview` CI job runs real headless Chromium against the actual
 HTML, CSS and JavaScript. It checks concurrent APK additions in two tabs,
 conflicting profile saves, deferred auto-reload with an unsaved draft, and
 keyboard release / stop-test behaviour, import/export and invalid UTF-8,
-read-only handling of corrupted profiles, and mouse binding capture. These tests cover the browser mock,
+read-only handling of corrupted profiles, mouse binding capture, and stopping
+live tests when a layout changes. These tests cover the browser mock,
 not Android or the native Qt launcher. To run them locally:
 
 ```bash
