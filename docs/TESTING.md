@@ -207,7 +207,8 @@ It includes `schema`, `version`, and one entry per check with `status`,
 The `browser-preview` CI job runs real headless Chromium against the actual
 HTML, CSS and JavaScript. It checks concurrent APK additions in two tabs,
 conflicting profile saves, deferred auto-reload with an unsaved draft, and
-keyboard release / stop-test behaviour. These tests cover the browser mock,
+keyboard release / stop-test behaviour, import/export and invalid UTF-8,
+read-only handling of corrupted profiles, and mouse binding capture. These tests cover the browser mock,
 not Android or the native Qt launcher. To run them locally:
 
 ```bash

@@ -118,3 +118,67 @@ test('shifted release clears the physical key and clicking stop does not restart
     assert.equal(await page.locator('#canvas .marker.active').count(), 0);
   } finally { await context.close(); }
 });
+
+test('layout import is validated, undoable and export does not save it', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    const imported = {schema: 1, controls: [{kind: 'Огонь', key: 'G', x: 0.4, y: 0.6}]};
+    const jsonFile = data => ({name: 'layout.json', mimeType: 'application/json', buffer: data});
+    await page.locator('#import-file').setInputFiles(jsonFile(Buffer.from(JSON.stringify(imported))));
+    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
+
+    const downloadEvent = page.waitForEvent('download');
+    await page.click('#export-controls');
+    const download = await downloadEvent;
+    assert.equal(download.suggestedFilename(), 'lynxdroid-layout.json');
+    const stream = await download.createReadStream();
+    const chunks = [];
+    for await (const chunk of stream) chunks.push(chunk);
+    assert.deepEqual(JSON.parse(Buffer.concat(chunks).toString('utf8')), imported);
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), null);
+
+    await page.locator('#import-file').setInputFiles(jsonFile(Buffer.from([0xff])));
+    await page.waitForSelector('#message:text("Не удалось импортировать")');
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'G');
+    await page.click('#undo-control');
+    assert.equal(await page.locator('#canvas .marker').count(), 0);
+  } finally { await context.close(); }
+});
+
+test('corrupt profile remains read-only and is never overwritten', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{broken'));
+    await page.click('#open-controls');
+    assert.equal(await page.locator('#save-controls').isDisabled(), true);
+    assert.equal(await page.locator('#import-controls').isDisabled(), true);
+    await addMarker(page);
+    assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), '{broken');
+  } finally { await context.close(); }
+});
+
+test('mouse binding capture and held fire work locally', async () => {
+  const {context, pages: [page]} = await freshPages();
+  try {
+    await page.click('#open-controls');
+    await page.selectOption('#control-kind', {label: 'Огонь'});
+    await page.click('#capture-key');
+    await page.click('#capture-key');
+    assert.equal(await page.locator('#control-key').inputValue(), 'Mouse1');
+    assert.equal(await page.locator('#capture-key').textContent(), 'Назначить нажатием');
+    await addMarker(page);
+    assert.equal(await page.locator('#canvas .marker').textContent(), 'ЛКМ');
+    await page.click('#live-test');
+    const canvas = await page.locator('#canvas').boundingBox();
+    await page.mouse.move(canvas.x + 90, canvas.y + 90);
+    await page.mouse.down();
+    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
+    await page.mouse.up();
+    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
+    await page.click('#live-test');
+    assert.equal(await page.locator('#live-test').textContent(), 'Тест клавиш');
+  } finally { await context.close(); }
+});
