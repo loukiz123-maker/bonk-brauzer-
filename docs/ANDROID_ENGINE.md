@@ -1,6 +1,6 @@
 # Android-движок: архитектура и проверяемые этапы
 
-**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, ADB guest-state probe, одиночный PNG screenshot и дискретные tap/key-команды. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и удерживаемого/движущегося ввода нет.
+**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, ADB guest-state probe, одиночный PNG screenshot, дискретные tap/key-команды и запрос запуска уже установленного приложения по package ID. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала, установки APK и удерживаемого/движущегося ввода нет.
 
 ## Исходное состояние репозитория
 
@@ -37,7 +37,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 Пользовательский Android SDK Emulator + AVD
 ```
 
-`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `query_guest_status()`, `capture_screenshot_rgba()`, `send_tap_normalized()` и `send_android_key()` выполняют отдельные короткие ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `query_guest_status()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_android_key()` и `launch_installed_package()` выполняют отдельные короткие ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
 
 ## Контракт лаунчера
 
@@ -51,6 +51,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 | Кадры | Сейчас `capture_screenshot_rgba()` возвращает один декодированный PNG RGBA без sequence/timestamp/rotation; лимит 32 MiB сжатого PNG и 16 777 216 пикселей. Это не видеопоток и не гарантия низкой задержки. Будущий IPC/frame API должен добавить stride, sequence, monotonic timestamp и rotation. |
 | Touch | Сейчас только одиночный tap по нормализованным `x/y` в `[0,1]`; преобразование к `[0,width-1] × [0,height-1]` округляется до пикселя. Down/Move/Up/Cancel, pointer ID и удержание не реализованы; letterbox/rotation учитывает вызывающий UI. |
 | Клавиши | Сейчас только одиночный `adb shell input keyevent <numeric-code>` (1..65535); KeyDown/KeyUp, repeat и удержание не реализованы. Не передавать сырые клавиши хоста как Android-коды без явного преобразования. |
+| Запуск приложения | `launch_installed_package()` запрашивает MAIN/LAUNCHER activity уже установленного приложения по подтверждённому package ID. APK не устанавливается; успешный exit `am start` не доказывает готовность приложения/игры. |
 
 Когда лаунчер и движок будут разнесены по процессам, предпочтителен версионированный **Unix-domain socket** в приватном runtime-каталоге: управляющие сообщения отдельно от кадров, кадры — бинарные с длиной и метаданными, без base64 в JSON. Не открывать неаутентифицированный TCP-порт. Если UI работает в браузерном preview, браузерный код не должен обращаться к `localhost`; нужен native IPC или same-origin proxy, принадлежащий приложению.
 
@@ -102,9 +103,18 @@ Preflight не запускает найденные executable, не загру
 - `make_adb_key_command()` / `send_android_key()` отправляют один numeric `input keyevent` (код 1..65535). Удерживаемого key-down/up, pointer move/down/up/cancel и joystick нет. Установка/запуск APK и подключение старого Android-агента тоже не реализованы.
 - Все три операции, как и guest-state query, требуют `allow_adb_server_autostart=true` после явного согласия. Таймаут каждой команды — от 1 ms до 60 s; screenshot stdout/stderr ограничены 32 MiB на поток, обычные ADB-команды — 64 KiB на поток.
 - `include/bonk/image/image.hpp`, `src/image/inflate.cpp`, `src/image/png.cpp`: добавлены лимитированный inflate и overload PNG decode с пределом пикселей; PNG decoder также ограничивает распакованные и RGBA-буферы 256 MiB.
-- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, а также точные argv/capture/tap/key; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
+- `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, а также точные argv/capture/tap/key/launch; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
 
 Настоящие `adb`, Emulator и AVD в окружении отсутствуют, поэтому нет live-проверки формата кадров, успешного тапа или keyevent на госте. ADB user server может быть запущен при первом вызове; запрет по умолчанию сохраняется.
+
+## Этап 5: запуск уже установленного приложения
+
+- `make_adb_launch_package_command()` формирует `adb -s SERIAL shell am start -W -a android.intent.action.MAIN -c android.intent.category.LAUNCHER -p PACKAGE`.
+- `launch_installed_package()` проверяет dot-separated Android package ID, требует ADB consent и ограничивает timeout 60 секундами. Используется только package ID, предоставленный/подтверждённый вызывающей стороной; имя APK не используется для догадки.
+- Функция **не устанавливает APK** и не проверяет фактическую готовность приложения. `am start` с успешным exit code означает только успешное завершение команды запуска.
+- Fake ADB проверяет argv и consent gating, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
+
+Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
 
 ## Зависимости, лицензии и происхождение
 

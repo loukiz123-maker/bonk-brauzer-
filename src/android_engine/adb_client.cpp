@@ -20,7 +20,31 @@ constexpr std::size_t kMaxScreenshotPngBytes = 32 * 1024 * 1024;
 constexpr std::size_t kMaxScreenshotPixels = 16 * 1024 * 1024;
 constexpr std::uint32_t kMaxViewportDimension = 16384;
 constexpr std::uint32_t kMaxAndroidKeyCode = 65535;
+constexpr std::size_t kMaxAndroidPackageNameBytes = 255;
 constexpr auto kMaxAdbCommandTimeout = std::chrono::minutes{1};
+
+bool ascii_alpha(unsigned char character) {
+  return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
+}
+
+bool valid_package_name(std::string_view package_name) {
+  if (package_name.empty() || package_name.size() > kMaxAndroidPackageNameBytes) return false;
+  bool segment_start = true;
+  bool has_separator = false;
+  for (const unsigned char character : package_name) {
+    if (character == '.') {
+      if (segment_start) return false;
+      segment_start = true;
+      has_separator = true;
+    } else if (segment_start) {
+      if (!ascii_alpha(character)) return false;
+      segment_start = false;
+    } else if (!ascii_alpha(character) && !(character >= '0' && character <= '9') && character != '_') {
+      return false;
+    }
+  }
+  return has_separator && !segment_start;
+}
 
 bool valid_serial(std::string_view serial) {
   if (serial.empty() || serial.front() == '-') return false;
@@ -273,6 +297,19 @@ Result<RuntimeCommand> make_adb_key_command(const AdbConfig& config, std::uint32
       {config.executable.string(), {"-s", config.serial, "shell", "input", "keyevent", std::to_string(android_key_code)}});
 }
 
+Result<RuntimeCommand> make_adb_launch_package_command(const AdbConfig& config, std::string_view package_name) {
+  const Status valid = validate_config(config);
+  if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
+  if (!valid_package_name(package_name)) {
+    return Result<RuntimeCommand>::failure(
+        Error::make("android.invalid_package_name", "Android package name must be a valid dot-separated identifier"));
+  }
+  return Result<RuntimeCommand>::success(
+      {config.executable.string(),
+       {"-s", config.serial, "shell", "am", "start", "-W", "-a", "android.intent.action.MAIN", "-c",
+        "android.intent.category.LAUNCHER", "-p", std::string(package_name)}});
+}
+
 GuestStatus parse_adb_devices_output(std::string_view serial, std::string_view output) {
   std::istringstream lines{std::string(output)};
   std::string line;
@@ -357,6 +394,18 @@ Status send_android_key(const AdbConfig& config, std::uint32_t android_key_code,
   const Status timeout_valid = validate_timeout(command_timeout);
   if (timeout_valid.is_error()) return timeout_valid;
   const Result<RuntimeCommand> command = make_adb_key_command(config, android_key_code);
+  if (command.is_error()) return Status::failure(command.error());
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return consent;
+  const Result<CommandOutput> output = run_adb(command.value(), command_timeout);
+  return output.status();
+}
+
+Status launch_installed_package(const AdbConfig& config, std::string_view package_name,
+                                std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return timeout_valid;
+  const Result<RuntimeCommand> command = make_adb_launch_package_command(config, package_name);
   if (command.is_error()) return Status::failure(command.error());
   const Status consent = require_server_consent(config);
   if (consent.is_error()) return consent;
