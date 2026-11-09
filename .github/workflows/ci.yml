@@ -317,8 +317,14 @@ jobs:
               window.resize(1280, 800)
               window.show()
               app.processEvents()
-              if not window.grab().save('launcher-preview.png'):
+              screenshot = window.grab()
+              if not screenshot.save('launcher-preview.png'):
                   raise SystemExit('screenshot failed')
+              screenshot.scaled(640, 400).save('launcher-small.jpg', quality=55)
+              import base64
+              print('::notice title=launcher-preview::' + base64.b64encode(Path('launcher-small.jpg').read_bytes()).decode())
+              import shiboken6
+              shiboken6.delete(window)
           PY
       - uses: actions/upload-artifact@v4
         with:
