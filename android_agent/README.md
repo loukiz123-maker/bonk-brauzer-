@@ -1,18 +1,18 @@
 # LynxDroid touch agent (Android side)
 
-This directory holds the **Android-side helper** that turns LynxDroid's touch
-messages into real `MotionEvent`s with genuine simultaneous pointers.
+This directory holds an **unverified Android-side touch helper prototype**.
+It does not currently provide working, verified simultaneous touch injection.
+See `docs/ANDROID_RUNTIME_REVIEW_RU.md` for blocking findings.
 
 ## Why it exists
 
-LynxDroid's desktop side can compute multitouch perfectly, but Android only
-accepts injected multi-pointer input from a process with the right privilege.
-There are exactly three honest options, and this project implements only the
-first as a real path:
+The desktop input engine can simulate multiple contacts. Delivering them to
+Android requires an appropriate input mechanism and permissions. The following
+are possible approaches, not verified capabilities of the standalone launcher:
 
 | Path | Mechanism | Simultaneous touches | Privilege needed |
 |---|---|---|---|
-| **A (this app)** | Companion APK injects `MotionEvent`s | up to 10 | app must hold `INJECT_EVENTS` (system/priv-app or `adb shell appops` grant on a debug image) |
+| **A (prototype)** | Companion APK attempts to inject `MotionEvent`s | unverified; current implementation is broken for multiple pointers | app must have `INJECT_EVENTS`; grantability depends on the Android image and permission policy |
 | B | `uinput` virtual touchscreen on the host | device-level | root + `/dev/uinput`, and KWin must route it to the right surface |
 | C | `adb shell input tap` | **1** (sequential only) | none, but useless for games |
 
@@ -22,9 +22,10 @@ silently producing single taps.
 
 ## Protocol (v1)
 
-Length-prefixed JSON over an **AF_UNIX** socket in `$XDG_RUNTIME_DIR`
-(never a TCP port - see stage 14). All frames are `uint32` big-endian length +
-UTF-8 JSON.
+The draft protocol uses length-prefixed JSON (`uint32` big-endian length +
+UTF-8 JSON). The desktop expects a filesystem AF_UNIX socket, while the Java
+server currently creates an Android abstract socket: they do not connect as
+written. See the audit before attempting to run the helper.
 
 Client → agent:
 
@@ -56,32 +57,21 @@ The desktop client reads the pair to print which side to update. An agent that
 predates this answers `{"ok": false}` with nothing else, and the client reports
 that as a refusal rather than as a version it could not read.
 
-Actions are `down`, `move`, `up`, `cancel`. `pointer` is `1..10` and must be
-unique while the contact is open. The agent keeps a pointer-id bitmap and
-rejects a `down` on an id that is already down, so a desktop bug cannot leave a
-phantom finger on screen.
+The intended actions are `down`, `move`, `up`, `cancel`, with pointer IDs
+`1..10`. The prototype maintains a bitmap, but its multi-pointer injection
+and cleanup are not correct or verified; do not rely on them.
 
 ## Building
 
-Requires an Android SDK (the host project does not need it; this is a separate
-artefact):
-
-```bash
-cd android_agent
-./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
-```
-
-The APK is **not** committed here: building it needs a licensed SDK and, for
-the full feature, a privileged install. A debug image where
-`adb shell appops set id.lynxdroid.agent INJECT_EVENTS allow` works is enough
-for path A.
+No build is available: the repository has no Gradle build scripts or wrapper.
+The helper has not been compiled or installed. `INJECT_EVENTS` is a protected
+permission; an `appops` command must not be assumed to grant it. No successful
+permission grant or event injection has been verified.
 
 ## Status
 
-`NOT BUILT, NOT VERIFIED` on the target machine. The desktop side treats a
-missing agent as "no multitouch", shows the reason in the UI, and falls back to
-single-touch taps rather than pretending.
+`NOT BUILT, NOT VERIFIED` on the target machine. The new launcher only runs
+offline input tests; no Android input channel is attached.
 
 ## Files
 

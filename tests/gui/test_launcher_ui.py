@@ -740,8 +740,10 @@ def test_double_tap_offline_timer_and_focus_loss(window, qt_app, tmp_path) -> No
 
 def test_offline_camera_and_drag_mouse_motion(window, qt_app, tmp_path) -> None:
     import shiboken6
-    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
     from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QApplication
 
     from lynxdroid.gui.control_editor import ControlEditor
 
@@ -754,8 +756,15 @@ def test_offline_camera_and_drag_mouse_motion(window, qt_app, tmp_path) -> None:
     editor.live_button.click()
     QTest.keyClick(editor.canvas, Qt.Key.Key_C)
     assert editor.test_engine is not None
-    QTest.mouseMove(editor.canvas, QPoint(100, 100))
-    QTest.mouseMove(editor.canvas, QPoint(120, 110))
+    for position in (QPointF(100, 100), QPointF(120, 110)):
+        event = QMouseEvent(
+            QEvent.Type.MouseMove,
+            position,
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        QApplication.sendEvent(editor.canvas, event)
     assert next(iter(editor.test_engine.active_pointers.values())).x > 960
     QTest.keyClick(editor.canvas, Qt.Key.Key_C)
     assert not editor.test_engine.active_pointers
