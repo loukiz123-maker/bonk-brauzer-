@@ -73,3 +73,52 @@ def read_control_file(path: Path) -> list[dict[str, object]]:
     except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
         raise DataCorrupted("Файл раскладки не является корректным JSON UTF-8.") from exc
     return validate_controls(data)
+
+
+class ProfileConflict(Exception):
+    """The on-disk profile no longer matches the editor's loaded version."""
+
+
+def read_profile(path: Path) -> list[dict[str, object]] | None:
+    """Return None for an absent profile, distinct from a saved empty one."""
+    try:
+        return read_control_file(path)
+    except FileNotFoundError:
+        return None
+
+
+def save_profile(
+    path: Path,
+    controls: list[dict[str, object]],
+    expected: list[dict[str, object]] | None,
+) -> None:
+    """Save iff the version read by the editor is current.
+
+    Cooperating launcher processes serialize the comparison and atomic write
+    with a persistent advisory lock. Uncooperative external writers do not
+    take this lock and cannot be made transactional by this protocol.
+    """
+    import fcntl
+    import os
+    import stat
+
+    from lynxdroid.core.storage import write_json
+
+    validate_controls({"schema": 1, "controls": controls})
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    lock_path = path.with_name(path.name + ".lock")
+    flags = os.O_CREAT | os.O_RDWR | os.O_NONBLOCK | os.O_NOFOLLOW
+    fd = os.open(lock_path, flags, 0o600)
+    with os.fdopen(fd, "rb+") as lock:
+        if not stat.S_ISREG(os.fstat(lock.fileno()).st_mode):
+            raise OSError("Файл блокировки профиля не является обычным файлом")
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError as exc:
+            raise ProfileConflict("Профиль занят другим окном. Повторите сохранение.") from exc
+        if read_profile(path) != expected:
+            raise ProfileConflict(
+                "Раскладка изменилась в другом окне. "
+                "Экспортируйте черновик и откройте профиль заново."
+            )
+        write_json(path, {"schema": 1, "controls": controls})

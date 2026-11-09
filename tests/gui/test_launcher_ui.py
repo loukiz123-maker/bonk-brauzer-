@@ -560,3 +560,32 @@ def test_edit_stops_old_live_engine_and_releases_contacts(window, qt_app, tmp_pa
     editor.reset()
     assert editor.test_engine is None
     shiboken6.delete(editor)
+
+
+def test_two_editors_do_not_overwrite_each_others_profiles(
+    window, qt_app, tmp_path, monkeypatch
+) -> None:
+    import shiboken6
+    from PySide6.QtWidgets import QMessageBox
+
+    from lynxdroid.gui.control_editor import ControlEditor, load_controls
+
+    path = tmp_path / "game.json"
+    first, second = ControlEditor(path, window), ControlEditor(path, window)
+    first.place(0.2, 0.3)
+    second.key.setText("G")
+    second.place(0.7, 0.8)
+    first.save()
+    warnings = []
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[2]))
+    second.save()
+    assert warnings and "изменилась" in warnings[0]
+    assert load_controls(path)[0]["key"] == "F"
+    assert second.controls[0]["key"] == "G"
+    assert second._snapshot() != second._baseline
+    first.key.setText("H")
+    first.apply_selected()
+    first.save()
+    assert load_controls(path)[0]["key"] == "H"
+    shiboken6.delete(first)
+    shiboken6.delete(second)

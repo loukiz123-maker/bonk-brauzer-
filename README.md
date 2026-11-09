@@ -18,6 +18,10 @@ including a fire marker. Markers can be selected, dragged, edited and deleted.
 Undo and redo support the most recent 50 changes in the current editor session.
 Layouts can be exported to and imported from bounded JSON files. Import changes
 the current draft but does not overwrite the game profile until explicitly saved.
+The desktop editor detects a changed profile and refuses to overwrite it; export
+unsaved work and reopen the profile to resolve a conflict. Launcher instances
+coordinate through persistent `.lock` files. This is an advisory lock: external
+programs that do not use it can still race with a save.
 Each imported APK reference has a separate draft, selected in the editor.
 Selecting an APK in the library and choosing “Настроить управление” opens
 its corresponding draft directly. A
@@ -61,7 +65,7 @@ Read this before anything else. It is the difference between "works" and
 
 | Area | State | Evidence |
 |---|---|---|
-| Unit tests (928) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+| Unit tests (933) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
 | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
 | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
 | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -138,7 +142,7 @@ The CLI, doctor and the entire test suite need only the standard library:
 ```bash
 pip install -e .                     # no PySide6, no Qt
 lynxdroid doctor --json | jq .
-pytest                               # 928 collected; Qt tests may skip without native libraries
+pytest                               # 933 collected; Qt tests may skip without native libraries
 ```
 
 The GUI is an optional extra on purpose: the interesting logic lives in

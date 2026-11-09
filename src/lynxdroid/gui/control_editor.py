@@ -25,7 +25,13 @@ from PySide6.QtWidgets import (
 
 from lynxdroid.core.errors import LynxError
 from lynxdroid.core.storage import write_json
-from lynxdroid.gui.control_profiles import KINDS, read_control_file
+from lynxdroid.gui.control_profiles import (
+    KINDS,
+    ProfileConflict,
+    read_control_file,
+    read_profile,
+    save_profile,
+)
 from lynxdroid.input.draft_mapping import draft_engine
 from lynxdroid.input.engine import InputEngine
 from lynxdroid.input.scrcpy_touch import encode_touch
@@ -230,6 +236,7 @@ class ControlEditor(QDialog):
         self.path = path
         self._baseline = "[]"
         self._profile_index = 0
+        self._stored_profile: list[dict[str, object]] | None = None
         self.setWindowTitle("Редактор управления — шаблон")
         self.resize(880, 520)
         self.controls: list[dict[str, Any]] = []
@@ -363,11 +370,15 @@ class ControlEditor(QDialog):
         self._redo_stack.clear()
         self._refresh_history()
         self.read_only = False
+        self._stored_profile = None
         self.save_button.setEnabled(True)
         self.import_button.setEnabled(True)
         self.select(None)
         try:
-            self.controls = load_controls(path)
+            self._stored_profile = read_profile(path)
+            self.controls = (
+                copy.deepcopy(self._stored_profile) if self._stored_profile is not None else []
+            )
             self.status.setText(f"Элементов: {len(self.controls)}")
         except (OSError, LynxError) as exc:
             self.read_only = True
@@ -635,11 +646,10 @@ class ControlEditor(QDialog):
         if self.read_only:
             return
         try:
-            # Recheck the current file so corruption is never silently overwritten.
-            load_controls(self.path)
-            write_json(self.path, {"schema": 1, "controls": self.controls})
-        except (OSError, LynxError) as exc:
+            save_profile(self.path, self.controls, self._stored_profile)
+        except (OSError, LynxError, ProfileConflict) as exc:
             QMessageBox.warning(self, "Ошибка сохранения", str(exc))
             return
+        self._stored_profile = copy.deepcopy(self.controls)
         self._baseline = self._snapshot()
         self.status.setText(f"Сохранено элементов: {len(self.controls)}")

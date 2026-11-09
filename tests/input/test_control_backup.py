@@ -53,3 +53,82 @@ def test_refuses_invalid_json_and_utf8(tmp_path: Path) -> None:
         path.write_bytes(raw)
         with pytest.raises(DataCorrupted):
             read_control_file(path)
+
+
+def test_profile_save_rejects_stale_and_deleted_versions(tmp_path: Path) -> None:
+    from lynxdroid.gui.control_profiles import ProfileConflict, read_profile, save_profile
+
+    path = tmp_path / "game.json"
+    a = [{"kind": "Огонь", "key": "F", "x": 0.5, "y": 0.5}]
+    b = [{"kind": "Огонь", "key": "G", "x": 0.5, "y": 0.5}]
+    assert read_profile(path) is None
+    save_profile(path, a, None)
+    with pytest.raises(ProfileConflict):
+        save_profile(path, b, None)
+    assert read_profile(path) == a
+    save_profile(path, b, a)
+    with pytest.raises(ProfileConflict):
+        save_profile(path, a, a)
+    assert read_profile(path) == b
+    path.unlink()
+    with pytest.raises(ProfileConflict):
+        save_profile(path, a, b)
+    assert not path.exists()
+    save_profile(path, [], None)
+    with pytest.raises(ProfileConflict):
+        save_profile(path, a, None)
+    assert read_profile(path) == []
+
+
+def test_profile_save_refuses_corruption_and_preserves_original(tmp_path: Path) -> None:
+    from lynxdroid.gui.control_profiles import save_profile
+
+    path = tmp_path / "game.json"
+    path.write_bytes(b"\xff")
+    with pytest.raises(DataCorrupted):
+        save_profile(path, [], None)
+    assert path.read_bytes() == b"\xff"
+
+
+def test_profile_lock_refuses_busy_and_symlink(tmp_path: Path) -> None:
+    import fcntl
+
+    from lynxdroid.gui.control_profiles import ProfileConflict, save_profile
+
+    path = tmp_path / "game.json"
+    lock = tmp_path / "game.json.lock"
+    with lock.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        with pytest.raises(ProfileConflict):
+            save_profile(path, [], None)
+    assert not path.exists()
+    lock.unlink()
+    target = tmp_path / "target"
+    target.write_text("keep")
+    lock.symlink_to(target)
+    with pytest.raises(OSError):
+        save_profile(path, [], None)
+    assert target.read_text() == "keep" and not path.exists()
+
+
+def test_concurrent_profile_saves_have_one_winner(tmp_path: Path) -> None:
+    from concurrent.futures import ThreadPoolExecutor
+    from threading import Barrier
+
+    from lynxdroid.gui.control_profiles import ProfileConflict, read_profile, save_profile
+
+    path = tmp_path / "game.json"
+    barrier = Barrier(2)
+
+    def attempt(key: str) -> str:
+        barrier.wait(timeout=5)
+        try:
+            save_profile(path, [{"kind": "Огонь", "key": key, "x": 0.5, "y": 0.5}], None)
+            return key
+        except ProfileConflict:
+            return "conflict"
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        results = list(pool.map(attempt, ("F", "G")))
+    assert results.count("conflict") == 1
+    assert read_profile(path)[0]["key"] in {"F", "G"}  # type: ignore[index]
