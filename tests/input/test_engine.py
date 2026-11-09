@@ -146,11 +146,10 @@ class TestDpad:
     def test_opposite_keys_cancel_to_centre_without_crashing(self, profile, geo, clock) -> None:
         engine = build(profile, geo, clock)
         engine.key_down("w")
-        engine.key_down("s")
+        events = engine.key_down("s")
         contact = next(iter(engine.active_pointers.values()))
-        # Exact 180-degree opposition has no direction: no MOVE is emitted, so
-        # the contact stays where the initial MOVE left it (straight up).
-        assert contact.y <= 375.0
+        assert actions(events) == [("move", 1)]
+        assert (contact.x, contact.y) == pytest.approx((200.0, 375.0))
         engine.key_up("s")
         contact = next(iter(engine.active_pointers.values()))
         assert contact.y == pytest.approx(375.0 - 0.08 * 500)  # clean "up"
@@ -512,3 +511,29 @@ class TestPressState:
         engine.key_down("k")
         ids = {element.id for element in profile.elements}
         assert set(engine.press_state()) <= ids
+
+
+class TestOpposingMovement:
+    @pytest.mark.parametrize("first,opposite", [("w", "s"), ("s", "w"), ("a", "d"), ("d", "a")])
+    def test_opposites_return_to_centre_then_resume(
+        self, first, opposite, profile, geo, clock
+    ) -> None:
+        engine = build(profile, geo, clock)
+        down = engine.key_down(first)
+        centre = (down[0].x, down[0].y)
+        neutral = engine.key_down(opposite)
+        assert len(neutral) == 1 and neutral[0].action is Action.MOVE
+        assert (neutral[0].x, neutral[0].y) == pytest.approx(centre)
+        resumed = engine.key_up(opposite)
+        assert len(resumed) == 1 and resumed[0].action is Action.MOVE
+        assert (resumed[0].x, resumed[0].y) != pytest.approx(centre)
+        assert engine.key_up(first)[0].action is Action.UP
+        assert not engine.active_pointers
+
+    def test_opposites_cancel_one_axis_while_other_remains(self, profile, geo, clock) -> None:
+        engine = build(profile, geo, clock)
+        centre = engine.key_down("w")[0]
+        engine.key_down("d")
+        move = engine.key_down("s")[-1]
+        assert move.x > centre.x
+        assert move.y == pytest.approx(centre.y)

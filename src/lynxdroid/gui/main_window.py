@@ -75,7 +75,7 @@ from lynxdroid.core.paths import AppPaths
 from lynxdroid.display.geometry import Rotation, ViewportGeometry
 from lynxdroid.display.resolution import PRESETS
 from lynxdroid.gui import viewmodel as vm
-from lynxdroid.gui.editor import LayoutEditor, add_key_control
+from lynxdroid.gui.editor import LayoutEditor, add_dpad_control, add_key_control
 from lynxdroid.gui.overlay import GameSurface
 from lynxdroid.gui.theme import Palette, palette_for, stylesheet
 from lynxdroid.gui.workers import Poller, TaskRunner
@@ -391,15 +391,19 @@ class MainWindow(QMainWindow):
         self._add_control_button = QPushButton("Add key…")
         self._add_control_button.clicked.connect(self._add_key_control)
         self._add_control_button.setEnabled(False)
-        self._remove_control_button = QPushButton("Remove key")
+        self._add_dpad_button = QPushButton("Add movement…")
+        self._add_dpad_button.clicked.connect(self._add_dpad_control)
+        self._add_dpad_button.setEnabled(False)
+        self._remove_control_button = QPushButton("Remove")
         self._remove_control_button.clicked.connect(self._remove_key_control)
         self._remove_control_button.setEnabled(False)
         element_buttons.addWidget(self._add_control_button)
+        element_buttons.addWidget(self._add_dpad_button)
         element_buttons.addWidget(self._remove_control_button)
         layout.addLayout(element_buttons)
         keys_note = QLabel(
-            "Add a tap or hold, then drag it into position and save. "
-            "Hold requires a touch channel that supports held contacts."
+            "Add a tap, hold or movement control, then drag it into position and save. "
+            "Hold and movement require a touch channel that supports held contacts."
         )
         keys_note.setWordWrap(True)
         layout.addWidget(keys_note)
@@ -1068,6 +1072,7 @@ class MainWindow(QMainWindow):
                 self._sync_aim_mode()
             self._element_list.clear()
             self._add_control_button.setEnabled(False)
+            self._add_dpad_button.setEnabled(False)
             self._remove_control_button.setEnabled(False)
             self._save_profile_button.setEnabled(False)
             return
@@ -1085,6 +1090,7 @@ class MainWindow(QMainWindow):
             return
         self._editor = LayoutEditor(profile=self._profile, saved=self._profile)
         self._add_control_button.setEnabled(True)
+        self._add_dpad_button.setEnabled(True)
         self._remove_control_button.setEnabled(False)
         self._save_profile_button.setEnabled(False)
         self._surface.set_editor_mode(True)
@@ -1167,6 +1173,24 @@ class MainWindow(QMainWindow):
             return
         self._refresh_edited_profile()
         self._set_status("Key added. Drag it into position, then save the profile.", 7000)
+
+    def _add_dpad_control(self) -> None:
+        from PySide6.QtWidgets import QInputDialog
+
+        if self._editor is None:
+            return
+        text, accepted = QInputDialog.getText(
+            self, "Add movement", "Four keys in order up, right, down, left (e.g. W, D, S, A):"
+        )
+        if not accepted:
+            return
+        try:
+            add_dpad_control(self._editor, text.split(","))
+        except ValueError as exc:
+            QMessageBox.warning(self, "Cannot add movement", str(exc))
+            return
+        self._refresh_edited_profile()
+        self._set_status("Movement added. Drag it into position, then save the profile.", 7000)
 
     def _remove_key_control(self) -> None:
         if self._editor is None or self._editor.selected is None:

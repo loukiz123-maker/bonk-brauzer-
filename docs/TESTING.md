@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
 
 | Tier | Runs where | Count | Proves |
 |---|---|---|---|
-| 1. Unit + contract | any machine, no display | 857 | our logic is correct |
+| 1. Unit + contract | any machine, no display | 875 | our logic is correct |
 | 2. Integration | the target laptop | listed below | the components work together |
 | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
 
@@ -20,13 +20,13 @@ explicitly and this project follows it.
 ```bash
 python -m venv .venv && . .venv/bin/activate
 pip install -e '.[dev]'
-pytest                                    # 857 passed
+pytest                                    # 875 passed
 pytest -q --maxfail=1                     # fail fast
 pytest tests/display -q                   # 80 display tests
 pytest -m "not gui and not privileged"    # inside a restricted sandbox
 ```
 
-Expected: `857 passed in ~2.9 s`, no display, no network, no Waydroid.
+Expected: `875 passed in ~2.9 s`, no display, no network, no Waydroid.
 
 ### What each suite pins down
 
@@ -34,7 +34,7 @@ Expected: `857 passed in ~2.9 s`, no display, no network, no Waydroid.
 |---|---|---|
 | `tests/display/test_geometry.py` | 44 | input transform == image transform; bars reject touches; rotations round-trip |
 | `tests/display/test_resolution.py` | 36 | zero/negative/overflow/absurd values never reach the backend |
-| `tests/input/test_engine.py` | 42 | no stranded contacts; d-pad normalisation; slot exhaustion; focus-loss release; aim mode opens with DOWN |
+| `tests/input/test_engine.py` | 47 | no stranded contacts; d-pad normalisation; slot exhaustion; focus-loss release; aim mode opens with DOWN |
 | `tests/input/test_pipeline.py` | 37 | engine output actually reaches a channel; sub-microsecond work is never printed as "0 ms" |
 | `tests/input/test_channels.py` | 25 | single-touch honesty; agent protocol; rejections surface |
 | `tests/profiles/test_model.py` | 47 | schema, conflicts, paths in error messages |
@@ -52,7 +52,7 @@ Expected: `857 passed in ~2.9 s`, no display, no network, no Waydroid.
 | `tests/test_install_script.py` | 7 | the install script parses, never runs sudo, and matches what the README documents |
 | `tests/core/test_diagnostics.py` | 9 | the one definition of "this check blocks the container path" |
 | `tests/doctor/test_kernel_checks.py` | 13 | binder/binderfs verdicts, including "cannot tell" staying distinct from "unsupported" |
-| `tests/gui/test_editor.py` | 72 | editor logic plus extracted window callbacks for drag persistence and release delivery; full Qt remains untested |
+| `tests/gui/test_editor.py` | 85 | editor logic plus extracted window callbacks for drag persistence and release delivery; full Qt remains untested |
 | `tests/gui/test_viewmodel.py` | 71 | disabled-with-reason, banner logic, WCAG contrast |
 | `tests/doctor/test_host_profile.py` | 26 | platform facts vs verdict, worst-verdict rule, unknown is not ready, agreement with `doctor` |
 | `tests/cli/test_cli.py` | 78 | exit codes, JSON contracts, consent gates, image command, Qt probe honesty, doctor hints name real commands |

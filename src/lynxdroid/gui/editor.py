@@ -13,6 +13,7 @@ the element somewhere the user did not ask for.
 from __future__ import annotations
 
 import uuid
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 
 from lynxdroid.display.geometry import ViewportGeometry
@@ -212,15 +213,20 @@ def normalize_control_key(text: str) -> str:
     )
 
 
+def _ensure_keys_free(profile: Profile, keys: Sequence[str]) -> None:
+    for key in keys:
+        for element in profile.elements:
+            occupied = [*element.keys, *element.dpad_keys]
+            if element.type is ElementType.MOUSE:
+                occupied.append(element.exit_key)
+            if any(existing.casefold() == key.casefold() for existing in occupied if existing):
+                raise ProfileError(f"key '{key}' is already assigned to '{element.label}'")
+
+
 def add_key_control(editor: LayoutEditor, key_text: str, *, hold: bool = False) -> Profile:
     """Add a validated key binding at the centre; never mutate on failure."""
     key = normalize_control_key(key_text)
-    for element in editor.profile.elements:
-        occupied = [*element.keys, *element.dpad_keys]
-        if element.type is ElementType.MOUSE:
-            occupied.append(element.exit_key)
-        if any(existing.casefold() == key.casefold() for existing in occupied if existing):
-            raise ProfileError(f"key '{key}' is already assigned to '{element.label}'")
+    _ensure_keys_free(editor.profile, [key])
     control = Element(
         id="control-" + uuid.uuid4().hex[:16],
         type=ElementType.HOLD if hold else ElementType.TAP,
@@ -228,5 +234,25 @@ def add_key_control(editor: LayoutEditor, key_text: str, *, hold: bool = False) 
         x=0.5,
         y=0.5,
         keys=(key,),
+    )
+    return editor.add(control)
+
+
+def add_dpad_control(editor: LayoutEditor, keys: Sequence[str]) -> Profile:
+    """Add a movement control with keys ordered up, right, down, left."""
+    if len(keys) != 4:
+        raise ProfileError("Enter four keys in order: up, right, down, left")
+    up, right, down, left = (normalize_control_key(key) for key in keys)
+    ordered = (up, right, down, left)
+    if len(set(ordered)) != 4:
+        raise ProfileError("Movement directions need four distinct keys")
+    _ensure_keys_free(editor.profile, ordered)
+    control = Element(
+        id="control-" + uuid.uuid4().hex[:16],
+        type=ElementType.DPAD,
+        label="Movement",
+        x=0.5,
+        y=0.5,
+        dpad_keys=ordered,
     )
     return editor.add(control)

@@ -394,7 +394,9 @@ class InputEngine:
     def _dpad_target(self, binding: _Binding) -> tuple[float, float] | None:
         vector = binding.directions.vector()
         if vector == (0.0, 0.0):
-            return None
+            # Opposite held keys cancel out; move the existing touch back to
+            # the neutral point rather than leaving it in the previous direction.
+            return self._element_point(binding)
         return self._dpad_offset(binding.element, *vector)
 
     def _dpad_offset(self, element: Element, dx: float, dy: float) -> tuple[float, float] | None:

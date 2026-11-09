@@ -344,6 +344,7 @@ class TestMainWindowEditorIntegration:
         from types import SimpleNamespace
 
         from lynxdroid.backend.contract import BackendState
+        from lynxdroid.gui.editor import add_dpad_control
         from lynxdroid.input.engine import InputEngine
 
         source = (
@@ -362,6 +363,7 @@ class TestMainWindowEditorIntegration:
             "_save_profile",
             "_refresh_edited_profile",
             "_on_profile_selected",
+            "_add_dpad_control",
         }
         methods = [n for n in main.body if isinstance(n, ast.FunctionDef) and n.name in wanted]
         assert len(methods) == len(wanted)
@@ -399,6 +401,7 @@ class TestMainWindowEditorIntegration:
             "InputEngine": InputEngine,
             "BackendState": BackendState,
             "QMessageBox": MessageBox,
+            "add_dpad_control": add_dpad_control,
             "log": logging.getLogger(__name__),
         }
         exec(compile(ast.fix_missing_locations(module), "<gui-harness>", "exec"), namespace)  # noqa: S102
@@ -564,6 +567,48 @@ class TestMainWindowEditorIntegration:
         window.closeEvent(SimpleNamespace(ignore=lambda: calls.append("ignored")))
         assert calls == ["ignored"] and window._editor.dirty
 
+    def test_movement_dialog_creates_selects_and_rebinds(self, monkeypatch) -> None:
+        import sys
+        from types import ModuleType, SimpleNamespace
+
+        window = self.make_window()
+        widgets = ModuleType("PySide6.QtWidgets")
+        widgets.QInputDialog = SimpleNamespace(getText=lambda *_args: ("W,D,S,A", True))
+        monkeypatch.setitem(sys.modules, "PySide6.QtWidgets", widgets)
+        window._add_dpad_control()
+        control = window._editor.profile.elements[-1]
+        assert control.type == ElementType.DPAD
+        assert control.dpad_keys == ("w", "d", "s", "a")
+        assert window._editor.selected == control.id and window.dirty
+        assert window.surface_profile == window._engine.profile == window._editor.profile
+
+    def test_movement_dialog_cancel_does_not_mutate(self, monkeypatch) -> None:
+        import sys
+        from types import ModuleType, SimpleNamespace
+
+        window = self.make_window()
+        previous = window._editor.profile
+        widgets = ModuleType("PySide6.QtWidgets")
+        widgets.QInputDialog = SimpleNamespace(getText=lambda *_args: ("", False))
+        monkeypatch.setitem(sys.modules, "PySide6.QtWidgets", widgets)
+        window._add_dpad_control()
+        assert window._editor.profile == previous and not window._editor.dirty
+
+    def test_movement_dialog_invalid_keys_are_explained(self, monkeypatch) -> None:
+        import sys
+        from types import ModuleType, SimpleNamespace
+
+        window = self.make_window()
+        previous = window._editor.profile
+        warnings = []
+        window._messagebox.warning = lambda _window, title, message: warnings.append(message)
+        widgets = ModuleType("PySide6.QtWidgets")
+        widgets.QInputDialog = SimpleNamespace(getText=lambda *_args: ("W,D,S,W", True))
+        monkeypatch.setitem(sys.modules, "PySide6.QtWidgets", widgets)
+        window._add_dpad_control()
+        assert warnings and "distinct" in warnings[0]
+        assert window._editor.profile == previous
+
 
 class TestAddKeyControl:
     @pytest.mark.parametrize(
@@ -648,3 +693,80 @@ class TestAddKeyControl:
         editor.remove_selected()
         assert not editor.profile.elements and not editor.dirty
         assert editor.selected is None
+
+
+class TestAddMovementControl:
+    def test_default_wasd_order_and_engine_directions(self) -> None:
+        from lynxdroid.gui.editor import add_dpad_control
+        from lynxdroid.input.engine import InputEngine
+        from lynxdroid.input.events import Action
+
+        editor = LayoutEditor(profile=profile())
+        add_dpad_control(editor, ["W", "D", "S", "A"])
+        control = editor.profile.elements[0]
+        assert control.type == ElementType.DPAD
+        assert control.dpad_keys == ("w", "d", "s", "a")
+        assert editor.selected == control.id
+        engine = InputEngine(editor.profile, GEOMETRY)
+        for key, axis, sign in (("w", "y", -1), ("d", "x", 1), ("s", "y", 1), ("a", "x", -1)):
+            down, moved = engine.key_down(key)
+            assert down.action is Action.DOWN and moved.action is Action.MOVE
+            assert (getattr(moved, axis) - getattr(down, axis)) * sign > 0
+            assert engine.key_up(key)[0].action is Action.UP
+            assert not engine.active_pointers
+
+    @pytest.mark.parametrize(
+        "keys",
+        [
+            [],
+            ["w"],
+            ["w", "d", "s"],
+            ["w", "d", "s", "a", "z"],
+            ["w", "d", "s", "W"],
+            ["w", "d", "s", "F11"],
+        ],
+    )
+    def test_invalid_key_sets_leave_profile_untouched(self, keys) -> None:
+        from lynxdroid.gui.editor import add_dpad_control
+
+        original = profile()
+        editor = LayoutEditor(profile=original, saved=original)
+        with pytest.raises(ProfileError):
+            add_dpad_control(editor, keys)
+        assert editor.profile == original and not editor.dirty
+        assert editor.selected is None
+
+    def test_conflict_with_existing_key_is_rejected(self) -> None:
+        from lynxdroid.gui.editor import add_dpad_control
+
+        old = profile(tap(keys=("w",)))
+        editor = LayoutEditor(profile=old, saved=old)
+        with pytest.raises(ProfileError, match="already assigned"):
+            add_dpad_control(editor, ["W", "D", "S", "A"])
+        assert editor.profile == old and not editor.dirty
+
+    def test_movement_can_be_moved_persisted_and_loaded(self, tmp_path) -> None:
+        from lynxdroid.core.paths import AppPaths
+        from lynxdroid.gui.editor import add_dpad_control
+        from lynxdroid.profiles.store import ProfileStore
+
+        paths = AppPaths.resolve(tmp_path)
+        paths.ensure()
+        editor = LayoutEditor(profile=profile())
+        add_dpad_control(editor, ["Up", "Right", "Down", "Left"])
+        assert editor.selected is not None
+        editor.profile = editor.profile.move_element(editor.selected, 0.2, 0.8)
+        store = ProfileStore(paths)
+        store.save(editor.profile)
+        control = store.load(editor.profile.id).elements[0]
+        assert control.dpad_keys == ("Up", "Right", "Down", "Left")
+        assert (control.x, control.y) == (0.2, 0.8)
+
+    def test_gui_wires_movement_button_and_review(self) -> None:
+        from pathlib import Path
+
+        source = (
+            Path(__file__).resolve().parents[2] / "src/lynxdroid/gui/main_window.py"
+        ).read_text()
+        assert "self._add_dpad_button.clicked.connect(self._add_dpad_control)" in source
+        assert 'add_dpad_control(self._editor, text.split(","))' in source

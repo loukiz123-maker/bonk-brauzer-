@@ -169,6 +169,8 @@ not trustworthy about anything else.
 
 | 70 | New GUI profiles had no controls for adding or removing key bindings; switching directly between profiles or closing could discard unsaved edits | review of layout workflow | tap/hold controls and unsaved-change confirmation added, including save-failure handling; full Qt and real input still require desktop testing |
 
+| 71 | A keyboard d-pad left its contact in the old direction when opposite keys were held, although the test called this neutral | testing the new movement editor | opposing directions now move the contact to centre, preserving the other axis; regression tests cover both axes and releases. Real-device input remains unverified |
+
 ## Environment issues that are not bugs
 
 * **Waydroid already installed by the user** → we never modify its config or
