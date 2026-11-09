@@ -326,3 +326,20 @@ jobs:
         with:
           name: launcher-preview
           path: launcher-preview.png
+
+  browser-preview:
+    name: browser preview (Chromium)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: tests/browser/package-lock.json
+      - run: npm ci
+        working-directory: tests/browser
+      - run: npx playwright install --with-deps chromium
+        working-directory: tests/browser
+      - run: npm test
+        working-directory: tests/browser
