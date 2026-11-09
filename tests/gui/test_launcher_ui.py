@@ -382,3 +382,38 @@ def test_selected_apk_opens_its_own_controls(window, qt_app, tmp_path) -> None:
     assert editor.profile_choice.currentIndex() == 2
     assert editor.controls[0]["key"] == "F"
     editor.close_button.click()
+
+
+def test_import_export_layout_is_undoable_and_does_not_save_profile(
+    window, qt_app, tmp_path, monkeypatch
+) -> None:
+    import shiboken6
+    from PySide6.QtWidgets import QFileDialog, QMessageBox
+
+    from lynxdroid.gui.control_editor import ControlEditor, load_controls
+
+    profile, backup = tmp_path / "profile.json", tmp_path / "backup.json"
+    editor = ControlEditor(profile, window)
+    editor.place(0.2, 0.3)
+    editor.save_button.click()
+    monkeypatch.setattr(QFileDialog, "getSaveFileName", lambda *args: (str(backup), ""))
+    editor.export_button.click()
+    assert load_controls(backup) == load_controls(profile)
+    editor.key.setText("G")
+    editor.apply_button.click()
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(backup), ""))
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.StandardButton.Yes)
+    editor.import_button.click()
+    assert editor.controls[0]["key"] == "F"
+    assert load_controls(profile)[0]["key"] == "F"
+    editor.undo_button.click()
+    assert editor.controls[0]["key"] == "G"
+    assert load_controls(profile)[0]["key"] == "F"
+    bad = tmp_path / "bad.json"
+    bad.write_text("broken")
+    warnings = []
+    monkeypatch.setattr(QFileDialog, "getOpenFileName", lambda *args: (str(bad), ""))
+    monkeypatch.setattr(QMessageBox, "warning", lambda *args: warnings.append(args[1]))
+    editor.import_button.click()
+    assert warnings == ["Ошибка импорта"] and editor.controls[0]["key"] == "G"
+    shiboken6.delete(editor)

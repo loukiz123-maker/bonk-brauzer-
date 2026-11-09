@@ -93,6 +93,7 @@ let controlsValid = true;
 let activeProfileKey = controlStorageKey;
 let activeProfileIndex = 0;
 let controlsBaseline = '[]';
+let profileGeneration = 0;
 let selectedControl = null;
 let dragging = false;
 let dragRecorded = false;
@@ -101,10 +102,12 @@ let redoStack = [];
 let liveTest = false;
 const liveHeld = new Set();
 const livePressed = new Set();
-function readControls(key = activeProfileKey) {
-  const data = JSON.parse(localStorage.getItem(key) || '{"schema":1,"controls":[]}');
-  if (data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && c[k] >= 0 && c[k] <= 1))) throw new Error('invalid');
+function validateDraft(data) {
+  if (!data || typeof data !== 'object' || Object.keys(data).sort().join(',') !== 'controls,schema' || data.schema !== 1 || !Array.isArray(data.controls) || data.controls.length > 100 || !data.controls.every(c => c && typeof c === 'object' && Object.keys(c).sort().join(',') === 'key,kind,x,y' && kinds.includes(c.kind) && typeof c.key === 'string' && c.key.length >= 1 && c.key.length <= 16 && ['x','y'].every(k => typeof c[k] === 'number' && Number.isFinite(c[k]) && c[k] >= 0 && c[k] <= 1))) throw new Error('Некорректная раскладка');
   return data.controls;
+}
+function readControls(key = activeProfileKey) {
+  return validateDraft(JSON.parse(localStorage.getItem(key) || '{"schema":1,"controls":[]}'));
 }
 function controlKeys(control) {
   return control.kind === 'Джойстик' ? control.key.split(',').map(k => k.trim().toLowerCase()) : [control.key.toLowerCase()];
@@ -147,12 +150,12 @@ function canDiscard() {
   return JSON.stringify(controls) === controlsBaseline || confirm('Отменить несохранённые изменения раскладки?');
 }
 function loadProfile(key) {
-  endLiveTest();
+  endLiveTest(); profileGeneration++;
   activeProfileKey = key;
   try { controls = readControls(key); controlsValid = true; $('#editor-status').textContent = `Элементов: ${controls.length}`; }
   catch { controls = []; controlsValid = false; $('#editor-status').textContent = 'Раскладка повреждена или недоступна. Сохранение отключено.'; }
   controlsBaseline = JSON.stringify(controls);
-  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; renderControls();
+  selectedControl = null; dragging = false; dragRecorded = false; undoStack = []; redoStack = []; $('#save-controls').disabled = !controlsValid; $('#import-controls').disabled = !controlsValid; renderControls();
 }
 function openControls() {
   if (!$('#editor').hidden) return;
@@ -283,6 +286,28 @@ $('#redo-control').addEventListener('click', () => {
 $('#reset-controls').addEventListener('click', () => {
   if (!controls.length) return;
   recordChange(); controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено';
+});
+$('#import-controls').addEventListener('click', () => { if (controlsValid) $('#import-file').click(); });
+$('#import-file').addEventListener('change', async event => {
+  const file = event.target.files[0]; event.target.value = '';
+  if (!file) return;
+  const generation = profileGeneration;
+  try {
+    if (file.size > 128 * 1024) throw new Error('Файл раскладки больше 128 КБ');
+    const bytes = await file.arrayBuffer();
+    const text = new TextDecoder('utf-8', {fatal: true}).decode(bytes);
+    const imported = validateDraft(JSON.parse(text));
+    if (generation !== profileGeneration || $('#editor').hidden) { message('Профиль изменился. Импорт отменён.'); return; }
+    if (controls.length && !confirm('Заменить текущий черновик? До сохранения можно отменить.')) return;
+    if (JSON.stringify(imported) !== JSON.stringify(controls)) { recordChange(); controls = imported; selectControl(null); }
+    $('#editor-status').textContent = 'Раскладка импортирована • сохраните для выбранной игры';
+  } catch { message('Не удалось импортировать: файл повреждён или больше 128 КБ.'); }
+});
+$('#export-controls').addEventListener('click', () => {
+  const blob = new Blob([JSON.stringify({schema:1, controls}, null, 2) + '\n'], {type:'application/json'});
+  const url = URL.createObjectURL(blob); const link = document.createElement('a'); link.href = url; link.download = 'lynxdroid-layout.json';
+  document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+  $('#editor-status').textContent = 'Экспорт запрошен. Профиль игры не изменён.';
 });
 $('#save-controls').addEventListener('click', () => {
   if (!controlsValid) return;

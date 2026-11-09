@@ -12,6 +12,7 @@ from PySide6.QtGui import QColor, QFocusEvent, QKeyEvent, QMouseEvent, QPainter,
 from PySide6.QtWidgets import (
     QComboBox,
     QDialog,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QLineEdit,
@@ -22,36 +23,19 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from lynxdroid.core.errors import DataCorrupted, LynxError
-from lynxdroid.core.storage import read_json, write_json
+from lynxdroid.core.errors import LynxError
+from lynxdroid.core.storage import write_json
+from lynxdroid.gui.control_profiles import KINDS, read_control_file
 from lynxdroid.input.draft_mapping import draft_engine
 from lynxdroid.input.engine import InputEngine
 from lynxdroid.input.scrcpy_touch import encode_touch
 
-KINDS = ("Нажатие", "Двойное нажатие", "Мультитач", "Джойстик", "Камера", "Перетаскивание", "Огонь")
-
 
 def load_controls(path: Path) -> list[dict[str, Any]]:
     try:
-        data = read_json(path)
+        return read_control_file(path)
     except FileNotFoundError:
         return []
-    items = data.get("controls")
-    if data.get("schema") != 1 or not isinstance(items, list) or len(items) > 100:
-        raise DataCorrupted("Повреждён файл раскладки. Исходный файл сохранён.")
-    for item in items:
-        if (
-            not isinstance(item, dict)
-            or item.get("kind") not in KINDS
-            or not isinstance(item.get("key"), str)
-            or not 1 <= len(item["key"]) <= 16
-            or any(
-                type(item.get(axis)) not in (float, int) or not 0 <= item[axis] <= 1
-                for axis in ("x", "y")
-            )
-        ):
-            raise DataCorrupted("Повреждена раскладка. Исходный файл сохранён.")
-    return items
 
 
 class Canvas(QWidget):
@@ -242,6 +226,12 @@ class ControlEditor(QDialog):
         reset = QPushButton("Очистить")
         reset.clicked.connect(self.reset)
         side.addWidget(reset)
+        self.import_button = QPushButton("Импорт раскладки…")
+        self.import_button.clicked.connect(self.import_draft)
+        side.addWidget(self.import_button)
+        self.export_button = QPushButton("Экспорт раскладки…")
+        self.export_button.clicked.connect(self.export_draft)
+        side.addWidget(self.export_button)
         self.save_button = QPushButton("Сохранить шаблон")
         self.save_button.clicked.connect(self.save)
         side.addWidget(self.save_button)
@@ -282,6 +272,7 @@ class ControlEditor(QDialog):
         self._refresh_history()
         self.read_only = False
         self.save_button.setEnabled(True)
+        self.import_button.setEnabled(True)
         self.select(None)
         try:
             self.controls = load_controls(path)
@@ -289,6 +280,7 @@ class ControlEditor(QDialog):
         except (OSError, LynxError) as exc:
             self.read_only = True
             self.save_button.setEnabled(False)
+            self.import_button.setEnabled(False)
             self.status.setText(f"Ошибка чтения: {exc}. Сохранение отключено.")
         self._baseline = self._snapshot()
         self.canvas.update()
@@ -469,6 +461,64 @@ class ControlEditor(QDialog):
         self.select(None)
         self.status.setText("Шаблон очищен • не сохранено")
         self.canvas.update()
+
+    def import_draft(self) -> None:
+        if self.read_only:
+            return
+        path, _ = QFileDialog.getOpenFileName(self, "Импорт раскладки", "", "JSON (*.json)")
+        if not path:
+            return
+        try:
+            imported = read_control_file(Path(path))
+        except (OSError, LynxError) as exc:
+            QMessageBox.warning(self, "Ошибка импорта", str(exc))
+            return
+        if (
+            self.controls
+            and QMessageBox.question(
+                self,
+                "Заменить раскладку?",
+                "Заменить текущий черновик? До сохранения можно отменить.",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            != QMessageBox.StandardButton.Yes
+        ):
+            return
+        if imported != self.controls:
+            self._record_change()
+            self.controls = imported
+            self.select(None)
+        self.status.setText("Раскладка импортирована • сохраните для выбранной игры")
+
+    def export_draft(self) -> None:
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Экспорт раскладки", "layout.json", "JSON (*.json)"
+        )
+        if not path:
+            return
+        target = Path(path)
+        if target.suffix.lower() != ".json":
+            target = target.with_name(target.name + ".json")
+        try:
+            # Do not allow an export to bypass the editor's corruption guard.
+            if target.resolve() == self.path.resolve():
+                raise ValueError("Выберите другой файл, не профиль игры.")
+            if target.exists() or target.is_symlink():
+                answer = QMessageBox.question(
+                    self,
+                    "Заменить файл?",
+                    f"Файл уже существует: {target.name}. Заменить?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if answer != QMessageBox.StandardButton.Yes:
+                    return
+            write_json(target, {"schema": 1, "controls": self.controls})
+        except (OSError, LynxError, ValueError) as exc:
+            QMessageBox.warning(self, "Ошибка экспорта", str(exc))
+            return
+        self.status.setText("Раскладка экспортирована. Профиль игры не изменён.")
 
     def save(self) -> None:
         if self.read_only:
