@@ -53,7 +53,7 @@ paint     2      in-progress  layout, text          Paint
 
 ```console
 $ make -j                 # build/bonk и build/bonk_tests
-$ make test               # 271 юнит-тест
+$ make test               # 386 юнит-тестов
 $ make verify             # тесты + selftest + проверка актуальности docs
 $ make MODE=release -j
 $ make SAN=address,undefined test   # ASan + UBSan
@@ -107,6 +107,22 @@ $ bonk selftest               # 23 быстрые проверки инвари�
 
 Коды возврата: `0` — успех, `1` — ошибка рендера/проверки, `2` — ошибка использования.
 
+## Android-движок (LynxDroid)
+
+В репозитории есть отдельный **host-side** модуль `src/android_engine/` + `include/bonk/android/`:
+модель состояния движка, план порядка действий лаунчера, ADB-клиент (транспорты, guest-probe,
+одиночный PNG-снимок, tap/key/swipe, установка и запуск пакета, foreground-проверка), preflight,
+супервизор процесса и построитель команды для Android SDK Emulator.
+
+**Важно:** runtime backend **не выбран** — ни один реальный Android здесь не запускается.
+Модуль не подключён к CLI: у него нет команды в `bonk`. Он собирается и покрыт тестами
+(синтетический ADB shim, фикстуры), но это host-side проверка кода, **а не доказательство**,
+что Android-гость загружается, что APK ставится или что игра запускается. Waydroid исключён
+решением владельца проекта и не должен возвращаться.
+
+Подробности и явный список того, что не проверено: [`docs/ANDROID_ENGINE.md`](docs/ANDROID_ENGINE.md),
+[`docs/LYNXDROID_ARCHITECTURE.md`](docs/LYNXDROID_ARCHITECTURE.md).
+
 ## Структура
 
 ```
@@ -124,10 +140,12 @@ include/bonk/          публичные заголовки по модулям
   shell/               shell (сессия, история, скролл, клики), x11 (свой клиент X11-протокола)
   js/                  js (лексер, AST, tree-walking интерпретатор, встроенные объекты)
   bindings/            bindings (window, document, обёртки элементов, события, инлайновые скрипты)
-  apps/                pipeline (HTML → PNG за один вызов), cli, main
-src/                   реализации по модулям; src/apps/main.cpp — точка входа bonk
-tests/                 свой фреймворк + 271 тест + tests/fixtures/
-docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, generated
+  android/             Android-движок (host-side): ADB, сессия, состояние, план лаунчера, ввод, кадр
+  cli/                 разбор argv и текст справки bonk
+  apps/                pipeline (HTML → PNG за один вызов), main
+src/                   реализации по модулям (+ src/android_engine); src/apps/main.cpp — точка входа bonk
+tests/                 свой фреймворк + 386 тестов + tests/fixtures/
+docs/                  ARCHITECTURE, ROADMAP, STAGE-*, ADR, ANDROID_ENGINE, LYNXDROID_ARCHITECTURE, generated
 .github/workflows/     CI: make×{gcc,clang}×{debug,release}, ASan/UBSan, -Werror, cmake, docs
 ```
 
@@ -146,6 +164,8 @@ docs/                  ARCHITECTURE, ROADMAP, STAGE-00, STAGE-01-02, ADR, genera
 - [`docs/ROADMAP.md`](docs/ROADMAP.md) — этапы 0–7 с критериями выхода.
 - [`docs/modules.generated.md`](docs/modules.generated.md) — таблица модулей из кода.
 - [`docs/adr/`](docs/adr/) — архитектурные решения.
+- [`docs/ANDROID_ENGINE.md`](docs/ANDROID_ENGINE.md) — Android-движок: контракты, этапы и границы проверки.
+- [`docs/LYNXDROID_ARCHITECTURE.md`](docs/LYNXDROID_ARCHITECTURE.md) — архитектура LynxDroid и acceptance gates.
 
 ## Соглашения
 

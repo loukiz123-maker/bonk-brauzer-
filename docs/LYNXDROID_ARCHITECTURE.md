@@ -71,7 +71,7 @@ Each gate requires evidence from a real target Linux host running the selected r
 | Guest boot | Runtime session status plus ADB device state and `sys.boot_completed` (via the consent-gated ADB probe); record image/version and host environment. Evidence must show `engine guest=boot-complete observed=yes`. |
 | Test APK | APK source/hash, exact package ID, installation result, and a guest foreground witness: `engine app=launch-command-succeeded ... foreground-confirmed=yes` from `dumpsys activity activities`. A successful CLI exit alone is insufficient. |
 | Input delivery | A test app inside Android records the expected tap/swipe/key event and coordinates/order. Capture its guest-side log or test result; host command success alone is insufficient. The `engine input ... observed-in-guest=` token must be `yes` for this gate. |
-| Frame path | Repeated frames with format/stride/rotation/sequence/timestamps and measured latency. `--capture-frame` produces one metadata-carrying still frame (`frames=still-snapshot`); that is a prerequisite, not evidence of a frame path. A static PNG fixture is not evidence either. |
+| Frame path | Repeated frames with format/stride/rotation/sequence/timestamps and measured latency. `frame_source` can produce exactly one metadata-carrying still frame (`frames=still-snapshot`), but it has no CLI caller and is a prerequisite, not evidence of a frame path. A static PNG fixture is not evidence either. |
 | Game compatibility | Test each named game on a documented image/ABI/GPU/driver configuration. Track ARM translation, Google services/Play Integrity, DRM and anti-cheat limitations; never promise “any game” without measured evidence. |
 
 ### Current Android evidence (this sandbox)

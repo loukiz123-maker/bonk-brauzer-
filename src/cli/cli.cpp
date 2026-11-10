@@ -222,7 +222,7 @@ std::string cli_help_text() {
   out += "                      [--css PATH] [--debug-boxes] [--dump-layout] [--diagnostics]\n";
   out += "                    parse, style, lay out and rasterise a local page to PNG\n";
   out += "  dom <file.html>   print the parsed DOM tree\n";
-  out += "  fetch <url>       HTTP/1.1 GET and print the response head (TLS is not ready yet)\n";
+  out += "  fetch <url>       HTTP/1.1 GET (https via own TLS 1.3) and print the response head\n";
   out += "  view <page>       open the page in an X11 window (own X11 client, no Xlib)\n";
   out += "                    --screenshot out.png  render headlessly instead\n";
   out += "                    --scroll N            start scrolled down N pixels\n";
