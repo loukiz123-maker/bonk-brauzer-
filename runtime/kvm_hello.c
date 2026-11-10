@@ -2,8 +2,8 @@
  * LynxDroid: minimal x86 KVM guest execution experiment, NOT Android.
  *
  * No external image or guest code is accepted. A built-in test guest outputs
- * three bytes on debug port 0xe9, halts, then the process destroys the VM. This is a
- * low-level hardware experiment, not a virtual machine manager.
+ * three bytes on debug port 0xe9 and one byte on COM1, then halts. The
+ * process destroys the VM. It is not a virtual machine manager.
  *
  * Build on x86_64 Linux: cc -std=c11 -O2 -Wall -Wextra -Werror -o kvm-hello kvm_hello.c
  */
@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
+#include "guest_memory.h"
 #include "kvm_io.h"
 #include "serial8250.h"
 
@@ -66,7 +67,10 @@ static int run_experiment(void) {
         0xb0, '\n', 0xe6, 0xe9, 0xba, 0xf8, 0x03,
         0xb0, 'U', 0xee, 0xf4
     };
-    memcpy((uint8_t *)guest_memory + GUEST_CODE_ADDRESS, guest_code, sizeof(guest_code));
+    struct lynx_guest_memory guest_ram = {guest_memory, GUEST_MEMORY_SIZE};
+    if (lynx_guest_write(&guest_ram, GUEST_CODE_ADDRESS, guest_code, sizeof(guest_code)) < 0) {
+        fprintf(stderr, "Test guest code does not fit guest RAM\n"); goto done;
+    }
     memory.slot = 0;
     memory.guest_phys_addr = 0;
     memory.memory_size = GUEST_MEMORY_SIZE;

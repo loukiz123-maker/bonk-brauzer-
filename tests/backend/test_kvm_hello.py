@@ -67,7 +67,7 @@ def test_real_kvm_hlt_only_when_explicitly_enabled(binary: Path) -> None:
     assert "Android was not started" in result.stdout
 
 
-@pytest.mark.parametrize("file_name", ["kvm_io_test.c", "serial8250_test.c"])
+@pytest.mark.parametrize("file_name", ["kvm_io_test.c", "serial8250_test.c", "guest_memory_test.c"])
 def test_guest_io_validation_on_synthetic_kvm_exits(tmp_path: Path, file_name: str) -> None:
     compiler = shutil.which("cc")
     if platform.system() != "Linux" or compiler is None:
