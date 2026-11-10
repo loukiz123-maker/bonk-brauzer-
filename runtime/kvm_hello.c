@@ -21,6 +21,7 @@
 #include <unistd.h>
 
 #include "kvm_io.h"
+#include "serial8250.h"
 
 #if defined(__x86_64__)
 #define GUEST_MEMORY_SIZE 0x10000u
@@ -59,10 +60,11 @@ static int run_experiment(void) {
     guest_memory = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (guest_memory == MAP_FAILED) { perror("guest mmap"); goto done; }
-    /* mov al, byte; out 0xe9, al (three times), then hlt. */
+    /* Output OK on debug port, U on COM1, then halt. */
     static const uint8_t guest_code[] = {
         0xb0, 'O', 0xe6, 0xe9, 0xb0, 'K', 0xe6, 0xe9,
-        0xb0, '\n', 0xe6, 0xe9, 0xf4
+        0xb0, '\n', 0xe6, 0xe9, 0xba, 0xf8, 0x03,
+        0xb0, 'U', 0xee, 0xf4
     };
     memcpy((uint8_t *)guest_memory + GUEST_CODE_ADDRESS, guest_code, sizeof(guest_code));
     memory.slot = 0;
@@ -97,8 +99,9 @@ static int run_experiment(void) {
     alarm_installed = 1;
     static const char expected[] = "OK\n";
     size_t received = 0;
+    struct lynx_serial serial = {0};
     alarm(5);
-    for (unsigned int exits = 0; exits < 4; ++exits) {
+    for (unsigned int exits = 0; exits < 5; ++exits) {
         if (timed_out) { fprintf(stderr, "KVM_RUN timed out after 5 seconds\n"); goto done; }
         int status = ioctl(vcpu_fd, KVM_RUN, 0);
         int run_errno = errno;
@@ -109,12 +112,16 @@ static int run_experiment(void) {
             goto done;
         }
         if (run->exit_reason == KVM_EXIT_IO) {
-            if (lynx_consume_output(run, run_size, expected, sizeof(expected) - 1, &received) < 0) {
-                fprintf(stderr, "Invalid or unexpected guest I/O\n"); goto done;
-            }
-        } else if (run->exit_reason == KVM_EXIT_HLT && received == sizeof(expected) - 1) {
+            int handled;
+            if (run->io.port == LYNX_DEBUG_PORT)
+                handled = lynx_consume_output(run, run_size, expected, sizeof(expected) - 1, &received);
+            else
+                handled = lynx_serial_io(&serial, run, run_size);
+            if (handled < 0) { fprintf(stderr, "Invalid or unexpected guest I/O\n"); goto done; }
+        } else if (run->exit_reason == KVM_EXIT_HLT && received == sizeof(expected) - 1 &&
+                   serial.output_size == 1 && serial.output[0] == 'U') {
             alarm(0);
-            puts("KVM guest output OK and halted successfully; Android was not started.");
+            puts("KVM debug and serial output succeeded; Android was not started.");
             result = 0;
             goto done;
         } else {
