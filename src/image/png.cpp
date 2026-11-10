@@ -189,7 +189,7 @@ void expand_pass(const std::string& raw, std::size_t row_bytes, std::uint32_t pa
 
 // Adam7 pass geometry: x_start, y_start, x_step, y_step.
 constexpr std::uint32_t kAdam7[7][4] = {
-    {0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 2}, {1, 0, 2, 2}, {0, 1, 1, 2},
+    {0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2},
 };
 
 bool valid_bit_depth(std::uint8_t color_type, std::uint8_t bit_depth) {

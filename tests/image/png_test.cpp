@@ -196,6 +196,51 @@ BONK_TEST(png, decodes_a_minimal_adam7_image) {
   CHECK_EQ(static_cast<int>(decoded.value().sample(0, 0, 3)), 0xFF);
 }
 
+// Regression: the fifth Adam7 pass covers every 4th row (x 0, y 2, dx 2, dy 4).
+// A wrong row step went unnoticed because a 1x1 image only has the first pass;
+// every interlaced image taller than six rows was rejected as corrupt.
+BONK_TEST(png, decodes_adam7_images_that_use_all_seven_passes) {
+  // Pass geometry copied from the PNG specification, independent of the decoder's table.
+  const std::uint32_t passes[7][4] = {
+      {0, 0, 8, 8}, {4, 0, 8, 8}, {0, 4, 4, 8}, {2, 0, 4, 4}, {0, 2, 2, 4}, {1, 0, 2, 2}, {0, 1, 1, 2},
+  };
+  const std::uint32_t sizes[][2] = {{2, 3}, {5, 7}, {8, 8}, {9, 13}, {33, 17}};
+  for (const auto& size : sizes) {
+    const std::uint32_t width = size[0];
+    const std::uint32_t height = size[1];
+    const auto pixel = [width](std::uint32_t x, std::uint32_t y, std::uint32_t channel) {
+      return static_cast<char>((x * 37u + y * 101u + channel * 59u + width) & 0xFFu);
+    };
+
+    PngBuilder plain(width, height, 8, 6, 0);
+    for (std::uint32_t y = 0; y < height; ++y) {
+      plain.payload.push_back(0);  // filter: None
+      for (std::uint32_t x = 0; x < width; ++x) {
+        for (std::uint32_t channel = 0; channel < 4; ++channel) plain.payload.push_back(pixel(x, y, channel));
+      }
+    }
+
+    PngBuilder interlaced(width, height, 8, 6, 1);
+    for (const auto& pass : passes) {
+      if (pass[0] >= width || pass[1] >= height) continue;
+      for (std::uint32_t y = pass[1]; y < height; y += pass[3]) {
+        interlaced.payload.push_back(0);
+        for (std::uint32_t x = pass[0]; x < width; x += pass[2]) {
+          for (std::uint32_t channel = 0; channel < 4; ++channel) interlaced.payload.push_back(pixel(x, y, channel));
+        }
+      }
+    }
+
+    const Result<image::Image> expected = image::decode_png(plain.build());
+    const Result<image::Image> decoded = image::decode_png(interlaced.build());
+    REQUIRE(expected.is_ok());
+    REQUIRE(decoded.is_ok());
+    CHECK_EQ(decoded.value().width, static_cast<int>(width));
+    CHECK_EQ(decoded.value().height, static_cast<int>(height));
+    CHECK(decoded.value().rgba == expected.value().rgba);
+  }
+}
+
 BONK_TEST(png, decodes_grayscale_alpha) {
   std::string raw;
   raw.push_back(0);
