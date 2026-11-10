@@ -162,6 +162,20 @@ grep -q '^session start$' "$BONK_FAKE_WAYDROID_LOG"
 grep -q '^show-full-ui$' "$BONK_FAKE_WAYDROID_LOG"
 grep -q "^app install $tmp/game.apk$" "$BONK_FAKE_WAYDROID_LOG"
 grep -q '^app launch com.example.game$' "$BONK_FAKE_WAYDROID_LOG"
+
+# The launcher contract is ordered: start before UI, UI before install,
+# install before launch.
+line_of() { grep -n "$1" "$BONK_FAKE_WAYDROID_LOG" | head -1 | cut -d: -f1; }
+start_line=$(line_of '^session start$')
+ui_line=$(line_of '^show-full-ui$')
+install_line=$(line_of "^app install $tmp/game.apk$")
+launch_line=$(line_of '^app launch com.example.game$')
+if [ -z "$start_line" ] || [ -z "$ui_line" ] || [ -z "$install_line" ] || [ -z "$launch_line" ] ||
+  [ "$start_line" -ge "$ui_line" ] || [ "$ui_line" -ge "$install_line" ] || [ "$install_line" -ge "$launch_line" ]; then
+  cat "$BONK_FAKE_WAYDROID_LOG" >&2
+  echo "launcher did not follow start -> UI -> install -> launch order" >&2
+  exit 1
+fi
 grep -q 'Bonk-managed Waydroid session stopped' "$tmp/owned-session.log"
 [ "$(cat "$tmp/state")" = STOPPED ]
 

@@ -222,6 +222,25 @@ Read-only наблюдение гостя включается явно и то�
 - Провал probe не выдумывает состояние: `guest` остаётся `unknown observed=no`, причина печатается в `engine detail guest=guest probe failed: ...`, остальной вывод команды выполняется дальше.
 - Probe не стартует сессию, не устанавливает APK и не запускает приложение.
 
+## Контракт порядка действий (launcher plan)
+
+Порядок шагов и правила согласия вынесены из `main.cpp` в чистую функцию `plan_launcher()` (`include/bonk/android/launcher_plan.hpp`), поэтому контракт проверяется юнит-тестами без Waydroid-хоста. Список шагов печатается как данные, а CLI исполняет именно его:
+
+```text
+start-session -> wait-for-session -> [probe-guest] -> open-ui
+              -> install-apk -> launch-package -> await-owned-session
+```
+
+Правила, закреплённые тестами `launcher_plan` и синтетическим CLI-тестом:
+
+- Валидация (`android.invalid_package_name`, `android.apk_install_consent_required`) выполняется **до** любого обращения к runtime: отклонённый запрос не может стартовать сессию как побочный эффект.
+- Действия при остановленной сессии без `--confirm-start` отклоняются (`android.waydroid_start_consent_required`); никакой шаг не выполняется.
+- Если сессия уже запущена, `--confirm-start` не даёт владения: план помечается `declined_ownership`, шагов `start-session` и `await-owned-session` нет.
+- `await-owned-session` появляется только когда сессию стартовал сам Bonk. Поэтому Ctrl-C останавливает только собственную process group.
+- `probe-guest` — read-only и не требует running-сессии: probe-only запрос (только `--adb ... --confirm-adb`) не открывает UI и не стартует runtime, даже если сессия остановлена.
+- `open-ui` предшествует установке и запуску: приложение запускается только после появления поверхности отображения.
+- `install-apk` и `launch-package` несут собственные `detail`-значения, поэтому CLI не может подменить APK или package ID между шагами.
+
 ## Runbook: первый live smoke test на целевом Linux-хосте
 
 Этот сценарий **не запускался в sandbox**. На тестовом ПК Waydroid должен быть установлен и инициализирован отдельно; выполнять команды от desktop-пользователя внутри его Wayland/D-Bus-сессии. Сначала проверять на выбранном безопасном приложении, затем на конкретной лицензированной игре.
@@ -276,7 +295,7 @@ make waydroid-cli-test  # synthetic CLI flow; does not require Waydroid
 make verify
 ```
 
-Текущая host-side проверка после добавления layered snapshot и guest probe: `make -j2 verify` — **349 тестов, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **349/349**; полный `-Werror verify` (приложение и тесты) — **349/349**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
+Текущая host-side проверка после вынесения launcher plan: `make -j2 verify` — **361 тест, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **361/361**; полный `-Werror verify` (приложение и тесты) — **361/361**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
 
 Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 

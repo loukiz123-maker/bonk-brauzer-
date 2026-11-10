@@ -21,6 +21,7 @@
 #include "bonk/android/engine_session.hpp"
 #include "bonk/android/adb_client.hpp"
 #include "bonk/android/engine_state.hpp"
+#include "bonk/android/launcher_plan.hpp"
 #include "bonk/android/waydroid_runtime.hpp"
 #include "bonk/apps/pipeline.hpp"
 #include "bonk/cli/cli.hpp"
@@ -346,11 +347,6 @@ bool probe_waydroid_guest(const bonk::CliOptions& options, bonk::android::Engine
   return true;
 }
 
-bool waydroid_action_requested(const bonk::CliOptions& options) {
-  return options.waydroid_confirm_start || options.waydroid_show_ui || !options.waydroid_install_apk.empty() ||
-         !options.waydroid_launch_package.empty();
-}
-
 int stop_owned_waydroid(bonk::android::EngineSession& session) {
   const bonk::Status stopped = session.stop();
   if (stopped.is_error()) {
@@ -392,8 +388,22 @@ int wait_for_owned_waydroid(bonk::android::EngineSession& session) {
   }
 }
 
-int run_waydroid(const bonk::CliOptions& options) {
-  const bonk::android::WaydroidConfig config{options.waydroid_executable};
+bonk::android::LauncherRequest launcher_request_from(const bonk::CliOptions& options) {
+  bonk::android::LauncherRequest request;
+  request.start_confirmed = options.waydroid_confirm_start;
+  request.open_ui = options.waydroid_show_ui;
+  if (!options.waydroid_install_apk.empty()) {
+    request.apk_path = std::filesystem::path{options.waydroid_install_apk};
+  }
+  request.install_confirmed = options.waydroid_confirm_install;
+  request.package_id = options.waydroid_launch_package;
+  request.probe_guest = !options.waydroid_adb.empty();
+  return request;
+}
+
+// Validates the request in isolation, before a runtime status query can have
+// any side effect. Malformed input must never reach the host.
+int validate_waydroid_request(const bonk::CliOptions& options, const bonk::android::WaydroidConfig& config) {
   const bonk::Result<bonk::android::RuntimeCommand> status_command =
       bonk::android::make_waydroid_status_command(config);
   if (status_command.is_error()) {
@@ -427,104 +437,126 @@ int run_waydroid(const bonk::CliOptions& options) {
       return 2;
     }
   }
+  return 0;
+}
+
+int run_waydroid(const bonk::CliOptions& options) {
+  const bonk::android::WaydroidConfig config{options.waydroid_executable};
+  const int validation = validate_waydroid_request(options, config);
+  if (validation != 0) return validation;
 
   const bonk::Result<bonk::android::WaydroidStatus> initial = bonk::android::query_waydroid_status(config);
   if (initial.is_error()) {
     std::fprintf(stderr, "bonk: %s\n", initial.error().to_string().c_str());
     return 1;
   }
+
+  // The plan, not this function, decides the order and the consent rules.
+  const bonk::android::LauncherRequest request = launcher_request_from(options);
+  const bonk::Result<bonk::android::LauncherPlan> planned = bonk::android::plan_launcher(initial.value(), request);
+  if (planned.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", planned.error().to_string().c_str());
+    return 1;
+  }
+  const bonk::android::LauncherPlan& plan = planned.value();
+
   bonk::android::EngineSnapshot snapshot = waydroid_snapshot(initial.value(), false);
-  probe_waydroid_guest(options, snapshot);
+  if (!options.waydroid_adb.empty()) probe_waydroid_guest(options, snapshot);
   print_waydroid_status(snapshot);
-  if (!waydroid_action_requested(options)) return 0;
+  if (plan.steps.empty()) return 0;
+  if (plan.declined_ownership) {
+    print("An existing Waydroid session is already running; Bonk will not take ownership of it.\n");
+  }
 
   bonk::android::EngineSession owned_session;
   WaydroidSignalGuard signal_guard;
   bool owns_session = false;
-  if (initial.value().session == bonk::android::WaydroidState::Stopped) {
-    if (!options.waydroid_confirm_start) {
-      std::fprintf(stderr,
-                   "bonk: Waydroid is stopped. Re-run with --confirm-start to explicitly start the host session.\n");
-      return 1;
+
+  for (const bonk::android::LauncherStep& step : plan.steps) {
+    if (waydroid_stop_requested != 0) {
+      if (owns_session) return stop_owned_waydroid(owned_session);
+      return 0;
     }
-    std::string signal_error;
-    if (!signal_guard.install(signal_error)) {
-      std::fprintf(stderr, "bonk: %s\n", signal_error.c_str());
-      return 1;
+    switch (step.kind) {
+      case bonk::android::LauncherStepKind::StartSession: {
+        std::string signal_error;
+        if (!signal_guard.install(signal_error)) {
+          std::fprintf(stderr, "bonk: %s\n", signal_error.c_str());
+          return 1;
+        }
+        const bonk::Status started = bonk::android::start_waydroid_session(owned_session, config, true);
+        if (started.is_error()) {
+          std::fprintf(stderr, "bonk: %s\n", started.error().to_string().c_str());
+          return 1;
+        }
+        owns_session = true;
+        print("Starting the explicitly confirmed Waydroid session...\n");
+        break;
+      }
+      case bonk::android::LauncherStepKind::WaitForSession: {
+        const bonk::Result<bonk::android::WaydroidStatus> ready =
+            bonk::android::wait_for_waydroid_session(owned_session, config);
+        if (ready.is_error()) {
+          std::fprintf(stderr, "bonk: %s\n", ready.error().to_string().c_str());
+          return 1;
+        }
+        snapshot = waydroid_snapshot(ready.value(), true);
+        if (!options.waydroid_adb.empty()) probe_waydroid_guest(options, snapshot);
+        print_waydroid_status(snapshot);
+        break;
+      }
+      case bonk::android::LauncherStepKind::ProbeGuest:
+        // Already reported above; a probe-only plan ends here.
+        break;
+      case bonk::android::LauncherStepKind::OpenUi: {
+        const bonk::Status shown = bonk::android::show_waydroid_full_ui(config);
+        if (shown.is_error()) {
+          std::fprintf(stderr, "bonk: %s\n", shown.error().to_string().c_str());
+          return 1;
+        }
+        print("Waydroid full UI opened.\n");
+        break;
+      }
+      case bonk::android::LauncherStepKind::InstallApk: {
+        snapshot.app.phase = bonk::android::AppPhase::InstallRequested;
+        const bonk::Status installed = bonk::android::install_waydroid_selected_apk(
+            config, std::filesystem::path{step.detail}, options.waydroid_confirm_install);
+        if (installed.is_error()) {
+          snapshot.app.phase = bonk::android::AppPhase::InstallCommandFailed;
+          print_waydroid_status(snapshot);
+          std::fprintf(stderr, "bonk: %s\n", installed.error().to_string().c_str());
+          return 1;
+        }
+        snapshot.app.phase = bonk::android::AppPhase::InstallCommandSucceeded;
+        std::printf("Waydroid install command completed for %s.\n", step.detail.c_str());
+        break;
+      }
+      case bonk::android::LauncherStepKind::LaunchPackage: {
+        snapshot.app.package_id = step.detail;
+        snapshot.app.phase = bonk::android::AppPhase::LaunchRequested;
+        const bonk::Status launched = bonk::android::launch_waydroid_package(config, step.detail);
+        if (launched.is_error()) {
+          snapshot.app.phase = bonk::android::AppPhase::LaunchCommandFailed;
+          print_waydroid_status(snapshot);
+          std::fprintf(stderr, "bonk: %s\n", launched.error().to_string().c_str());
+          return 1;
+        }
+        // The command succeeded; nothing inside Android confirmed the app is
+        // visible, so foreground_confirmed stays false.
+        snapshot.app.phase = bonk::android::AppPhase::LaunchCommandSucceeded;
+        std::printf("Waydroid launch command completed for %s.\n", step.detail.c_str());
+        break;
+      }
+      case bonk::android::LauncherStepKind::AwaitOwnedSession:
+        print_waydroid_status(snapshot);
+        return wait_for_owned_waydroid(owned_session);
     }
-    const bonk::Status started = bonk::android::start_waydroid_session(owned_session, config, true);
-    if (started.is_error()) {
-      std::fprintf(stderr, "bonk: %s\n", started.error().to_string().c_str());
-      return 1;
-    }
-    owns_session = true;
-    print("Starting the explicitly confirmed Waydroid session...\n");
-    const bonk::Result<bonk::android::WaydroidStatus> ready =
-        bonk::android::wait_for_waydroid_session(owned_session, config);
-    if (ready.is_error()) {
-      std::fprintf(stderr, "bonk: %s\n", ready.error().to_string().c_str());
-      return 1;
-    }
-    snapshot = waydroid_snapshot(ready.value(), true);
-    probe_waydroid_guest(options, snapshot);
-    print_waydroid_status(snapshot);
-  } else if (initial.value().session == bonk::android::WaydroidState::Unknown) {
-    std::fprintf(stderr, "bonk: cannot use Waydroid because its session state is unknown\n");
-    return 1;
-  } else if (options.waydroid_confirm_start) {
-    print("An existing Waydroid session is already running; Bonk will not take ownership of it.\n");
   }
 
-  if (waydroid_stop_requested != 0 && owns_session) return stop_owned_waydroid(owned_session);
-
-  const bool show_ui = options.waydroid_show_ui || options.waydroid_confirm_start ||
-                       !options.waydroid_install_apk.empty() || !options.waydroid_launch_package.empty();
-  if (show_ui) {
-    const bonk::Status shown = bonk::android::show_waydroid_full_ui(config);
-    if (shown.is_error()) {
-      std::fprintf(stderr, "bonk: %s\n", shown.error().to_string().c_str());
-      return 1;
-    }
-    print("Waydroid full UI opened.\n");
-    if (waydroid_stop_requested != 0 && owns_session) return stop_owned_waydroid(owned_session);
-  }
-  if (!options.waydroid_install_apk.empty()) {
-    snapshot.app.phase = bonk::android::AppPhase::InstallRequested;
-    const bonk::Status installed = bonk::android::install_waydroid_selected_apk(
-        config, options.waydroid_install_apk, options.waydroid_confirm_install);
-    if (installed.is_error()) {
-      snapshot.app.phase = bonk::android::AppPhase::InstallCommandFailed;
-      print_waydroid_status(snapshot);
-      std::fprintf(stderr, "bonk: %s\n", installed.error().to_string().c_str());
-      return 1;
-    }
-    snapshot.app.phase = bonk::android::AppPhase::InstallCommandSucceeded;
-    std::printf("Waydroid install command completed for %s.\n", options.waydroid_install_apk.c_str());
-    if (waydroid_stop_requested != 0 && owns_session) {
-      print_waydroid_status(snapshot);
-      return stop_owned_waydroid(owned_session);
-    }
-  }
-  if (!options.waydroid_launch_package.empty()) {
-    snapshot.app.package_id = options.waydroid_launch_package;
-    snapshot.app.phase = bonk::android::AppPhase::LaunchRequested;
-    const bonk::Status launched = bonk::android::launch_waydroid_package(config, options.waydroid_launch_package);
-    if (launched.is_error()) {
-      snapshot.app.phase = bonk::android::AppPhase::LaunchCommandFailed;
-      print_waydroid_status(snapshot);
-      std::fprintf(stderr, "bonk: %s\n", launched.error().to_string().c_str());
-      return 1;
-    }
-    // The command succeeded; nothing inside Android has confirmed the app is
-    // visible, so foreground_confirmed stays false.
-    snapshot.app.phase = bonk::android::AppPhase::LaunchCommandSucceeded;
-    std::printf("Waydroid launch command completed for %s.\n", options.waydroid_launch_package.c_str());
-  }
-
-  if (!owns_session) return 0;
-  return wait_for_owned_waydroid(owned_session);
+  // App actions are only interesting in the summary if they were requested.
+  if (snapshot.app.phase != bonk::android::AppPhase::NotRequested) print_waydroid_status(snapshot);
+  return 0;
 }
-
 }  // namespace
 
 int main(int argc, char** argv) {
