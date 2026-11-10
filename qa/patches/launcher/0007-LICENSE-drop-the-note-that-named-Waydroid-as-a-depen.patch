@@ -1,0 +1,133 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: qa <qa@example.invalid>
+Date: Tue, 10 Nov 2026 16:29:54 +0000
+Subject: [PATCH 7/8] LICENSE: drop the note that named Waydroid as a
+ dependency
+
+The MIT text is untouched. Below it stood an informational note: "This
+project drives the Waydroid program (GPL-3.0) as an installed dependency
+through its public command-line interface." After the removal of the
+Waydroid backend that sentence is false, so the note now says that the
+project has no Android runtime dependency.
+
+Kept as a commit of its own because it edits the licence file, and the
+project owner has not explicitly approved a change there. Dropping this
+commit leaves everything else working; only
+tests/test_no_waydroid.py::test_the_licence_file_does_not_name_waydroid_as_a_dependency
+and the test totals in README/TESTING/ROADMAP go with it.
+
+pytest: 1061 passed, 1 skipped (1062 collected).
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ LICENSE                   | 3 +--
+ README.md                 | 4 ++--
+ docs/ROADMAP.md           | 2 +-
+ docs/TESTING.md           | 8 ++++----
+ tests/test_no_waydroid.py | 5 +++++
+ 5 files changed, 13 insertions(+), 9 deletions(-)
+
+diff --git a/LICENSE b/LICENSE
+index bd384de..3eced6a 100644
+--- a/LICENSE
++++ b/LICENSE
+@@ -22,6 +22,5 @@ SOFTWARE.
+ 
+ ---
+ 
+-This project drives the Waydroid program (GPL-3.0) as an installed dependency
+-through its public command-line interface. No Waydroid, Android, LineageOS or
++This project has no Android runtime dependency. No Android, LineageOS or
+ Google code or image is included in this repository. See docs/LICENSES.md.
+diff --git a/README.md b/README.md
+index 1ff245d..dd94c0b 100644
+--- a/README.md
++++ b/README.md
+@@ -90,7 +90,7 @@ Read this before anything else. It is the difference between "works" and
+ 
+ | Area | State | Evidence |
+ |---|---|---|
+-| Unit tests (1061) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
++| Unit tests (1062) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+ | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
+ | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
+ | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL` and no display server; widgets never instantiated |
+@@ -164,7 +164,7 @@ The CLI, doctor and the entire test suite need only the standard library:
+ ```bash
+ pip install -e .                     # no PySide6, no Qt
+ lynxdroid doctor --json | jq .
+-pytest                               # 1061 collected; Qt tests may skip without native libraries
++pytest                               # 1062 collected; Qt tests may skip without native libraries
+ ```
+ 
+ The GUI is an optional extra on purpose: the interesting logic lives in
+diff --git a/docs/ROADMAP.md b/docs/ROADMAP.md
+index 7a0b9d2..e26d231 100644
+--- a/docs/ROADMAP.md
++++ b/docs/ROADMAP.md
+@@ -49,7 +49,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
+ | 12 | Android apps and instances | **PARTIAL** | app list/launch/install are defined by the contract and exit 5 without a runtime; multi-instance `UNTESTED`; game error matching, limited network and root observations with manual output review available in CLI/Game help (desktop unverified), unverified property changes disabled (`docs/COMPATIBILITY.md`) |
+ | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
+ | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
+-| 15 | Testing and quality criteria | **DONE** | 1061 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
++| 15 | Testing and quality criteria | **DONE** | 1062 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+ | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
+ | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
+ | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |
+diff --git a/docs/TESTING.md b/docs/TESTING.md
+index d493a2a..a732fd6 100644
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
+ 
+ | Tier | Runs where | Count | Proves |
+ |---|---|---|---|
+-| 1. Unit + contract | any machine, no display | 1061 | our logic is correct |
++| 1. Unit + contract | any machine, no display | 1062 | our logic is correct |
+ | 2. Integration | the target laptop | listed below | the components work together |
+ | 3. Target acceptance | CachyOS + KVM + Iris Xe | listed below | the product works for the user |
+ 
+@@ -20,13 +20,13 @@ explicitly and this project follows it.
+ ```bash
+ python -m venv .venv && . .venv/bin/activate
+ pip install -e '.[dev]'
+-pytest                                    # 1061 collected; Qt tests may skip without native libraries
++pytest                                    # 1062 collected; Qt tests may skip without native libraries
+ pytest -q --maxfail=1                     # fail fast
+ pytest tests/display -q                   # 80 display tests
+ pytest -m "not gui and not privileged"    # inside a restricted sandbox
+ ```
+ 
+-Expected: 1061 collected; Qt tests may skip if native Qt libraries are missing. No display, network, KVM or Android runtime is required for the rest.
++Expected: 1062 collected; Qt tests may skip if native Qt libraries are missing. No display, network, KVM or Android runtime is required for the rest.
+ 
+ ### What each suite pins down
+ 
+@@ -42,7 +42,7 @@ Expected: 1061 collected; Qt tests may skip if native Qt libraries are missing.
+ | `tests/backend/test_lifecycle.py` | 21 | illegal transitions, observers, stop-during-start |
+ | `tests/backend/test_no_runtime.py` | 26 | with no Android runtime every action refuses with one explanation, exit code 5, and spawns nothing |
+ | `tests/backend/test_game_compat.py` | 39 | safe refusal of unverified fixes and limited network probes |
+-| `tests/test_no_waydroid.py` | 6 | the removed runtime is not in the source, scripts, packaging or CI |
++| `tests/test_no_waydroid.py` | 7 | the removed runtime is not in the source, scripts, packaging or CI |
+ | `tests/test_settings_migration.py` | 7 | a settings file from before the removal still loads; the old backend value falls back to `none` |
+ | `tests/test_doc_counts.py` | 37 | every number quoted in README/TESTING/ROADMAP matches a real collection pass |
+ | `tests/input/test_agent_protocol.py` | 12 | the Java agent and the Python client agree on protocol version, frame limit, op names |
+diff --git a/tests/test_no_waydroid.py b/tests/test_no_waydroid.py
+index acacd0e..a702f62 100644
+--- a/tests/test_no_waydroid.py
++++ b/tests/test_no_waydroid.py
+@@ -70,6 +70,11 @@ def test_packaging_does_not_depend_on_waydroid() -> None:
+     assert not _hits(ROOT / "pyproject.toml")
+ 
+ 
++def test_the_licence_file_does_not_name_waydroid_as_a_dependency() -> None:
++    """The note under the MIT text said the project "drives Waydroid"."""
++    assert not _hits(ROOT / "LICENSE")
++
++
+ def test_ci_does_not_install_or_call_waydroid() -> None:
+     workflows = ROOT / ".github" / "workflows"
+     offenders = [hit for path in sorted(workflows.glob("*.yml")) for hit in _hits(path)]
+-- 
+2.39.5
+

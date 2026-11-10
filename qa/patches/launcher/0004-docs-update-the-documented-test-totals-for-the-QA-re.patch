@@ -1,7 +1,7 @@
-From bdb76f27b1e5b12e3738a2c6f87037d1f9854b42 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
 Date: Tue, 10 Nov 2026 08:34:26 +0000
-Subject: [PATCH 4/4] docs: update the documented test totals for the QA
+Subject: [PATCH 4/8] docs: update the documented test totals for the QA
  regression tests
 
 tests/test_doc_counts.py compares these numbers with a real collection pass.
@@ -16,15 +16,15 @@ Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
  3 files changed, 9 insertions(+), 8 deletions(-)
 
 diff --git a/README.md b/README.md
-index 5388a16..20378a3 100644
+index 55a8395..5fb09dd 100644
 --- a/README.md
 +++ b/README.md
 @@ -88,7 +88,7 @@ Read this before anything else. It is the difference between "works" and
  
  | Area | State | Evidence |
  |---|---|---|
--| Unit tests (997) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
-+| Unit tests (1019) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+-| Unit tests (998) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
++| Unit tests (1020) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
  | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
  | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
  | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL`/Wayland; widgets never instantiated |
@@ -32,34 +32,34 @@ index 5388a16..20378a3 100644
  ```bash
  pip install -e .                     # no PySide6, no Qt
  lynxdroid doctor --json | jq .
--pytest                               # 997 collected; Qt tests may skip without native libraries
-+pytest                               # 1019 collected; Qt tests may skip without native libraries
+-pytest                               # 998 collected; Qt tests may skip without native libraries
++pytest                               # 1020 collected; Qt tests may skip without native libraries
  ```
  
  The GUI is an optional extra on purpose: the interesting logic lives in
 diff --git a/docs/ROADMAP.md b/docs/ROADMAP.md
-index f44daf6..79b2cf0 100644
+index 3a2c6e5..909d1c0 100644
 --- a/docs/ROADMAP.md
 +++ b/docs/ROADMAP.md
 @@ -33,7 +33,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
  | 12 | Android apps and instances | **PARTIAL** | app list/launch/install done; multi-instance `UNTESTED`; game error matching, limited network and root observations with manual output review available in CLI/Game help (desktop unverified), unverified property changes disabled (`docs/COMPATIBILITY.md`) |
  | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
  | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
--| 15 | Testing and quality criteria | **DONE** | 997 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
-+| 15 | Testing and quality criteria | **DONE** | 1019 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+-| 15 | Testing and quality criteria | **DONE** | 998 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
++| 15 | Testing and quality criteria | **DONE** | 1020 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
  | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
  | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
  | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |
 diff --git a/docs/TESTING.md b/docs/TESTING.md
-index d6ec293..ff6119a 100644
+index 912c153..8c1f07e 100644
 --- a/docs/TESTING.md
 +++ b/docs/TESTING.md
 @@ -4,7 +4,7 @@ Three tiers, never confused with each other.
  
  | Tier | Runs where | Count | Proves |
  |---|---|---|---|
--| 1. Unit + contract | any machine, no display | 997 | our logic is correct |
-+| 1. Unit + contract | any machine, no display | 1019 | our logic is correct |
+-| 1. Unit + contract | any machine, no display | 998 | our logic is correct |
++| 1. Unit + contract | any machine, no display | 1020 | our logic is correct |
  | 2. Integration | the target laptop | listed below | the components work together |
  | 3. Target acceptance | CachyOS + Waydroid + Iris Xe | listed below | the product works for the user |
  
@@ -67,19 +67,19 @@ index d6ec293..ff6119a 100644
  ```bash
  python -m venv .venv && . .venv/bin/activate
  pip install -e '.[dev]'
--pytest                                    # 997 collected; Qt tests may skip without native libraries
-+pytest                                    # 1019 collected; Qt tests may skip without native libraries
+-pytest                                    # 998 collected; Qt tests may skip without native libraries
++pytest                                    # 1020 collected; Qt tests may skip without native libraries
  pytest -q --maxfail=1                     # fail fast
  pytest tests/display -q                   # 80 display tests
  pytest -m "not gui and not privileged"    # inside a restricted sandbox
  ```
  
--Expected: 997 collected; Qt tests may skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
-+Expected: 1019 collected; Qt tests may skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
+-Expected: 998 collected; Qt tests may skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
++Expected: 1020 collected; Qt tests may skip if native Qt libraries are missing. No display, network or Waydroid is required for the rest.
  
  ### What each suite pins down
  
-@@ -43,8 +43,8 @@ Expected: 997 collected; Qt tests may skip if native Qt libraries are missing. N
+@@ -43,8 +43,8 @@ Expected: 998 collected; Qt tests may skip if native Qt libraries are missing. N
  | `tests/backend/test_waydroid.py` | 46 | status parsing, consent gates, real boot check |
  | `tests/backend/test_game_compat.py` | 39 | safe refusal of unverified fixes and limited network probes |
  | `tests/backend/test_images.py` | 16 | nothing downloads without consent; checksum mismatch deletes |
@@ -90,7 +90,7 @@ index d6ec293..ff6119a 100644
  | `tests/profiles/test_compat.py` | 11 | the stored-format gate: a newer schema is refused, old files migrate, timestamps keep whole seconds |
  | `tests/test_settings_are_read.py` | 9 | every setting has a reader, a row in SETTINGS.md, and that row names the right module |
  | `tests/test_packaging.py` | 18 | desktop entry, icon, and the installer script run in a throwaway home |
-@@ -54,6 +54,7 @@ Expected: 997 collected; Qt tests may skip if native Qt libraries are missing. N
+@@ -54,6 +54,7 @@ Expected: 998 collected; Qt tests may skip if native Qt libraries are missing. N
  | `tests/doctor/test_kernel_checks.py` | 13 | binder/binderfs verdicts, including "cannot tell" staying distinct from "unsupported" |
  | `tests/gui/test_editor.py` | 85 | editor logic plus extracted window callbacks for drag persistence and release delivery; full Qt remains untested |
  | `tests/gui/test_viewmodel.py` | 71 | disabled-with-reason, banner logic, WCAG contrast |

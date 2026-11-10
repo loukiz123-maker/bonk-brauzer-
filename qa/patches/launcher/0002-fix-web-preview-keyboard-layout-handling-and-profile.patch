@@ -1,7 +1,7 @@
-From 6a8e287b596e325600a51d4a1fbf920ea4deedcd Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
 Date: Tue, 10 Nov 2026 08:28:33 +0000
-Subject: [PATCH 2/4] fix: web preview keyboard layout handling and
+Subject: [PATCH 2/8] fix: web preview keyboard layout handling and
  profile-load race
 
 - Key capture and the live test matched event.key against [a-z0-9], so they

@@ -1,7 +1,7 @@
-From 16bcac96a0bde4f3010861af4dfc6b7828c6f0ca Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
 Date: Tue, 10 Nov 2026 08:33:33 +0000
-Subject: [PATCH 3/4] fix: stop the Android agent from deleting a caller-chosen
+Subject: [PATCH 3/8] fix: stop the Android agent from deleting a caller-chosen
  file
 
 TouchAgentService took a socket path from an Intent extra and deleted any

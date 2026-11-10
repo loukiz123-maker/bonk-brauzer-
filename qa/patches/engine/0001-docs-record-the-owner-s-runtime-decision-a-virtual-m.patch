@@ -1,0 +1,128 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: qa <qa@example.invalid>
+Date: Tue, 10 Nov 2026 16:35:20 +0000
+Subject: [PATCH] docs: record the owner's runtime decision - a virtual
+ machine, not yet written
+
+The documents said "runtime backend: not selected". That stopped being
+true on 2026-11-10: the project owner chose the class of runtime - Android
+in a hardware-accelerated virtual machine, "like VirtualBox, as
+BlueStacks does", not a container.
+
+What is still open, and stated as open: which hypervisor (an existing one
+- QEMU/KVM, crosvm, VirtualBox - or a monitor of our own on the KVM API).
+No virtual-machine code exists in this branch; the wording keeps saying
+that the engine does not start Android.
+
+Documentation and one header comment only. No code path changes:
+make verify - 386 tests, 0 failures, verify: OK.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ docs/ANDROID_ENGINE.md                  | 12 ++++++------
+ docs/LYNXDROID_ARCHITECTURE.md          |  8 ++++----
+ include/bonk/android/runtime_status.hpp |  9 +++++----
+ 3 files changed, 15 insertions(+), 14 deletions(-)
+
+diff --git a/docs/ANDROID_ENGINE.md b/docs/ANDROID_ENGINE.md
+index e925e0b..5485bbb 100644
+--- a/docs/ANDROID_ENGINE.md
++++ b/docs/ANDROID_ENGINE.md
+@@ -1,6 +1,6 @@
+ # Android-движок: архитектура и проверяемые этапы
+ 
+-**Статус:** runtime backend **не выбран**. Waydroid-адаптер и CLI-команда `bonk waydroid` удалены по решению владельца проекта от 2026-11-10: LynxDroid не должен зависеть от Waydroid. В коде остаются runtime-нейтральные host-side блоки: супервизор процесса (`EngineSession`), построитель команды для уже установленного Android SDK Emulator/AVD (необязательный тестовый backend), read-only preflight, ADB-команды (перечисление транспортов, guest-state probe с bounded wait, одиночный PNG screenshot, tap/key/swipe, пути и запуск пакета, установка выбранного APK, проверка foreground), модель наблюдаемого состояния движка, план порядка действий лаунчера и типизированные действия ввода. Всё проверено unit-тестами и тестовым ADB shim; настоящий Android-гость, ADB и AVD в этой среде не запускались. CLI-лаунчера, видеоканала и управления произвольным состоянием pointer/key нет. Архитектурный draft: [docs/LYNXDROID_ARCHITECTURE.md](LYNXDROID_ARCHITECTURE.md).
++**Статус:** runtime backend **не реализован**. Решения владельца проекта от 2026-11-10: (1) Waydroid-адаптер и CLI-команда `bonk waydroid` удалены — LynxDroid не должен зависеть от Waydroid; (2) средой запуска Android должна быть **аппаратная виртуальная машина** («типа VirtualBox, как BlueStacks»), а не контейнер. Кода виртуальной машины в этой ветке нет; каким гипервизором её делать, владелец ещё не решил. В коде остаются runtime-нейтральные host-side блоки: супервизор процесса (`EngineSession`), построитель команды для уже установленного Android SDK Emulator/AVD (необязательный тестовый backend), read-only preflight, ADB-команды (перечисление транспортов, guest-state probe с bounded wait, одиночный PNG screenshot, tap/key/swipe, пути и запуск пакета, установка выбранного APK, проверка foreground), модель наблюдаемого состояния движка, план порядка действий лаунчера и типизированные действия ввода. Всё проверено unit-тестами и тестовым ADB shim; настоящий Android-гость, ADB и AVD в этой среде не запускались. CLI-лаунчера, видеоканала и управления произвольным состоянием pointer/key нет. Архитектурный draft: [docs/LYNXDROID_ARCHITECTURE.md](LYNXDROID_ARCHITECTURE.md).
+ 
+ ## Исходное состояние репозитория
+ 
+@@ -10,15 +10,15 @@
+ 
+ ## Архитектурное решение
+ 
+-### Runtime backend: не выбран
++### Runtime backend: виртуальная машина (не реализована)
+ 
+-Игровой runtime для LynxDroid сейчас **не выбран**, и ни один не подключён к коду как рабочий backend.
++Владелец проекта выбрал **класс** runtime: Android в аппаратной виртуальной машине (KVM на Linux-хосте), как это устроено в BlueStacks и VirtualBox. Ни один такой backend в этой ветке не написан и не подключён к коду.
+ 
+ - **Waydroid — исключён.** Некоторое время он был кандидатом, и в этой ветке существовали адаптер `waydroid_runtime` и команда `bonk waydroid`. Они удалены: требование проекта — Android-движок для Linux без Waydroid. Не возвращать без нового явного решения владельца; тест `cli.has_no_waydroid_command_or_options` это закрепляет.
+ - **Android SDK Emulator с уже созданным пользователем AVD** — остаётся только как необязательный тестовый backend. Код лишь строит argv `emulator -avd <name> [-no-window]` и управляет жизненным циклом foreground-процесса. Он не объявлен игровым runtime: это developer-oriented VM, производительность и совместимость игр не измерялись.
+-- **Другие варианты** (собственная KVM-VM, Cuttlefish/crosvm, QEMU) не реализованы и не выбраны; сведения о лицензиях — ниже.
++- **Варианты виртуальной машины** — готовый гипервизор (QEMU/KVM, crosvm/Cuttlefish, VirtualBox) или собственный монитор на KVM API — **не реализованы, и между ними выбор не сделан**; сведения о лицензиях — ниже. Прототип собственного монитора на KVM ioctl ведётся в ветке лаунчера (`docs/STANDALONE_VM_RU.md` там же) и на реальном KVM не запускался.
+ 
+-Выбор runtime — открытое архитектурное решение. До него нельзя писать в документации или интерфейсе, что движок запускает Android.
++Открытое решение владельца — **какой гипервизор**: от него зависят лицензия (QEMU — GPL-2.0, см. ниже; лицензии VirtualBox и crosvm для этого проекта не проверялись и должны быть проверены по тексту выбранной версии), способ установки и то, чей образ Android загружается. До работающей и проверенной на реальном KVM виртуальной машины нельзя писать в документации или интерфейсе, что движок запускает Android.
+ 
+ Любой runtime и образ должны быть установлены/созданы пользователем самостоятельно. Приложение не скачивает образы, не принимает лицензии за пользователя, не устанавливает системные пакеты, не вызывает `sudo` и не меняет системные настройки.
+ 
+@@ -38,7 +38,7 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
+   └─ Input sink: tap/key и единичный прямолинейный swipe через ADB (не произвольный путь или joystick)
+        │
+        ▼
+-Runtime backend (не выбран; сейчас есть только command builder для SDK Emulator + AVD)
++Runtime backend (виртуальная машина — не реализована; сейчас есть только command builder для SDK Emulator + AVD)
+ ```
+ 
+ `EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()`, `query_installed_package_paths()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+diff --git a/docs/LYNXDROID_ARCHITECTURE.md b/docs/LYNXDROID_ARCHITECTURE.md
+index 6da6291..968e62e 100644
+--- a/docs/LYNXDROID_ARCHITECTURE.md
++++ b/docs/LYNXDROID_ARCHITECTURE.md
+@@ -1,6 +1,6 @@
+ # LynxDroid: standalone Android gaming engine architecture
+ 
+-**Status:** architecture draft for a Linux-hosted Android gaming runtime. **No runtime backend is selected.** Waydroid was a prototype candidate and has been removed by the project owner's decision of 2026-11-10: LynxDroid must not depend on Waydroid. Do not reintroduce it without a new explicit decision. This document does not declare compatibility with every game or with BlueStacks. It also does not authorize or implement a connection to the legacy Android agent.
++**Status:** architecture draft for a Linux-hosted Android gaming runtime. **No runtime backend is implemented.** Two decisions of the project owner, both of 2026-11-10: Waydroid, a prototype candidate, has been removed — LynxDroid must not depend on it, and it must not be reintroduced without a new explicit decision; and the Android runtime is to be a **hardware-accelerated virtual machine** ("like VirtualBox, as BlueStacks does"), not a container. No virtual-machine code exists in this branch, and which hypervisor to build on (an existing one — QEMU/KVM, crosvm, VirtualBox — or a monitor of our own on the KVM API) is still the owner's open question. This document does not declare compatibility with every game or with BlueStacks. It also does not authorize or implement a connection to the legacy Android agent.
+ 
+ ## Product boundary
+ 
+@@ -11,14 +11,14 @@ LynxDroid UI / CLI (user session; explicit consent)
+            │ local, versioned control API — interface not frozen
+            ▼
+ LynxDroid host controller (unprivileged)
+-   ├── Runtime backend: NOT SELECTED (no adapter in the tree)
++   ├── Runtime backend: VIRTUAL MACHINE, NOT IMPLEMENTED (no adapter in the tree)
+    ├── Guest bridge: selected Android guest / ADB operations
+    ├── App workflow: selected APK + exact package ID
+    ├── Frame provider: not implemented as a stream
+    └── Input provider: coarse ADB commands; in-guest delivery unverified
+            │                         │
+            ▼                         ▼
+-Runtime backend (not selected)    Android guest/apps
++Runtime backend (VM, not written) Android guest/apps
+ ```
+ 
+ The runtime process, Android guest, app, frame stream, and input delivery are separate capabilities and must not be collapsed into one `running` flag.
+@@ -78,7 +78,7 @@ Each gate requires evidence from a real target Linux host running the selected r
+ 
+ | Requested result | Status | Reason |
+ |---|---|---|
+-| Android guest boot | **Not run** | No runtime backend is selected, and no ADB, emulator/AVD, GPU render node, or `/dev/kvm` is available. |
++| Android guest boot | **Not run** | The virtual-machine runtime is not implemented, and no ADB, emulator/AVD, GPU render node, or `/dev/kvm` is available. |
+ | Test APK launch inside Android | **Not run** | No real guest or test APK is available. |
+ | Input event observed inside Android | **Not run** | No guest-side test app/agent is available to record a tap/swipe/key event. |
+ 
+diff --git a/include/bonk/android/runtime_status.hpp b/include/bonk/android/runtime_status.hpp
+index def7b85..8f6d3a1 100644
+--- a/include/bonk/android/runtime_status.hpp
++++ b/include/bonk/android/runtime_status.hpp
+@@ -1,10 +1,11 @@
+ // Runtime-neutral host observation shared by the engine state model and the
+ // launcher plan.
+ //
+-// No runtime backend is selected in this tree: the Waydroid adapter was removed
+-// on the project owner's decision (LynxDroid must not depend on Waydroid).
+-// Whatever backend is chosen next reports its host-side state through these
+-// types; nothing here spawns a process or names a specific runtime.
++// No runtime backend exists in this tree: the Waydroid adapter was removed on
++// the project owner's decision (LynxDroid must not depend on Waydroid). The
++// owner chose a hardware virtual machine as the runtime; it is not written.
++// When it is, it reports its host-side state through these types; nothing
++// here spawns a process or names a specific runtime.
+ #pragma once
+ 
+ #include <string_view>
+-- 
+2.39.5
+

@@ -1,0 +1,169 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: qa <qa@example.invalid>
+Date: Tue, 10 Nov 2026 16:36:54 +0000
+Subject: [PATCH 8/8] fix: 8259 prototype let a lower-priority interrupt
+ preempt one in service
+
+runtime/i8259.h, added in e805a17. Two deviations from the 8259A, both
+reproduced with the header as committed.
+
+1. Priority inversion. lynx_pic_pending() skipped in-service levels and
+   returned the next pending one. With IRQ1 in service and IRQ3 pending
+   it returned 3, so the handler of IRQ1 would be interrupted by a less
+   urgent device before its EOI. In fully nested mode the scan must stop
+   at the first in-service level: only a higher-priority request may
+   preempt. The existing test asserted the wrong behaviour as correct
+   ("masked by ISR" followed by acknowledging 0x23); it now checks that
+   IRQ3 and a repeated IRQ1 wait, that IRQ0 preempts, and the order in
+   which they are delivered after each EOI.
+
+2. ICW1 left every input masked. It reused the power-on reset, which sets
+   IMR to 0xff. The data sheet clears IMR on ICW1; a guest that
+   initialises the controller and does not write OCW1 afterwards would
+   never receive an interrupt.
+
+Also corrected a claim, not the code: the documents said "cascade through
+IRQ2". Only the request side exists - there is no acknowledge for the
+pair, so the slave's vector cannot be delivered. The header and
+docs/STANDALONE_VM_RU.md now say that.
+
+Not done: the pair acknowledge itself, spurious-vector delivery, tracking
+of the input line for edge detection. Those are features of the prototype
+and belong to its author.
+
+Checked with -Wall -Wextra -Werror and under ASan/UBSan. Like the test it
+extends, this exercises register accesses only; nothing here has been run
+under KVM or with a guest.
+
+pytest: 1061 passed, 1 skipped (1062 collected).
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ docs/STANDALONE_VM_RU.md   |  9 ++++++---
+ runtime/i8259.h            | 21 +++++++++++++++++----
+ tests/backend/i8259_test.c | 34 ++++++++++++++++++++++++++++++----
+ 3 files changed, 53 insertions(+), 11 deletions(-)
+
+diff --git a/docs/STANDALONE_VM_RU.md b/docs/STANDALONE_VM_RU.md
+index 97fa2db..d64ec75 100644
+--- a/docs/STANDALONE_VM_RU.md
++++ b/docs/STANDALONE_VM_RU.md
+@@ -147,9 +147,12 @@ setup. Тест на синтетических буферах проверяе
+ 
+ `runtime/i8259.h` содержит ограниченный 8259A: инициализацию ICW1–ICW4,
+ OCW1 (маска), OCW2 (EOI), OCW3 (выбор чтения IRR или ISR), регистры IRR/ISR,
+-фиксированный приоритет и каскад через IRQ2. Вектор выдаётся только для
+-разрешённого и ещё не обслуживаемого запроса; повторный запрос во время
+-обслуживания не выбирается. Поворот приоритетов, режим опроса, особый режим
++фиксированный приоритет (fully nested) и запрос каскада на IRQ2. Вектор
++выдаётся только для разрешённого запроса, приоритет которого выше всех
++обслуживаемых: пока обработчик IRQ1 не послал EOI, IRQ3 и повторный IRQ1 ждут,
++а IRQ0 проходит. ICW1 очищает регистр маски. Каскад реализован только со
++стороны запроса: подтверждения для пары контроллеров нет, поэтому вектор
++ведомого (IRQ8–15) гостю пока выдать нельзя. Поворот приоритетов, режим опроса, особый режим
+ маски и level-triggered входы явно отклоняются.
+ 
+ Тест имитирует только обращения к регистрам и запросы; он не доказывает
+diff --git a/runtime/i8259.h b/runtime/i8259.h
+index b6c4867..96562ab 100644
+--- a/runtime/i8259.h
++++ b/runtime/i8259.h
+@@ -53,11 +53,18 @@ static inline void lynx_pic_pair_reset(struct lynx_pic_pair *pair) {
+     pair->initialized = 0;
+ }
+ 
+-/* Fixed priority: the lowest-numbered pending, unmasked, unserviced request wins. */
++/*
++ * Fully nested mode, fixed priority (IRQ0 highest). A request is delivered
++ * only if no request of the same or a higher priority is in service: the scan
++ * stops at the first in-service level. Skipping in-service levels instead
++ * would let IRQ3 interrupt the handler of IRQ1.
++ */
+ static inline int lynx_pic_pending(const struct lynx_pic *pic) {
+-    uint8_t ready = (uint8_t)(pic->irr & (uint8_t)~pic->imr & (uint8_t)~pic->isr);
++    uint8_t ready = (uint8_t)(pic->irr & (uint8_t)~pic->imr);
+     for (unsigned int irq = 0; irq < LYNX_PIC_IRQ_COUNT; ++irq) {
+-        if (ready & (uint8_t)(1u << irq)) return (int)irq;
++        uint8_t bit = (uint8_t)(1u << irq);
++        if (pic->isr & bit) return -1;
++        if (ready & bit) return (int)irq;
+     }
+     return -1;
+ }
+@@ -105,6 +112,7 @@ static inline int lynx_pic_specific_eoi(struct lynx_pic *pic, unsigned int irq)
+ static inline int lynx_pic_write_command(struct lynx_pic *pic, uint8_t value) {
+     if (value & 0x10) { /* ICW1 */
+         lynx_pic_reset(pic);
++        pic->imr = 0; /* ICW1 clears the mask; only power-on leaves it set */
+         pic->init_step = 2;
+         pic->expect_icw3 = (uint8_t)(((value >> 1) & 1u) ^ 1u); /* SNGL=0 needs ICW3 */
+         pic->expect_icw4 = (uint8_t)(value & 1u);
+@@ -154,7 +162,12 @@ static inline int lynx_pic_read(struct lynx_pic *pic, int command_port, uint8_t
+     return 0;
+ }
+ 
+-/* Cascade: a slave request appears on the master as IRQ2. */
++/*
++ * Cascade, request side only: a slave request appears on the master as IRQ2.
++ * There is no acknowledge for the pair yet - acknowledging the master returns
++ * the master's vector for IRQ2, not the slave's vector - so IRQ8..15 cannot
++ * be delivered to a guest with this file as it stands.
++ */
+ static inline int lynx_pic_pair_raise(struct lynx_pic_pair *pair, unsigned int irq) {
+     if (irq >= LYNX_PIC_IRQ_COUNT * 2u) return -1;
+     if (irq < LYNX_PIC_IRQ_COUNT) return lynx_pic_raise(&pair->master, irq);
+diff --git a/tests/backend/i8259_test.c b/tests/backend/i8259_test.c
+index 53c11c4..5006868 100644
+--- a/tests/backend/i8259_test.c
++++ b/tests/backend/i8259_test.c
+@@ -18,6 +18,12 @@ int main(void) {
+     assert(lynx_pic_pending(&pic) == -1);
+     assert(lynx_pic_raise(&pic, 8) == -1);
+     init_master(&pic, 0x20);
++    /* ICW1 clears the mask register (8259A data sheet, "ICW1", item b). */
++    assert(pic.imr == 0x00);
++    assert(lynx_pic_write_data(&pic, 0xff) == 0); /* OCW1: mask all */
++    assert(lynx_pic_raise(&pic, 6) == 0);
++    assert(lynx_pic_pending(&pic) == -1);
++    assert(lynx_pic_set_irq(&pic, 6, 0) == 0);
+     assert(lynx_pic_write_data(&pic, 0x00) == 0); /* unmask all */
+     assert(lynx_pic_acknowledge(&pic) == -1);     /* nothing pending */
+ 
+@@ -26,10 +32,30 @@ int main(void) {
+     assert(lynx_pic_pending(&pic) == 1);          /* fixed priority */
+     assert(lynx_pic_acknowledge(&pic) == 0x21);
+     assert((pic.isr & 0x02) != 0 && (pic.irr & 0x02) == 0);
+-    assert(lynx_pic_pending(&pic) == 3);          /* masked by ISR */
+-    assert(lynx_pic_acknowledge(&pic) == 0x23);
+-    assert(lynx_pic_eoi(&pic) == 0 && (pic.isr & 0x02) == 0);
+-    assert(lynx_pic_pending(&pic) == -1);         /* both requests in service */
++
++    /*
++     * Fully nested mode. While IRQ1 is in service, IRQ3 has lower priority
++     * and must wait for the EOI; delivering it would let a slow device
++     * interrupt the handler of a more urgent one.
++     */
++    assert(lynx_pic_pending(&pic) == -1);
++    assert(lynx_pic_acknowledge(&pic) == -1);
++    assert((pic.irr & 0x08) != 0);                /* ...but it is not lost */
++    /* A repeated request of the level in service waits as well. */
++    assert(lynx_pic_raise(&pic, 1) == 0);
++    assert(lynx_pic_pending(&pic) == -1);
++    /* A higher priority request does preempt. */
++    assert(lynx_pic_raise(&pic, 0) == 0);
++    assert(lynx_pic_pending(&pic) == 0);
++    assert(lynx_pic_acknowledge(&pic) == 0x20);
++    assert(pic.isr == 0x03);
++    assert(lynx_pic_eoi(&pic) == 0 && pic.isr == 0x02); /* IRQ0 done */
++    assert(lynx_pic_pending(&pic) == -1);         /* IRQ1 still in service */
++    assert(lynx_pic_eoi(&pic) == 0 && pic.isr == 0x00); /* IRQ1 done */
++    assert(lynx_pic_pending(&pic) == 1);          /* the repeated IRQ1 first */
++    assert(lynx_pic_acknowledge(&pic) == 0x21);
++    assert(lynx_pic_eoi(&pic) == 0);
++    assert(lynx_pic_acknowledge(&pic) == 0x23);   /* and only now IRQ3 */
+     assert(lynx_pic_eoi(&pic) == 0);
+     assert(lynx_pic_eoi(&pic) == -1);
+ 
+-- 
+2.39.5
+

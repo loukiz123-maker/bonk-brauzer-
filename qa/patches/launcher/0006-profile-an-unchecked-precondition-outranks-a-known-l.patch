@@ -1,0 +1,216 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: qa <qa@example.invalid>
+Date: Tue, 10 Nov 2026 16:29:33 +0000
+Subject: [PATCH 6/8] profile: an unchecked precondition outranks a known
+ limitation
+
+Verdict.severity ranked PARTIAL above UNKNOWN. HostProfile.verdict takes
+the maximum, so a host with one limitation (no access to the render node)
+and one fact nobody could check (no session, KVM not probed) came out
+PARTIAL - "it could run" - and `lynxdroid profile` exited 0, while
+`lynxdroid doctor --strict` exited 6 for the same machine. The docstring
+of `verdict` already promised the opposite: "one unknown keeps the answer
+unknown even if everything else passed".
+
+The order is now READY < PARTIAL < UNKNOWN < BLOCKED.
+
+The defect predates the Waydroid removal. It was not visible on the
+sandbox because that host has unknowns but no limitation to combine them
+with; it shows up as soon as doctor and profile are compared on described
+hosts that differ in two facts, which is what the three new cases do.
+With the old order they fail:
+
+  test_unknown_outranks_a_limitation
+  test_doctor_and_profile_agree_on_a_described_host[limitation-plus-no-session]
+  test_doctor_and_profile_agree_on_a_described_host[limitation-plus-kvm-unprobed]
+
+pytest: 1060 passed, 1 skipped (1061 collected).
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ README.md                            |  4 ++--
+ docs/CLI.md                          |  4 +++-
+ docs/ROADMAP.md                      |  2 +-
+ docs/STAGE-CRITERIA.md               | 10 ++++++++++
+ docs/TESTING.md                      |  8 ++++----
+ src/lynxdroid/doctor/host_profile.py |  9 ++++++++-
+ tests/doctor/test_host_profile.py    | 24 +++++++++++++++++++++++-
+ 7 files changed, 51 insertions(+), 10 deletions(-)
+
+diff --git a/README.md b/README.md
+index a46b91a..1ff245d 100644
+--- a/README.md
++++ b/README.md
+@@ -90,7 +90,7 @@ Read this before anything else. It is the difference between "works" and
+ 
+ | Area | State | Evidence |
+ |---|---|---|
+-| Unit tests (1057) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
++| Unit tests (1061) | **VERIFIED** | run in this repository, `pytest`; ruff + strict mypy clean |
+ | Geometry, profiles, storage, state machine | **VERIFIED** by tests | `tests/` |
+ | CLI + doctor on this machine | **VERIFIED** (headless Debian container) | `lynxdroid doctor` output below |
+ | GUI rendering on a display | **NOT VERIFIED** | this sandbox has no `libGL` and no display server; widgets never instantiated |
+@@ -164,7 +164,7 @@ The CLI, doctor and the entire test suite need only the standard library:
+ ```bash
+ pip install -e .                     # no PySide6, no Qt
+ lynxdroid doctor --json | jq .
+-pytest                               # 1057 collected; Qt tests may skip without native libraries
++pytest                               # 1061 collected; Qt tests may skip without native libraries
+ ```
+ 
+ The GUI is an optional extra on purpose: the interesting logic lives in
+diff --git a/docs/CLI.md b/docs/CLI.md
+index ea32450..63d2914 100644
+--- a/docs/CLI.md
++++ b/docs/CLI.md
+@@ -97,7 +97,9 @@ in user terms, and (when it is not satisfied) one command that would change it.
+ | `BLOCKED` | a precondition is known to fail; a virtual machine cannot run here |
+ | `UNKNOWN` | a precondition could not be checked. **Not** the same as `BLOCKED`, and never rounded up to `READY` |
+ 
+-The verdict is the worst of the five, and `UNKNOWN` counts as not-a-green-light
++The verdict is the worst of the five in the order `READY < PARTIAL < UNKNOWN <
++BLOCKED` — a known limitation never hides a fact that could not be checked —
++and `UNKNOWN` counts as not-a-green-light
+ — the same rule `doctor --strict` applies. Exit code is `0` for `READY` or
+ `PARTIAL`, `6` otherwise, so a script can branch on it.
+ 
+diff --git a/docs/ROADMAP.md b/docs/ROADMAP.md
+index 8c147b9..7a0b9d2 100644
+--- a/docs/ROADMAP.md
++++ b/docs/ROADMAP.md
+@@ -49,7 +49,7 @@ CachyOS laptop · **NOT STARTED** / **DEFERRED** = intentionally absent.
+ | 12 | Android apps and instances | **PARTIAL** | app list/launch/install are defined by the contract and exit 5 without a runtime; multi-instance `UNTESTED`; game error matching, limited network and root observations with manual output review available in CLI/Game help (desktop unverified), unverified property changes disabled (`docs/COMPATIBILITY.md`) |
+ | 13 | Performance and stability | **PARTIAL** | our own pipeline measured: ~10 µs/event/stage, `docs/PERFORMANCE.md`; end-to-end latency needs the laptop and is not claimed |
+ | 14 | Security, network, data | **DONE** | see `docs/SECURITY.md`; enforced by tests, not promises |
+-| 15 | Testing and quality criteria | **DONE** | 1057 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
++| 15 | Testing and quality criteria | **DONE** | 1061 automated tests, ruff + strict mypy clean, documented tier 2/3 procedures |
+ | 16 | Full Python implementation | **PARTIAL** | the Python product is complete in scope for stages 1-10; three GUI surfaces are untested (stage 9 editor polish, aim mode, analog d-pad) |
+ | 17 | Python component integration | **BLOCKED** | the end-to-end scenario requires the laptop; the `gui` runs everything through real components, no mocks in the path |
+ | 18 | C++ migration plan | **DONE (plan only)** | module order and compatibility contract in `ARCHITECTURE.md §8`; **implementation must not start** until stage 17 passes |
+diff --git a/docs/STAGE-CRITERIA.md b/docs/STAGE-CRITERIA.md
+index 951633e..e681a2e 100644
+--- a/docs/STAGE-CRITERIA.md
++++ b/docs/STAGE-CRITERIA.md
+@@ -78,6 +78,16 @@ were a defect, because a user asking "can I run Android here" would get
+ follows `doctor`: an unchecked prerequisite is not a green light, and the two
+ commands are pinned together by a test that runs both against the live host.
+ 
++A second one was found on 2026-11-10 and is why that test now also runs both
++commands against nineteen *described* hosts. `Verdict.severity` ranked
++`PARTIAL` above `UNKNOWN`, so a machine with one known limitation (no access
++to the render node) and one fact nobody could check (no session) came out
++`PARTIAL`: `profile` exited 0 where `doctor --strict` exited 6. The live host
++never showed it, because the sandbox has no limitation to combine with its
++unknowns. The order is now `READY < PARTIAL < UNKNOWN < BLOCKED`, and
++`doctor` requires the same five facts the profile judges (`gpu.device` and
++`session.display` were not required before).
++
+ ## What this document is for
+ 
+ The specification's rule is that a stage is not complete because the code was
+diff --git a/docs/TESTING.md b/docs/TESTING.md
+index cf1835c..d493a2a 100644
+--- a/docs/TESTING.md
++++ b/docs/TESTING.md
+@@ -4,7 +4,7 @@ Three tiers, never confused with each other.
+ 
+ | Tier | Runs where | Count | Proves |
+ |---|---|---|---|
+-| 1. Unit + contract | any machine, no display | 1057 | our logic is correct |
++| 1. Unit + contract | any machine, no display | 1061 | our logic is correct |
+ | 2. Integration | the target laptop | listed below | the components work together |
+ | 3. Target acceptance | CachyOS + KVM + Iris Xe | listed below | the product works for the user |
+ 
+@@ -20,13 +20,13 @@ explicitly and this project follows it.
+ ```bash
+ python -m venv .venv && . .venv/bin/activate
+ pip install -e '.[dev]'
+-pytest                                    # 1057 collected; Qt tests may skip without native libraries
++pytest                                    # 1061 collected; Qt tests may skip without native libraries
+ pytest -q --maxfail=1                     # fail fast
+ pytest tests/display -q                   # 80 display tests
+ pytest -m "not gui and not privileged"    # inside a restricted sandbox
+ ```
+ 
+-Expected: 1057 collected; Qt tests may skip if native Qt libraries are missing. No display, network, KVM or Android runtime is required for the rest.
++Expected: 1061 collected; Qt tests may skip if native Qt libraries are missing. No display, network, KVM or Android runtime is required for the rest.
+ 
+ ### What each suite pins down
+ 
+@@ -56,7 +56,7 @@ Expected: 1057 collected; Qt tests may skip if native Qt libraries are missing.
+ | `tests/gui/test_editor.py` | 85 | editor logic plus extracted window callbacks for drag persistence and release delivery; full Qt remains untested |
+ | `tests/gui/test_viewmodel.py` | 71 | disabled-with-reason, banner logic, WCAG contrast |
+ | `tests/gui/test_launcher_qa_regressions.py` | 20 | QA regressions on real Qt widgets (offscreen): stuck drag, non-Latin keyboard layouts, fullscreen restore, navigation highlight, side-panel overflow |
+-| `tests/doctor/test_host_profile.py` | 54 | platform facts vs verdict, worst-verdict rule, unknown is not ready, agreement with `doctor` |
++| `tests/doctor/test_host_profile.py` | 58 | platform facts vs verdict, worst-verdict rule, unknown is not ready, agreement with `doctor` |
+ | `tests/cli/test_cli.py` | 104 | exit codes, JSON contracts, consent gates, no-runtime refusals, Qt probe honesty, doctor hints name real commands |
+ | `tests/test_requirements_registry.py` | 10 | the registry cites only tests and files that exist, and its counts are real |
+ | `tests/test_perf.py` | 20 | the timing tool measures real events and never reports an end-to-end figure |
+diff --git a/src/lynxdroid/doctor/host_profile.py b/src/lynxdroid/doctor/host_profile.py
+index f58043c..289933e 100644
+--- a/src/lynxdroid/doctor/host_profile.py
++++ b/src/lynxdroid/doctor/host_profile.py
+@@ -59,7 +59,14 @@ class Verdict(str, Enum):
+ 
+     @property
+     def severity(self) -> int:
+-        return {"READY": 0, "UNKNOWN": 1, "PARTIAL": 2, "BLOCKED": 3}[self.value]
++        """READY < PARTIAL < UNKNOWN < BLOCKED.
++
++        UNKNOWN outranks PARTIAL on purpose. With the order the other way
++        round, a host with one known limitation and one precondition nobody
++        could check was reported PARTIAL - "it could run" - and ``profile``
++        exited 0 while ``doctor --strict`` refused the same machine.
++        """
++        return {"READY": 0, "PARTIAL": 1, "UNKNOWN": 2, "BLOCKED": 3}[self.value]
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/tests/doctor/test_host_profile.py b/tests/doctor/test_host_profile.py
+index 08613fc..778008a 100644
+--- a/tests/doctor/test_host_profile.py
++++ b/tests/doctor/test_host_profile.py
+@@ -385,10 +385,16 @@ class TestTheRealMachine:
+ 
+ @pytest.mark.parametrize("verdict", list(hp.Verdict))
+ def test_verdict_severity_is_ordered(verdict) -> None:
+-    """READY < UNKNOWN < PARTIAL < BLOCKED, used by `max` above."""
++    """READY < PARTIAL < UNKNOWN < BLOCKED, used by `max` above."""
+     assert 0 <= verdict.severity <= 3
+ 
+ 
++def test_unknown_outranks_a_limitation() -> None:
++    """ "It could run, with a limitation" must not hide "we could not check"."""
++    order = [hp.Verdict.READY, hp.Verdict.PARTIAL, hp.Verdict.UNKNOWN, hp.Verdict.BLOCKED]
++    assert sorted(hp.Verdict, key=lambda verdict: verdict.severity) == order
++
++
+ class TestTheTwoVerdictsAgree:
+     """`doctor` and `profile` both answer "could this machine run an Android VM".
+ 
+@@ -425,6 +431,22 @@ class TestTheTwoVerdictsAgree:
+         "disk-full": {"free_bytes": (100 * 1024**2, "statvfs")},
+         "disk-tight": {"free_bytes": (2 * 1024**3, "statvfs")},
+         "disk-unreadable": {"free_bytes": (None, "OSError")},
++        # Two facts at once: a limitation must not hide an unchecked fact.
++        "limitation-plus-no-session": {
++            "gpu": (_gpu(render_node_usable=False), ""),
++            "session": _session(session_type=None, wayland_socket_usable=False),
++        },
++        "limitation-plus-kvm-unprobed": {
++            "gpu": (_gpu(render_node=None), ""),
++            "kvm": _kvm("unknown"),
++        },
++        "everything-wrong": {
++            "gpu": (None, "absent"),
++            "kvm": _kvm("missing"),
++            "session": _session(wayland_socket_usable=False),
++            "os_info": _os(machine="aarch64"),
++            "free_bytes": (None, "OSError"),
++        },
+     }
+ 
+     def test_the_same_host_facts_are_required_by_both(self) -> None:
+-- 
+2.39.5
+

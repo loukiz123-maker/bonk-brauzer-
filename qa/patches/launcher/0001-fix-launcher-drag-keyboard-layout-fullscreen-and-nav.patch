@@ -1,7 +1,7 @@
-From b51e1dcfab49df374689cc3c8663141025f1c2e3 Mon Sep 17 00:00:00 2001
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
 From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
 Date: Tue, 10 Nov 2026 08:28:33 +0000
-Subject: [PATCH 1/4] fix: launcher drag, keyboard layout, fullscreen and
+Subject: [PATCH 1/8] fix: launcher drag, keyboard layout, fullscreen and
  navigation defects
 
 - Canvas kept dragging a control after the canvas lost focus or the button

@@ -9,88 +9,75 @@
 > исправляет найденные ошибки**. Исправления лежат в ветке
 > `arena/640564c5-bonk-brauzer`.
 >
+> **Решения владельца проекта от 2026-11-10 — обязательны для обоих агентов:**
+>
+> - **Waydroid убран отовсюду** — из движка и из лаунчера. Не возвращать: ни
+>   backend, ни команду, ни проверку `doctor`, ни пакет в `install.sh`, ни под
+>   другим именем. За этим следят тесты `cli.has_no_waydroid_command_or_options`
+>   (движок) и `tests/test_no_waydroid.py` (лаунчер).
+> - **Среда запуска Android — аппаратная виртуальная машина** («типа
+>   VirtualBox, как BlueStacks»), не контейнер. Она **не написана**. Пока она
+>   не загрузила Android на реальном KVM, нигде — ни в интерфейсе, ни в
+>   документах, ни в сообщениях коммитов — не пишите, что Android запускается.
+> - **Какой гипервизор — владелец ещё не решил**: готовый (QEMU/KVM, crosvm,
+>   VirtualBox) или свой монитор на KVM API. Не выбирайте за него и не
+>   добавляйте зависимость, образ Android или загрузчик образов, пока в
+>   `docs/LICENSES.md` нет лицензии и источника, а в `docs/SECURITY.md` — того,
+>   что VM делит с хостом.
+>
+> Правила работы с исправлениями QA:
+>
 > 1. **Не исправляйте повторно** ошибки из списка ниже и не переписывайте
->    исправленные участки. Возьмите готовые исправления (команды ниже).
+>    исправленные участки. Возьмите готовые патчи (команды ниже).
 > 2. Если вам нужно изменить строки, которые исправил QA-агент, — не
 >    откатывайте исправление и не удаляйте его регрессионный тест. Сначала
 >    опишите, что и зачем меняете; тест должен продолжать проходить.
-> 3. Регрессионные тесты QA (`tests/gui/test_launcher_qa_regressions.py`,
->    тесты `QA regressions` в `tests/browser/preview.test.cjs`,
->    `TestAgentDoesNotTouchFiles`, `png.decodes_adam7_images_that_use_all_seven_passes`,
->    `android_engine.*process_group*`) не удалять, не ослаблять и не помечать skip.
-> 4. Пункты из раздела «Открыто — решение за владельцем» QA-агент **не**
+> 3. Регрессионные тесты QA не удалять, не ослаблять и не помечать skip:
+>    `tests/gui/test_launcher_qa_regressions.py`, тесты `QA regressions` в
+>    `tests/browser/preview.test.cjs`, `TestAgentDoesNotTouchFiles`,
+>    `tests/test_no_waydroid.py`, `tests/backend/test_no_runtime.py`,
+>    `tests/test_settings_migration.py`, `TestTheTwoVerdictsAgree`,
+>    `TestNoOutboundConnections`, проверки приоритета в
+>    `tests/backend/i8259_test.c`; в движке —
+>    `png.decodes_adam7_images_that_use_all_seven_passes`,
+>    `android_engine.*process_group*`, `cli.has_no_waydroid_command_or_options`.
+> 4. Пункты из разделов «Открыто — решение за владельцем» QA-агент **не**
 >    исправлял: это ваша зона или решение пользователя.
-> 5. Не выдавайте тесты на заглушках (fake ADB, fake Waydroid CLI, offscreen Qt,
->    «тест без Android») за доказательство работы Android или игр. Реальный
->    Android в этом репозитории пока ни разу не запускался.
+> 5. Не выдавайте тесты на заглушках (fake ADB, `FakeBackend`, offscreen Qt,
+>    «тест без Android», синтетические обращения к регистрам) за доказательство
+>    работы Android, виртуальной машины или игр. Реальный Android в этом
+>    репозитории ни разу не запускался, а в песочнице нет `/dev/kvm`.
 > 6. В `main` не пушить; объединение веток согласует пользователь.
-> 7. **Решение владельца проекта от 2026-11-10: Waydroid убрать из движка.**
->    Агент движка: примените патч удаления (команды ниже) и не возвращайте
->    Waydroid — ни адаптер, ни команду `bonk waydroid`, ни под другим именем.
->    Runtime backend теперь не выбран; новый backend не начинайте без
->    согласования с владельцем. Про CLI лаунчера решения пока нет — его не
->    трогать.
 
 ## Агенту движка (ветка `arena/906ff810-bonk-brauzer`)
 
-### 1. Удаление Waydroid (решение владельца, обязательно к применению)
+Патч удаления Waydroid и оба исправления (`fcc1c62`, `b381c61`) вы уже
+применили (`04b034c`, `9bf2c19`, `1c6e6ed`), а запись про «правки QA в
+профилях и лицензиях» исправили в `bb633d2`. Проверено на `bb633d2`:
+`make -j4 verify` — 386 тестов, 0 ошибок, `verify: OK`; ASan + UBSan —
+386 тестов, 0 ошибок, сообщений санитайзеров нет. Спасибо, повторно применять ничего не нужно.
 
-Патч `qa/patches/engine/0001-android-remove-the-Waydroid-runtime-and-bonk-waydroi.patch`,
-база — ваш `23b78b2`.
+### 1. Осталось применить: запись о решении владельца (только документы)
 
-Удалено:
-
-- `include/bonk/android/waydroid_runtime.hpp`, `src/android_engine/waydroid_runtime.cpp`,
-  `tests/android_engine/waydroid_runtime_test.cpp`;
-- команда `bonk waydroid` и флаги `--waydroid`, `--confirm-start`, `--show-ui`,
-  `--install-apk`, `--confirm-install-apk`, `--launch-package`
-  (`src/apps/main.cpp`, `src/cli/cli.cpp`, `include/bonk/cli/cli.hpp`,
-  `tests/cli/cli_test.cpp`, `Makefile` возвращены к состоянию `fa22179`);
-- `tests/waydroid_cli_test.sh` и цель `make waydroid-cli-test`;
-- runbook Waydroid и все утверждения «Waydroid — выбранный runtime» в
-  `docs/ANDROID_ENGINE.md`, `docs/LYNXDROID_ARCHITECTURE.md`.
-
-Сохранено (ваша работа не выброшена):
-
-- `engine_state` и `launcher_plan` со всеми тестами. Они зависели от Waydroid
-  только именами типов: `WaydroidState`/`WaydroidStatus` заменены на
-  `RuntimeState`/`RuntimeStatus` из нового `include/bonk/android/runtime_status.hpp`.
-- Коды ошибок переименованы: `android.waydroid_start_consent_required` →
-  `android.runtime_start_consent_required`, `android.waydroid_state_unknown` →
-  `android.runtime_state_unknown`.
-- `EngineSession`, `make_emulator_command`, preflight, `adb_client`,
-  `input_action` не тронуты.
-
-Что из этого следует — пишите об этом честно: **runtime backend не выбран, в
-дереве нет кода, который запускает Android**; `plan_launcher()` и
-`render_engine_snapshot()` — библиотечный код с unit-тестами без вызывающей
-стороны. Новый тест `cli.has_no_waydroid_command_or_options` падает, если
-команда или любой из её флагов вернётся; не удалять и не ослаблять.
-
-### 2. Исправления ошибок
-
-Проверено поверх вашего `23b78b2` вместе с патчем удаления Waydroid
-(`make verify` — 368 тестов, 0 ошибок; ASan/UBSan — 368/0; `cmake + ctest` —
-100 %; один патч удаления без исправлений — 364/0, сборка с `-Werror` чистая):
-
-| Что | Файлы | Коммит |
-|---|---|---|
-| Adam7: пятый проход имел шаг строк 2 вместо 4 — любой interlaced PNG выше 6 строк отклонялся | `src/image/png.cpp`, `tests/image/png_test.cpp` | `fcc1c62` |
-| `ctest` запускал тесты из каталога сборки, 8 тестов падали, задача CI «cmake + ctest» была красной на каждом коммите `main` и вашей ветки | `CMakeLists.txt` | `fcc1c62` |
-| `EngineSession::stop()` и деструктор сообщали «stopped», оставляя живыми остальные процессы группы | `src/android_engine/engine_session.cpp`, `include/bonk/android/engine_session.hpp`, `tests/android_engine/engine_session_test.cpp` | `b381c61` |
-
-Как взять всё сразу (патч и коммиты не пересекаются по файлам, конфликтов нет):
+Патч `qa/patches/engine/0001-docs-record-the-owner-s-runtime-decision-a-virtual-m.patch`,
+база — ваш `bb633d2`. Меняет `docs/ANDROID_ENGINE.md`,
+`docs/LYNXDROID_ARCHITECTURE.md` и комментарий в
+`include/bonk/android/runtime_status.hpp`: вместо «runtime backend не выбран»
+— «владелец выбрал виртуальную машину; она не написана; какой гипервизор — не
+решено». Код не меняется, `make verify` после патча — те же 386/0.
 
 ```sh
 git fetch origin arena/640564c5-bonk-brauzer
 for p in $(git ls-tree --name-only FETCH_HEAD qa/patches/engine/ | sort); do
   git show "FETCH_HEAD:$p" | git am -3 || break
 done
-git cherry-pick fcc1c62 b381c61
-make -j2 verify        # ожидается: 368 test(s) run, 0 failed; verify: OK
-git grep -il waydroid  # только docs (запись об удалении), launcher_plan.hpp,
-                       # runtime_status.hpp, tests/cli/cli_test.cpp
+make -j2 verify        # ожидается: 386 test(s) run, 0 failed; verify: OK
 ```
+
+Если документы у вас уже ушли вперёд и патч не ложится — перенесите смысл
+руками; расходиться с лаунчером в формулировке решения нельзя.
+
+### 2. Что нужно знать об уже применённых исправлениях
 
 Изменение поведения, о котором нужно знать: после выхода лидера `stop()`
 сразу посылает SIGKILL остаткам группы (время `grace_period` даётся самому
@@ -100,27 +87,25 @@ runtime-процессу). Если помощникам нужно время �
 
 Открыто — решение за владельцем (QA не менял):
 
+- **Какой гипервизор.** Движок по-прежнему не умеет запускать Android ничем,
+  кроме построителя команды для SDK Emulator/AVD (необязательный тестовый
+  backend, игровым runtime не объявлен, ни разу не запускался). Прототип
+  собственного монитора на KVM ioctl ведёт агент лаунчера в `runtime/` — если
+  VM будет одна на оба компонента, договоритесь, в чьей ветке она живёт.
 - Если runtime завершился сам (не через `stop()`), оставшиеся члены его группы
   процессов не отслеживаются и не останавливаются.
-- **Выбор runtime backend (без Waydroid).** После удаления движок не умеет
-  запускать Android ничем, кроме построителя команды для SDK Emulator/AVD
-  (необязательный тестовый backend, игровым runtime не объявлен). Какой backend
-  делать — решает владелец; QA его не выбирал и не писал.
-- Код `engine_state`, `input_action`, `launcher_plan` (коммиты
-  `0c35958..23b78b2`) QA проверил сборкой, тестами и санитайзерами; построчно
-  прочитаны только `engine_state` и `launcher_plan` (при замене типов),
-  `input_action` и новые части `adb_client` — нет.
-- В вашем `docs/LYNXDROID_ARCHITECTURE.md` за QA записаны «profile
-  validation/persistence» и «licensing metadata». Таких правок QA **не делал**:
-  ошибок в сохранении профилей не найдено, а тексты лицензий ждут решения
-  пользователя. Исправьте формулировку, чтобы она не обещала несуществующих патчей.
+- Новый код `frame_source`, `png_writer` и исправление `inflate`
+  (`8d0dbc4`) QA прочитал и проверил сборкой, тестами и санитайзерами; дефектов
+  не найдено. `input_action` и новые части `adb_client` построчно не читались.
+- `validate_frame_metadata` принимает поворот `-90` и `450` (любое кратное
+  90). Если поле должно быть 0/90/180/270 — сузьте проверку.
 
 ## Агенту лаунчера (ветка `arena/2dcca4f1-bonk-brauzer`, PR #2)
 
-У вашей ветки нет общей истории с `main`, поэтому исправления переданы
-патчами. Проверено поверх вашего `4c0648f`: `git am` без конфликтов; ruff,
-формат, строгий mypy — чисто; pytest — 1018 passed, 1 skipped; браузерные тесты
-— 21/21.
+У вашей ветки нет общей истории с `main`, поэтому всё передано патчами.
+База — ваш `e805a17`. Проверено: `git am` без конфликтов; на **каждом** из
+патчей 0004–0008 — ruff, `ruff format --check`, строгий mypy чисто, pytest
+зелёный; итог — 1061 passed, 1 skipped (1062 собрано).
 
 ```sh
 git fetch origin arena/640564c5-bonk-brauzer
@@ -128,23 +113,95 @@ for p in $(git ls-tree --name-only FETCH_HEAD qa/patches/launcher/ | sort); do
   git show "FETCH_HEAD:$p" | git am || break
 done
 ruff check . && ruff format --check . && mypy && pytest -q
+git grep -il waydroid -- src scripts pyproject.toml .github web-preview LICENSE
+# ожидается одна строка: src/lynxdroid/settings.py (перенос старого файла настроек)
 ```
 
-| Патч | Что исправлено |
+| Патч | Что сделано |
 |---|---|
 | `0001` | Qt: залипание перетаскивания после потери фокуса/потерянного отпускания кнопки; привязки и «тест без Android» не работали при русской раскладке; выход из полного экрана сбрасывал развёрнутое окно в обычное; подсветка навигации переключалась при отказе сбросить несохранённое; подпись шире боковой панели вызывала горизонтальную прокрутку. +20 тестов |
-| `0002` | Веб-предпросмотр: то же с раскладкой клавиатуры (`event.key` → запасной `event.code`); импорт раскладки во время загрузки/сохранения профиля; гонка в самих браузерных тестах (локально 15/19 → 21/21). +2 теста |
+| `0002` | Веб-предпросмотр: то же с раскладкой клавиатуры (`event.key` → запасной `event.code`); импорт раскладки во время загрузки/сохранения профиля; гонка в самих браузерных тестах. +2 теста |
 | `0003` | `TouchAgentService` удалял произвольный файл по пути из Intent. +1 тест (проверка исходника, агент не собирался) |
-| `0004` | Числа тестов в README/TESTING/ROADMAP. Если не применяется из-за ваших новых тестов — пропустите (`git am --skip`) и поставьте числа из `pytest --collect-only -q` |
+| `0004` | Числа тестов в README/TESTING/ROADMAP |
+| `0005` | **Waydroid убран из лаунчера** (решение владельца). Подробности ниже |
+| `0006` | `profile`: непроверенное условие теперь весит больше известного ограничения. Раньше хост «нет доступа к render node + тип сессии не определён» получал `PARTIAL` и код 0, а `doctor --strict` для него же — код 6. +4 теста |
+| `0007` | `LICENSE`: убрана приписка «This project drives the Waydroid program». Текст MIT не тронут. Отдельным патчем, потому что владелец правку файла лицензии прямо не разрешал — можно пропустить (`git am --skip`), остальное от него не зависит |
+| `0008` | `runtime/i8259.h` (ваш `e805a17`): два дефекта, см. ниже |
+
+Если `0004`–`0007` не ложатся из-за ваших новых тестов — конфликт будет только
+в числах: поставьте их из `pytest --collect-only -q`.
+
+### Что меняет патч 0005
+
+Удалено: `backend/waydroid.py`, `backend/images.py` и их тесты; команды
+`lynxdroid image plan|prepare`; `--backend waydroid`; область `doctor`
+`waydroid` и проверки `session.wayland`, `kernel.binder`, `kernel.binderfs`,
+`container.namespaces`, `container.memfd`, `waydroid.*`; настройки
+`allow_service_control` и `allow_prop_writes`; сигнатура `binder-root`;
+обёртки `sudo waydroid shell --` вокруг ручных скриптов (сами скрипты и
+разборщики их вывода остались); пакет `waydroid` из `install.sh` и CI.
+
+Добавлено:
+
+- `backend/none.py` — `NoBackend`, backend по умолчанию. Все возможности
+  `UNSUPPORTED` с причиной, состояние `not-configured`, любое действие с
+  Android — `NoRuntimeError` (код `no-runtime`, код выхода 5). Ничего не
+  запускает. **Ваш будущий VM-backend подключается сюда**: добавьте имя в
+  `BACKEND_KINDS` и ветку в `create_backend()` — CLI и GUI берут backend
+  только через эту фабрику.
+- `backend/fake.py` — `FakeBackend`, перенесён из удалённого модуля.
+- `doctor`: `kernel.kvm` (спрашивает у `/dev/kvm` версию API через ваш
+  `vm_probe`; VM не создаёт), `session.display` (Wayland **и X11** — OK).
+  Обязательны для VM: `os.arch` (только x86_64), `session.display`,
+  `kernel.kvm`, `gpu.device`, `disk.space` — те же пять фактов, что судит
+  `profile`; тест гоняет обе команды на 19 описанных хостах и требует
+  одинакового ответа и одинаковых виновников.
+
+Поведение, которое теперь закреплено тестами:
+
+| Команда | Результат |
+|---|---|
+| `status`, `stop` | 0, `backend: none`, `state: not-configured` |
+| `start`, `show`, `apps list/launch/install`, `display show/set` | 5, одно объяснение + подсказка; с `--json` — `{"error": {"code": "no-runtime", …}}` |
+| `apps list --json` | ошибка, а не `[]` (пустой список означал бы «в Android нет приложений») |
+| `apps install`, `display set` | отказывают **до** `--yes`: «повторите с --yes» обещало бы невозможное |
+| `display show --json` | раньше — код 0 с ошибкой внутри; теперь код ошибки |
+| `image …`, `--backend waydroid`, `doctor --area waydroid` | 2 (нет такой команды/значения) |
+| старый файл настроек с `"backend": "waydroid"` | загружается, backend → `none`, предупреждение |
+
+Ваши `runtime/`, `backend/kvm_smoke.py`, `vm_image.py`, `linux_boot.py`,
+`doctor/vm_probe.py` и `docs/STANDALONE_VM_RU.md` патч 0005 **не трогает**.
+
+Оставлено намеренно (не «недоделано»): слово `container` в контракте backend
+(`ApplyMode.RESTART_CONTAINER`, ключ готовности `container`) — на него
+завязаны ваши тесты GUI; переименуйте сами, когда появится VM. `gui/main_window.py`
+недостижим из точки входа, но на его текст завязаны три ваших теста.
+
+### Что исправляет патч 0008 (`runtime/i8259.h`)
+
+1. **Инверсия приоритетов.** `lynx_pic_pending()` пропускал обслуживаемые
+   уровни и возвращал следующий запрос: при обслуживаемом IRQ1 и ожидающем
+   IRQ3 возвращал 3. В режиме fully nested поиск обязан остановиться на первом
+   обслуживаемом уровне. Ваш тест утверждал неверное поведение как верное
+   (`/* masked by ISR */` → `acknowledge == 0x23`); он переписан.
+2. **ICW1 оставлял все входы замаскированными** (переиспользовал сброс по
+   питанию, IMR = 0xff). По документации 8259A ICW1 очищает IMR.
+3. Не код, а формулировка: «каскад через IRQ2» — реализована только сторона
+   запроса, подтверждения для пары нет, вектор ведомого выдать нельзя. Это
+   теперь написано в заголовке и в `docs/STANDALONE_VM_RU.md`.
+
+Не делал (это функции прототипа, они ваши): подтверждение для пары
+контроллеров, выдача ложного вектора IRQ7, отслеживание уровня входной линии
+для определения фронта, возврат `-1` на EOI при пустом ISR (гость вправе
+послать лишний EOI — не считайте это фатальной ошибкой в VMM).
 
 Открыто — решение за владельцем (QA не менял):
 
-- `lynxdroid doctor` завершается `BLOCKED` без Waydroid; `lynxdroid version`
-  печатает «stage 4 - architecture and backend contract»; в пакете остаются
-  `backend/waydroid.py` и старый GUI (`main_window.py`, `viewmodel.py`,
-  `workers.py`). GUI-лаунчер от Waydroid не зависит, CLI — зависит.
-- `LICENSE` и `docs/LICENSES.md` описывают Waydroid как зависимость и не
-  упоминают заимствование из scrcpy (файл лицензии при этом в пакете есть).
+- **Какой гипервизор** (см. промпт). Ваш прототип на KVM ioctl не загружает
+  ни Linux, ни Android и на реальном KVM не запускался — так и пишите.
+- `lynxdroid version` печатает «stage 4 - architecture and backend contract».
+- `docs/LICENSES.md` не упоминает заимствование из scrcpy (файл лицензии в
+  пакете есть).
 - Происхождение `data/desktop-bg.jpg` и `data/launcher-bg.jpg` не указано;
   `launcher-bg.jpg` кодом не используется, но попадает в wheel.
 - `TouchAgentService` не проверяет, кто подключился к сокету
@@ -161,3 +218,5 @@ ruff check . && ruff format --check . && mypy && pytest -q
   `docs/`, `web-preview/`.
 - Предпросмотр и лаунчер расходятся во внешнем виде (высота шапки 68/60 px,
   фон и подсказка холста, подписи полей, отключённые кнопки окна) — см. отчёт.
+- `_require_binary` в `cli/main.py` и `path_exists` в `doctor/platform.py`
+  никем не вызываются.
