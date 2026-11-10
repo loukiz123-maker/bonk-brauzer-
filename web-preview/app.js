@@ -107,14 +107,23 @@ function page(name) {
   if (!$('#editor').hidden && name !== 'editor' && !canDiscard()) return false;
   if (name !== 'editor') endLiveTest();
   document.querySelectorAll('.page').forEach((el) => { el.hidden = el.id !== name; });
-  document.querySelectorAll('.nav').forEach((el) => { el.classList.toggle('active', el.dataset.page === name); });
+  document.querySelectorAll('.nav').forEach((el) => {
+    const current = el.dataset.page === name;
+    el.classList.toggle('active', current);
+    if (current) el.setAttribute('aria-current', 'page'); else el.removeAttribute('aria-current');
+  });
+  const editorButton = $('#open-controls');
+  editorButton.classList.toggle('active', name === 'editor');
+  if (name === 'editor') editorButton.setAttribute('aria-current', 'page'); else editorButton.removeAttribute('aria-current');
   return true;
 }
 function render() {
   const list = $('#list'); list.replaceChildren();
   const query = $('#search').value.trim().toLocaleLowerCase();
+  let shown = 0;
   entries.forEach((name, index) => {
     if (!name.replace(/\.apk$/i, '').toLocaleLowerCase().includes(query)) return;
+    shown += 1;
     const item = document.createElement('button'); item.className = 'list-item';
     item.classList.toggle('selected', index === selected); item.setAttribute('role', 'option');
     item.setAttribute('aria-selected', String(index === selected));
@@ -124,10 +133,31 @@ function render() {
   });
   $('#remove').disabled = selected === null || !storageAvailable;
   $('#edit-selected-controls').disabled = selected === null || !storageAvailable;
-  $('#library-note').textContent = !storageAvailable ? 'Библиотека браузера недоступна или повреждена.' : entries.length ? 'Выберите APK для удаления из списка.' : 'Библиотека пуста — добавьте APK, чтобы сохранить его название.';
+  $('#library-note').textContent = !storageAvailable ? 'Библиотека браузера недоступна или повреждена.'
+    : !entries.length ? 'Библиотека пуста — добавьте APK, чтобы сохранить его название.'
+    : !shown ? `Ничего не найдено по запросу «${$('#search').value.trim()}».`
+    : 'Выберите APK для удаления из списка.';
 }
 document.querySelectorAll('[data-page], [data-go]').forEach((button) => button.addEventListener('click', () => page(button.dataset.page || button.dataset.go)));
-document.querySelectorAll('.add-apk').forEach((button) => button.addEventListener('click', () => $('#file').click()));
+document.querySelectorAll('.add-apk').forEach((button) => button.addEventListener('click', () => {
+  // Ask about unsaved layout edits before a file is chosen, so declining does not add an APK.
+  if (!$('#editor').hidden && !canDiscard()) return;
+  $('#file').click();
+}));
+function syncProfileOptions() {
+  const select = $('#control-profile');
+  if (!select.options.length) return;
+  const value = (name) => `lynxdroid-preview-game-v1:${name}`;
+  const known = new Set(Array.from(select.options, option => option.value));
+  entries.forEach((name) => {
+    if (known.has(value(name))) return;
+    const option = document.createElement('option'); option.value = value(name); option.textContent = name; select.append(option);
+  });
+  Array.from(select.options).forEach((option) => {
+    if (option.value === controlStorageKey) return;
+    if (!entries.some(name => value(name) === option.value)) option.remove();
+  });
+}
 $('#file').addEventListener('change', async (event) => {
   const files = Array.from(event.target.files); event.target.value = '';
   if (!files.length) return;
@@ -149,7 +179,7 @@ $('#file').addEventListener('change', async (event) => {
     }
     return next;
   })) return;
-  selected = null; render(); page('library');
+  selected = null; render(); syncProfileOptions(); page('library');
   if (failures.length) message(`Некоторые файлы не добавлены: ${failures.slice(0, 3).join('; ')}${failures.length > 3 ? `; ещё ${failures.length - 3}` : ''}`);
 });
 $('#search').addEventListener('input', () => { selected = null; render(); });
@@ -167,7 +197,7 @@ async function fullscreen() {
 $('#fullscreen').addEventListener('click', fullscreen);
 document.addEventListener('fullscreenchange', () => {
   const title = document.fullscreenElement ? 'Выйти из полного экрана (Esc)' : 'Полный экран (F11)';
-  $('#fullscreen').textContent = document.fullscreenElement ? '❐' : '⛶';
+  $('#fullscreen').textContent = document.fullscreenElement ? '][' : '[]';
   $('#fullscreen').title = title; $('#fullscreen').setAttribute('aria-label', title);
 });
 document.addEventListener('keydown', (event) => { if (event.key === 'F11') { event.preventDefault(); fullscreen(); } });
@@ -253,7 +283,16 @@ let capturingKey = false;
 let ignoreCaptureClick = false;
 function cancelCapture() { capturingKey = false; $('#capture-key').textContent = 'Назначить нажатием'; }
 function syncCaptureKind() { cancelCapture(); $('#capture-key').disabled = $('#control-kind').value === 'Джойстик'; }
-$('#control-kind').addEventListener('change', () => { syncCaptureKind(); if ($('#control-kind').value === 'Джойстик' && $('#control-key').value.trim() === 'F') $('#control-key').value = 'W,D,S,A'; });
+let lastKind = $('#control-kind').value;
+$('#control-kind').addEventListener('change', () => {
+  const kind = $('#control-kind').value;
+  const previous = lastKind;
+  lastKind = kind;
+  syncCaptureKind();
+  // The key field follows the selected type instead of keeping the other type's value.
+  if (kind === 'Джойстик' && previous !== 'Джойстик') $('#control-key').value = 'W,D,S,A';
+  else if (previous === 'Джойстик' && kind !== 'Джойстик') $('#control-key').value = 'F';
+});
 $('#capture-key').addEventListener('click', () => { if (ignoreCaptureClick) { ignoreCaptureClick = false; return; } if (!capturingKey) { capturingKey = true; $('#capture-key').textContent = 'Нажмите клавишу или кнопку мыши здесь • Esc — отмена'; $('#capture-key').focus(); } });
 $('#capture-key').addEventListener('keydown', event => {
   if (!capturingKey) return;
@@ -491,6 +530,8 @@ function testUp(key) {
 $('#canvas').addEventListener('keydown', event => {
   if (!liveTest) return;
   if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
+  // Browser shortcuts (Ctrl+R, Ctrl+F, Alt+…) must keep working during the key test.
+  if (event.ctrlKey || event.altKey || event.metaKey) return;
   const key = event.key.toLowerCase();
   if (!/^[a-z0-9]$/.test(key) || event.repeat) return;
   event.preventDefault(); physicalKeys.set(event.code || key, key); testDown(key);
@@ -590,3 +631,10 @@ async function checkVersion() {
   try { const response = await fetch('/__version', {cache:'no-store'}); if (!response.ok) return; const next = await response.text(); if (version && version !== next) { if (!$('#editor').hidden && (profileBusy || JSON.stringify(controls) !== controlsBaseline)) { $('#editor-status').textContent = 'Обновление предпросмотра отложено: сначала сохраните раскладку.'; return; } location.reload(); return; } version = next; } catch { /* Static hosting does not support live reload. */ }
 }
 checkVersion(); setInterval(checkVersion, 1500);
+
+// Escape closes the editor, matching the settings dialog, unless a modal or the test is active.
+document.addEventListener('keydown', (event) => {
+  if (event.key !== 'Escape') return;
+  if ($('#editor').hidden || $('#settings-dialog').open || liveTest) return;
+  if (canDiscard()) { event.preventDefault(); page('home'); }
+});

@@ -124,7 +124,7 @@ def test_fullscreen_and_escape(window, qt_app) -> None:
     buttons = header.findChildren(QPushButton, "windowButton")
     assert len(buttons) == 3
     assert all(button.size() == window.fullscreen_button.size() for button in buttons)
-    assert window.fullscreen_button.text() == "⛶"
+    assert window.fullscreen_button.text() == "[]"
     window.fullscreen_button.click()
     qt_app.processEvents()
     assert window.isFullScreen() and window.escape_shortcut.isEnabled()

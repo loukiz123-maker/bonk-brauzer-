@@ -15,3 +15,7 @@ button:enabled{color:#fff}.primary:enabled{color:#fff;background:#146d70;border-
 .marker.active{background:#49a8a2;border-color:#fff;box-shadow:0 0 16px #49a8a2}.canvas:focus-visible{outline:2px solid #8fe5dc;outline-offset:2px}
 
 .touch-point{position:absolute;transform:translate(-50%,-50%);width:12px;height:12px;border-radius:50%;background:#8ff7e3;border:1px solid white;pointer-events:none}
+
+.visually-hidden{position:absolute;width:1px;height:1px;margin:-1px;padding:0;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap;border:0}
+.tool-nav{display:contents}
+.tool-rail [aria-current="page"]{background:#19313c;color:#fff}

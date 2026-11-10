@@ -102,7 +102,7 @@ class LauncherWindow(QMainWindow):
         top.setContentsMargins(24, 12, 20, 12)
         top.addWidget(label("◆  LYNXDROID", "brand"))
         top.addStretch()
-        self.fullscreen_button = QPushButton("⛶")
+        self.fullscreen_button = QPushButton("[]")
         self.fullscreen_button.setToolTip("Полный экран (F11)")
         self.fullscreen_button.setAccessibleName("Полный экран")
         self.fullscreen_button.clicked.connect(self.toggle_fullscreen)
@@ -134,7 +134,7 @@ class LauncherWindow(QMainWindow):
         tools_layout.setContentsMargins(5, 12, 5, 12)
         self.home_button = QPushButton("⌂")
         self.library_button = QPushButton("▦")
-        self.about_button = QPushButton("ⓘ")
+        self.about_button = QPushButton("i")
         for button, title in (
             (self.home_button, "Главная"),
             (self.library_button, "Библиотека"),
@@ -154,7 +154,7 @@ class LauncherWindow(QMainWindow):
         self.controls_tool.setAccessibleName("Редактор управления")
         self.controls_tool.clicked.connect(self.open_controls)
         tools_layout.addWidget(self.controls_tool)
-        self.add_tool = QPushButton("＋")
+        self.add_tool = QPushButton("+")
         self.add_tool.setObjectName("tool")
         self.add_tool.setToolTip("Добавить APK")
         self.add_tool.setAccessibleName("Добавить APK")
@@ -439,7 +439,7 @@ class LauncherWindow(QMainWindow):
             self.showNormal()
         else:
             self.showFullScreen()
-        self.fullscreen_button.setText("❐" if self.isFullScreen() else "⛶")
+        self.fullscreen_button.setText("][" if self.isFullScreen() else "[]")
         title = "Выйти из полного экрана (Esc)" if self.isFullScreen() else "Полный экран (F11)"
         self.fullscreen_button.setToolTip(title)
         self.fullscreen_button.setAccessibleName(title)

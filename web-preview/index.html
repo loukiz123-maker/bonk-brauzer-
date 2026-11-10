@@ -2,6 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Веб-предпросмотр лаунчера LynxDroid: библиотека APK, редактор управления и настройки.">
   <title>LynxDroid — предпросмотр лаунчера</title>
   <link rel="stylesheet" href="style.css">
 </head>
@@ -10,17 +11,17 @@
   <header class="header">
     <div class="brand">◆ &nbsp;LYNXDROID</div>
     <div class="header-spacer"></div>
-    <button id="fullscreen" class="window-button" title="Полный экран (F11)" aria-label="Полный экран (F11)">⛶</button>
+    <button id="fullscreen" class="window-button" title="Полный экран (F11)" aria-label="Полный экран (F11)">[]</button>
     <button class="window-button" disabled title="Браузер не позволяет сворачивать окно приложения">—</button>
     <button class="window-button" disabled title="Браузер не позволяет закрывать вкладку приложения">✕</button>
   </header>
   <div class="body">
     <main>
-      <section id="home" class="desktop page" aria-label="Рабочий стол"></section>
+      <section id="home" class="desktop page" aria-label="Рабочий стол"><h1 class="visually-hidden">Главная</h1></section>
       <section id="library" class="page" hidden>
         <h1>Библиотека</h1><p class="muted description">Здесь хранятся названия выбранных APK. Это не установка игр.</p>
         <div class="preview-note">Веб-предпросмотр: отдельная библиотека браузера. Файлы не загружаются на сервер и не добавляются в настольный лаунчер.</div>
-        <div class="controls"><input id="search" type="search" placeholder="Поиск по имени файла…" aria-label="Поиск по имени файла"><button class="primary add-apk">＋ &nbsp;Добавить APK</button><button id="refresh">Обновить</button></div>
+        <div class="controls"><input id="search" type="search" placeholder="Поиск по имени файла…" aria-label="Поиск по имени файла"><button class="primary add-apk">+ &nbsp;Добавить APK</button><button id="refresh">Обновить</button></div>
         <div id="list" class="list" role="listbox" aria-label="Библиотека APK"></div>
         <p id="library-note" class="muted"></p>
         <div class="actions"><button disabled title="Собственный Android-движок ещё не реализован">▶ &nbsp;Запустить</button><button id="edit-selected-controls" disabled>Настроить управление</button><button id="remove" disabled>Удалить из библиотеки</button><button disabled title="Браузер не предоставляет доступ к папке APK">Открыть папку</button><button disabled title="Браузер не раскрывает путь к файлу">Копировать путь</button></div>
@@ -28,7 +29,7 @@
       <section id="about" class="page" hidden><h1>О проекте</h1><div class="about-card"><h2>LynxDroid · самостоятельный лаунчер</h2><p class="muted">Лаунчер не использует Waydroid. Сейчас доступны библиотека APK, поиск и управление окном. Запуск Android-приложений ещё не реализован.</p><p class="muted">Полный экран: F11 &nbsp;•&nbsp; Выход из полного экрана: Esc</p><p class="muted">Это браузерная копия для просмотра дизайна. Системные действия доступны только в настольной версии.</p></div></section>
       <section id="editor" class="editor-page page" hidden>
   <div class="dialog-title"><strong>⌨ &nbsp;Редактор управления — шаблон</strong><button id="close-editor" aria-label="Закрыть редактор">✕</button></div>
-  <div class="editor-layout"><div id="canvas" class="canvas" tabindex="0" aria-label="Поле раскладки и тест клавиш"><div class="canvas-hint">Нажмите на поле для добавления; перетащите элемент для перемещения</div></div>
+  <div class="editor-layout"><div id="canvas" class="canvas" tabindex="0" role="group" aria-label="Поле раскладки и тест клавиш"><div class="canvas-hint">Нажмите на поле для добавления; перетащите элемент для перемещения</div></div>
     <div class="editor-side"><h2>РЕДАКТОР УПРАВЛЕНИЯ</h2><label>Раскладка для APK<select id="control-profile"></select></label><button id="reload-profile" title="Загрузить профиль заново; несохранённые изменения требуют подтверждения">Обновить раскладку</button><label>Скопировать сохранённую раскладку из<select id="copy-source"></select></label><button id="copy-profile" title="Копируются только сохранённые данные; профиль-источник не изменится">Скопировать в черновик</button><p class="muted">Нажмите на поле для добавления, перетащите элемент для перемещения. Это шаблон: ввод в игры пока не работает. Канал scrcpy подготовлен, но не подключён. Изменение раскладки останавливает тест. Выберите APK: автоматически определить игру пока нельзя.</p>
       <label>Элементы раскладки<select id="control-list" size="4" aria-label="Элементы раскладки" aria-describedby="nudge-hint"></select></label><p id="nudge-hint" class="muted">В списке: Alt + стрелки — 1%; Alt + Shift + стрелки — 5%.</p>
       <label>Тип элемента<select id="control-kind"><option>Нажатие</option><option>Двойное нажатие</option><option>Мультитач</option><option>Джойстик</option><option>Камера</option><option>Перетаскивание</option><option>Огонь</option></select></label>
@@ -41,17 +42,19 @@
 </section>
     </main>
     <aside class="tool-rail" aria-label="Боковая панель инструментов">
-      <button class="nav active" data-page="home" title="Главная" aria-label="Главная">⌂</button>
-      <button class="nav" data-page="library" title="Библиотека" aria-label="Библиотека">▦</button>
-      <button class="nav" data-page="about" title="О проекте" aria-label="О проекте">ⓘ</button>
+      <nav class="tool-nav" aria-label="Разделы">
+        <button class="nav active" data-page="home" title="Главная" aria-label="Главная" aria-current="page">⌂</button>
+        <button class="nav" data-page="library" title="Библиотека" aria-label="Библиотека">▦</button>
+        <button class="nav" data-page="about" title="О проекте" aria-label="О проекте">i</button>
+      </nav>
       <button id="open-controls" title="Редактор управления" aria-label="Редактор управления">⌨</button>
-      <button class="add-apk" title="Добавить APK" aria-label="Добавить APK">＋</button>
+      <button class="add-apk" title="Добавить APK" aria-label="Добавить APK">+</button>
       <div class="tool-spacer"></div>
       <button id="open-settings" title="Настройки" aria-label="Настройки">⚙</button>
     </aside>
   </div>
 </div>
-<dialog id="settings-dialog" class="settings-dialog">
+<dialog id="settings-dialog" class="settings-dialog" aria-label="Настройки LynxDroid">
   <div class="dialog-title"><strong>⚙ &nbsp;Настройки LynxDroid</strong><button data-close="settings-dialog" aria-label="Закрыть">✕</button></div>
   <div class="settings-layout"><div class="settings-nav">◈ &nbsp;Экран<br><br>⚙ &nbsp;Движок<br><br>▯ &nbsp;Телефон<br><br>☷ &nbsp;Настройки<br><br>ⓘ &nbsp;О проекте</div><div class="settings-content"><h2>Настройки</h2><p>Движок Android ещё не создан. Разрешение, FPS, профиль телефона и настройки игр пока недоступны.</p><p>Полный экран: F11 &nbsp;•&nbsp; Выход: Esc</p></div></div>
 </dialog>
