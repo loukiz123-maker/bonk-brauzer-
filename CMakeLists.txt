@@ -46,5 +46,9 @@ add_executable(bonk_tests ${BONK_TEST_SOURCES} ${CMAKE_CURRENT_SOURCE_DIR}/tests
 target_link_libraries(bonk_tests PRIVATE bonk_engine)
 target_include_directories(bonk_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/tests)
 
-add_test(NAME unit COMMAND bonk_tests)
+# The unit tests open fixtures through repository-relative paths
+# (tests/fixtures/...), exactly as `make test` runs them from the source root.
+# Without an explicit working directory ctest runs them from the build tree and
+# every fixture-backed test fails.
+add_test(NAME unit COMMAND bonk_tests WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 add_test(NAME selftest COMMAND bonk selftest)
