@@ -787,3 +787,66 @@ BONK_TEST(android_adb, reports_missing_adb_after_consent_without_faking_a_guest_
   REQUIRE(result.is_error());
   CHECK_EQ(result.error().code, std::string("android.spawn_failed"));
 }
+
+BONK_TEST(android_adb, activity_dump_recognizes_the_resumed_package) {
+  // Real marker shapes reported across Android releases.
+  const std::string q = "  mResumedActivity: ActivityRecord{7f6df99 u0 com.sample.app/.Main t92}";
+  CHECK(android::parse_activity_dump_shows_foreground_package(q, "com.sample.app"));
+
+  const std::string modern =
+      "  topResumedActivity=ActivityRecord{c0ffee u0 com.example.game/com.example.game.MainActivity t12}";
+  CHECK(android::parse_activity_dump_shows_foreground_package(modern, "com.example.game"));
+
+  const std::string older = "  ResumedActivity: ActivityRecord{abc u0 id.lynxdroid.agent/.AgentActivity t3}";
+  CHECK(android::parse_activity_dump_shows_foreground_package(older, "id.lynxdroid.agent"));
+
+  // A launcher in front means the game is not the resumed activity.
+  CHECK(!android::parse_activity_dump_shows_foreground_package(modern, "com.example.other"));
+}
+
+BONK_TEST(android_adb, activity_dump_does_not_match_background_or_prefixed_packages) {
+  // The package appears only in a background task history line.
+  const std::string background =
+      "  * Task{8d2 id.lynxdroid.agent/.AgentActivity}\n"
+      "    Hist #1: ActivityRecord{111 u0 id.lynxdroid.agent/.AgentActivity t8}\n"
+      "  mResumedActivity: ActivityRecord{222 u0 com.android.launcher3/.Launcher t2}";
+  CHECK(!android::parse_activity_dump_shows_foreground_package(background, "id.lynxdroid.agent"));
+
+  // Prefix of the real package must not match.
+  CHECK(!android::parse_activity_dump_shows_foreground_package(background, "id.lynxdroid"));
+  CHECK(!android::parse_activity_dump_shows_foreground_package(background, "id.lynxdroid.agent.extra"));
+
+  // A similarly named marker field must not be treated as the resumed one.
+  const std::string decoy =
+      "  mLastResumedActivity: ActivityRecord{333 u0 com.example.game/.Main t5}";
+  CHECK(!android::parse_activity_dump_shows_foreground_package(decoy, "com.example.game"));
+
+  // Package text earlier on the line must not borrow the resume marker.
+  const std::string earlier =
+      "  task: com.example.game back stack; mResumedActivity: ActivityRecord{444 u0 com.android.settings/.X t1}";
+  CHECK(!android::parse_activity_dump_shows_foreground_package(earlier, "com.example.game"));
+}
+
+BONK_TEST(android_adb, activity_dump_without_markers_is_inconclusive) {
+  CHECK(!android::parse_activity_dump_shows_foreground_package("", "com.example.game"));
+  CHECK(!android::parse_activity_dump_shows_foreground_package("No activities", "com.example.game"));
+  CHECK(!android::parse_activity_dump_shows_foreground_package("mResumedActivity: ActivityRecord{}\n",
+                                                              "com.example.game"));
+}
+
+BONK_TEST(android_adb, foreground_query_requires_consent_and_valid_package) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  auto config = fake.config();
+  config.allow_adb_server_autostart = false;
+
+  const Result<bool> denied = android::query_foreground_package(config, "com.example.game");
+  REQUIRE(denied.is_error());
+  CHECK_EQ(denied.error().code, std::string("android.adb_server_consent_required"));
+
+  auto allowed = fake.config();
+  allowed.allow_adb_server_autostart = true;
+  const Result<bool> bad_package = android::query_foreground_package(allowed, "not a package");
+  REQUIRE(bad_package.is_error());
+  CHECK_EQ(bad_package.error().code, std::string("android.invalid_package_name"));
+}

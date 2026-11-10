@@ -59,7 +59,18 @@ log=${BONK_FAKE_ADB_LOG:?}
 printf '%s\n' "$*" >> "$log"
 case "${1-}" in
   devices) printf 'List of devices attached\n192.168.240.112:5555\tdevice\n' ;;
-  *) printf '1\n' ;;
+  *)
+    # ${4-} is the shell subcommand after "-s SERIAL shell".
+    case "${4-}:${5-}" in
+      getprop:sys.boot_completed) printf '1\n' ;;
+      dumpsys:activity)
+        # FOREGROUND_PACKAGE controls which package the dump claims is resumed.
+        pkg=${BONK_FAKE_FOREGROUND:-com.example.game}
+        printf '  mResumedActivity: ActivityRecord{7f6df99 u0 %s/.Main t92}\n' "$pkg"
+        ;;
+      *) printf '1\n' ;;
+    esac
+    ;;
 esac
 FAKEADB
 chmod +x "$tmp/adb"
@@ -179,12 +190,37 @@ fi
 grep -q 'Bonk-managed Waydroid session stopped' "$tmp/owned-session.log"
 [ "$(cat "$tmp/state")" = STOPPED ]
 
-# A successful `app launch` command is a request result, never app readiness.
+grep -q '^engine input sent=no observed-in-guest=no$' "$tmp/owned-session.log"
+
+# Without a guest probe an `app launch` command is a request result only: the
+# launcher must not claim the app was confirmed inside Android.
 if grep -q 'foreground-confirmed=yes' "$tmp/owned-session.log"; then
-  echo "launcher claimed the launched app was confirmed inside Android" >&2
+  echo "launcher claimed app readiness without any in-guest witness" >&2
   exit 1
 fi
-grep -q '^engine input sent=no observed-in-guest=no$' "$tmp/owned-session.log"
+
+# With a guest probe, foreground confirmation comes from the activity dump.
+run_launch_probe() {
+  probe_log=$1
+  printf RUNNING > "$tmp/state"
+  : > "$BONK_FAKE_WAYDROID_LOG"
+  "$bin" waydroid --waydroid "$tmp/waydroid" --launch-package com.example.game \
+    --adb "$tmp/adb" --confirm-adb --adb-serial 192.168.240.112:5555 > "$probe_log" 2>&1
+}
+
+BONK_FAKE_FOREGROUND=com.example.game run_launch_probe "$tmp/foreground-yes.log"
+grep -q '^engine app=launch-command-succeeded package=com.example.game foreground-confirmed=yes$' \
+  "$tmp/foreground-yes.log"
+
+# A dump whose resumed activity is another package must not be reported as a
+# confirmed game launch.
+BONK_FAKE_FOREGROUND=com.android.launcher3 run_launch_probe "$tmp/foreground-no.log"
+grep -q '^engine app=launch-command-succeeded package=com.example.game foreground-confirmed=no$' \
+  "$tmp/foreground-no.log"
+if grep -q 'foreground-confirmed=yes' "$tmp/foreground-no.log"; then
+  echo "launcher confirmed the game while another app was resumed" >&2
+  exit 1
+fi
 
 
 # Guest probe: explicit ADB consent is required, and the reported guest layer

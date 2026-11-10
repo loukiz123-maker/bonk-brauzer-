@@ -106,6 +106,25 @@ struct PixelPoint {
     const AdbConfig& config, std::string_view package_name,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
 
+/// Builds `adb -s SERIAL shell dumpsys activity activities`. The output is a
+/// dump, so callers must not treat a nonzero exit as "app not running".
+[[nodiscard]] Result<RuntimeCommand> make_adb_foreground_activity_command(const AdbConfig& config);
+
+/// Parses a `dumpsys activity activities` dump and reports whether an activity
+/// belonging to `package_id` is the resumed one. This is a guest-side witness
+/// for a foreground app, not proof that the app is responsive or rendering.
+/// Returns false when the dump has no recognizable resumed-activity lines.
+[[nodiscard]] bool parse_activity_dump_shows_foreground_package(std::string_view dump,
+                                                               std::string_view package_id);
+
+/// Queries the guest for the currently resumed activity and reports whether it
+/// belongs to `package_id`. Requires ADB server consent. `true` means Android
+/// itself reported the package in the resumed state; `false` means it did not
+/// (or the dump was inconclusive) - never an inferred result.
+[[nodiscard]] Result<bool> query_foreground_package(
+    const AdbConfig& config, std::string_view package_id,
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{10000});
+
 /// Queries Android Package Manager for the guest-side APK paths belonging to
 /// an exact package ID. Requires ADB server consent; an empty vector means no
 /// paths were reported, while explicit package-not-found output is an error.

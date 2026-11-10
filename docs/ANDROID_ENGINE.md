@@ -241,6 +241,25 @@ start-session -> wait-for-session -> [probe-guest] -> open-ui
 - `open-ui` предшествует установке и запуску: приложение запускается только после появления поверхности отображения.
 - `install-apk` и `launch-package` несут собственные `detail`-значения, поэтому CLI не может подменить APK или package ID между шагами.
 
+## Подтверждение foreground внутри гостя
+
+`foreground-confirmed=yes` — единственный токен, который означает «Android сообщает, что запущенный пакет сейчас на переднем плане». Он выставляется только запросом к гостю, а не exit code команды.
+
+```sh
+./build/bonk waydroid --launch-package com.example.game \
+  --adb /absolute/path/adb --confirm-adb --adb-serial "$SERIAL"
+```
+
+- Команда гостя: `adb -s SERIAL shell dumpsys activity activities` (`make_adb_foreground_activity_command`).
+- Парсер `parse_activity_dump_shows_foreground_package()` принимает маркеры `mResumedActivity`, `topResumedActivity` и `ResumedActivity` (форматы различаются между версиями Android) и требует `<package>/<activity>` с целыми границами.
+- Ищется только часть строки **после** маркера, поэтому имя пакета, упомянутое раньше в строке, не может «одолжить» маркер.
+- Префикс пакета не совпадает: `id.lynxdroid` не подтверждает `id.lynxdroid.agent`; фоновые записи `Hist #` и `Task{...}` не считаются foreground.
+- Похожие поля (`mLastResumedActivity`) не принимаются за маркер.
+- `dumpsys` — диагностический дамп и может завершиться с ненулевым кодом, поэтому решение принимает разбор: нераспознанный дамп даёт `foreground-confirmed=no`, а не успех.
+- Провал запроса не выставляет подтверждение: причина попадает в `engine detail guest=foreground check failed: ...`.
+
+Синтетический CLI-тест проверяет оба исхода (resumed — игра, resumed — лаунчер) и мутационная проверка подтвердила, что тест падает, если парсер начинает подтверждать без свидетеля. Это всё ещё **не** live-проверка: fake ADB не является Android-гостем.
+
 ## Runbook: первый live smoke test на целевом Linux-хосте
 
 Этот сценарий **не запускался в sandbox**. На тестовом ПК Waydroid должен быть установлен и инициализирован отдельно; выполнять команды от desktop-пользователя внутри его Wayland/D-Bus-сессии. Сначала проверять на выбранном безопасном приложении, затем на конкретной лицензированной игре.
@@ -295,7 +314,7 @@ make waydroid-cli-test  # synthetic CLI flow; does not require Waydroid
 make verify
 ```
 
-Текущая host-side проверка после вынесения launcher plan: `make -j2 verify` — **361 тест, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **361/361**; полный `-Werror verify` (приложение и тесты) — **361/361**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
+Текущая host-side проверка после добавления foreground-подтверждения: `make -j2 verify` — **365 тестов, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **365/365**; полный `-Werror verify` (приложение и тесты) — **365/365**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
 
 Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 

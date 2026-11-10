@@ -347,6 +347,29 @@ bool probe_waydroid_guest(const bonk::CliOptions& options, bonk::android::Engine
   return true;
 }
 
+// Verifies the launched app is the resumed activity inside Android. This is a
+// guest-side witness, so it is the only path that may set
+// foreground_confirmed. A failed query leaves the claim unconfirmed.
+void verify_foreground_app(const bonk::CliOptions& options, bonk::android::EngineSnapshot& snapshot) {
+  if (options.waydroid_adb.empty() || snapshot.app.package_id.empty()) return;
+  bonk::android::AdbConfig adb_config;
+  adb_config.executable = std::filesystem::path{options.waydroid_adb};
+  adb_config.serial = options.waydroid_adb_serial;
+  adb_config.allow_adb_server_autostart = options.waydroid_confirm_adb;
+  const bonk::Result<bool> foreground =
+      bonk::android::query_foreground_package(adb_config, snapshot.app.package_id);
+  if (foreground.is_error()) {
+    snapshot.guest.detail += snapshot.guest.detail.empty() ? "" : "; ";
+    snapshot.guest.detail += "foreground check failed: " + foreground.error().to_string();
+    return;
+  }
+  snapshot.app.foreground_confirmed = foreground.value();
+  if (!snapshot.app.foreground_confirmed) {
+    snapshot.guest.detail += snapshot.guest.detail.empty() ? "" : "; ";
+    snapshot.guest.detail += "launched package is not the resumed activity yet";
+  }
+}
+
 int stop_owned_waydroid(bonk::android::EngineSession& session) {
   const bonk::Status stopped = session.stop();
   if (stopped.is_error()) {
@@ -545,6 +568,10 @@ int run_waydroid(const bonk::CliOptions& options) {
         // visible, so foreground_confirmed stays false.
         snapshot.app.phase = bonk::android::AppPhase::LaunchCommandSucceeded;
         std::printf("Waydroid launch command completed for %s.\n", step.detail.c_str());
+        verify_foreground_app(options, snapshot);
+        if (snapshot.app.foreground_confirmed) {
+          print("Android reports the launched package as the resumed activity.\n");
+        }
         break;
       }
       case bonk::android::LauncherStepKind::AwaitOwnedSession:

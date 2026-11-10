@@ -547,6 +547,13 @@ Result<RuntimeCommand> make_adb_package_path_command(const AdbConfig& config, st
       {config.executable.string(), {"-s", config.serial, "shell", "pm", "path", std::string(package_name)}});
 }
 
+Result<RuntimeCommand> make_adb_foreground_activity_command(const AdbConfig& config) {
+  const Status valid = validate_config(config);
+  if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
+  return Result<RuntimeCommand>::success(
+      {config.executable.string(), {"-s", config.serial, "shell", "dumpsys", "activity", "activities"}});
+}
+
 Result<RuntimeCommand> make_adb_install_apk_command(const AdbConfig& config, const std::filesystem::path& apk_path) {
   const Status valid = validate_config(config);
   if (valid.is_error()) return Result<RuntimeCommand>::failure(valid.error());
@@ -620,6 +627,82 @@ std::vector<GuestStatus> parse_adb_devices_list_output(std::string_view output) 
     devices.push_back(std::move(status));
   }
   return devices;
+}
+
+namespace {
+
+/// True when `line` carries one of the resumed-activity markers as a real
+/// field name, so `mLastResumedActivity` or `mResumedActivityX` do not match.
+bool has_resume_marker(std::string_view line, std::size_t& marker_end) {
+  constexpr std::string_view kMarkers[] = {"topResumedActivity", "mResumedActivity", "ResumedActivity"};
+  for (const std::string_view marker : kMarkers) {
+    std::size_t from = 0;
+    while (true) {
+      const std::size_t at = line.find(marker, from);
+      if (at == std::string_view::npos) break;
+      from = at + 1;
+
+      // `ResumedActivity` is a suffix of the other two markers; only accept it
+      // when it is not preceded by an identifier character of a longer name.
+      bool left_ok = true;
+      if (at > 0) {
+        const char before = line[at - 1];
+        left_ok = !((before >= 'a' && before <= 'z') || (before >= 'A' && before <= 'Z') ||
+                    (before >= '0' && before <= '9') || before == '_');
+      }
+      const std::size_t end = at + marker.size();
+      bool right_ok = true;
+      if (end < line.size()) {
+        const char after = line[end];
+        right_ok = !((after >= 'a' && after <= 'z') || (after >= 'A' && after <= 'Z') ||
+                     (after >= '0' && after <= '9') || after == '_');
+      }
+      if (left_ok && right_ok) {
+        marker_end = end;
+        return true;
+      }
+    }
+  }
+  return false;
+}
+
+/// True when `line` contains `<package_id>/` with both boundaries intact.
+bool line_names_package_activity(std::string_view line, std::string_view package_id) {
+  std::size_t from = 0;
+  while (true) {
+    const std::size_t found = line.find(package_id, from);
+    if (found == std::string_view::npos) return false;
+    from = found + 1;
+
+    const std::size_t after = found + package_id.size();
+    if (after >= line.size() || line[after] != '/') continue;
+    if (found == 0) return true;
+    const char before = line[found - 1];
+    const bool boundary = before == ' ' || before == '\t' || before == '{' || before == 'u' || before == ':';
+    if (boundary) return true;
+  }
+}
+
+}  // namespace
+
+bool parse_activity_dump_shows_foreground_package(std::string_view dump, std::string_view package_id) {
+  if (package_id.empty() || dump.empty() || dump.size() > kDefaultAdbCaptureBytes) return false;
+
+  std::size_t line_start = 0;
+  while (line_start <= dump.size()) {
+    std::size_t line_end = dump.find('\n', line_start);
+    if (line_end == std::string_view::npos) line_end = dump.size();
+    const std::string_view line = dump.substr(line_start, line_end - line_start);
+    line_start = line_end + 1;
+
+    std::size_t marker_end = 0;
+    if (!has_resume_marker(line, marker_end)) continue;
+    // Only the part of the line after the marker can carry the activity record,
+    // so a task name that mentions the marker earlier cannot borrow a package.
+    const std::string_view record = line.substr(marker_end);
+    if (line_names_package_activity(record, package_id)) return true;
+  }
+  return false;
 }
 
 Result<std::vector<std::string>> parse_adb_package_paths_output(std::string_view output) {
@@ -779,6 +862,37 @@ Result<std::vector<std::string>> query_installed_package_paths(
   const Status process_status = validate_adb_command_output(output.value(), kDefaultAdbCaptureBytes);
   if (process_status.is_error()) return Result<std::vector<std::string>>::failure(process_status.error());
   return parse_adb_package_paths_output(output.value().stdout_data);
+}
+
+Result<bool> query_foreground_package(const AdbConfig& config, std::string_view package_id,
+                                     std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return Result<bool>::failure(timeout_valid.error());
+  if (!valid_package_name(package_id)) {
+    return Result<bool>::failure(
+        Error::make("android.invalid_package_name", "Android package name must be a valid dot-separated identifier"));
+  }
+  const Result<RuntimeCommand> command = make_adb_foreground_activity_command(config);
+  if (command.is_error()) return Result<bool>::failure(command.error());
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return Result<bool>::failure(consent.error());
+
+  const Result<CommandOutput> output = run_command(command.value(), command_timeout, kDefaultAdbCaptureBytes);
+  if (output.is_error()) return Result<bool>::failure(output.error());
+  if (output.value().timed_out) {
+    return Result<bool>::failure(Error::make("android.adb_timeout", "ADB foreground query timed out"));
+  }
+  if (output.value().stdout_truncated || output.value().stderr_truncated) {
+    return Result<bool>::failure(Error::make(
+        "android.adb_output_truncated", "activity dump exceeded the 64 KiB safety limit"));
+  }
+  // A dump is diagnostic text and `dumpsys` can exit nonzero on some builds
+  // while still printing the activity stack, so the parse decides. An
+  // unparsable dump is reported as "not confirmed", never as success.
+  const bool foreground = parse_activity_dump_shows_foreground_package(output.value().stdout_data, package_id);
+  const bool stderr_foreground =
+      parse_activity_dump_shows_foreground_package(output.value().stderr_data, package_id);
+  return Result<bool>::success(foreground || stderr_foreground);
 }
 
 Status install_selected_apk(const AdbConfig& config, const std::filesystem::path& apk_path,
