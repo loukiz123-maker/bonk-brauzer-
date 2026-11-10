@@ -55,7 +55,7 @@ This is the target flow for whichever runtime backend is selected. The ordering 
 - **Guest bridge:** ADB transport selection, guest boot polling, package and input operations. ADB server auto-start remains a separate explicit consent boundary.
 - **Frame provider:** implemented for still frames only (`frame_source.hpp`): width, height, RGBA8 stride, optional rotation, monotonic timestamp and a caller-assigned sequence. Rotation is reported as `unknown` rather than 0, because a `screencap` PNG does not carry orientation. No streaming source exists, so `frames=streaming` is unreachable. Keep frame bytes separate from control messages; don't base64 a video stream into JSON.
 - **Input provider:** validated, typed actions (`input_action.hpp`): tap, straight-line swipe with bounded duration, single key code. Each action carries the guest viewport it was captured against and a caller-assigned sequence. Still coarse: no path gestures, key-down/up, pointer identity, or cancellation, and `observed_in_guest` stays false until an in-guest witness reports the action.
-- **Profile storage/UI:** package-ID-based profiles and safe persistence/deletion are a separate layer. Do not edit the QA-owned profile validation, web preview persistence, or agent file-deletion areas in this branch.
+- **Profile storage/UI:** package-ID-based profiles and safe persistence/deletion are a separate layer owned by the launcher branch. This engine branch does not implement or edit profile storage.
 - **IPC:** a private local Unix-domain transport is a candidate only. Before defining or connecting a protocol, agree versioning, message schema, socket namespace/address, peer authentication, limits, timeout/reconnect rules, and ownership. No unauthenticated TCP listener.
 
 ## Explicitly deferred integration
@@ -84,6 +84,13 @@ Each gate requires evidence from a real target Linux host running the selected r
 
 These gates are still open; do not represent synthetic ADB fakes as live Android results.
 
-## Parallel QA ownership
+## QA integration (done 2026-11-10)
 
-This branch's architecture work must avoid the QA-owned edits to `engine_session.cpp` / `engine_session.hpp` process-stop behavior, Adam7 decoding in `src/image/png.cpp`, CMake test working-directory configuration, and their associated regression tests. The separate QA branch owns the profile validation/persistence, Android-agent file-deletion, licensing metadata, and associated tests. Integrate those changes only after QA's patches and checks are available; resolve conflicts by preserving both sides, then rerun the complete build/test and sanitizer checks. This draft introduces no edits to those files.
+The QA fixes are now **merged into this branch**, not pending:
+
+- `fcc1c62` — Adam7 pass-5 row stride and `ctest` working directory (`src/image/png.cpp`, `CMakeLists.txt`).
+- `b381c61` — `EngineSession::stop()`/destructor now kill the whole process group.
+- The Waydroid removal patch was applied on its base `23b78b2`; the branch then rebased the later frame/inflate work on top.
+- QA regression tests (`png.decodes_adam7_images_that_use_all_seven_passes`, `android_engine.*process_group*`, `cli.has_no_waydroid_command_or_options`) are retained and passing.
+
+Correction to an earlier claim in this document: QA **did not** make profile-validation/persistence, agent file-deletion or licensing-metadata edits. QA reported no defect in profile saving, and licensing texts are still awaiting the owner's decision. The launcher-side fixes are carried as patches in the QA branch and belong to the launcher branch, not to this one.

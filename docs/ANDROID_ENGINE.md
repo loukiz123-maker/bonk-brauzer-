@@ -313,7 +313,7 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка после удаления Waydroid, применения исправлений QA и переноса frame/inflate работы: `make -j2 verify` — **PLACEHOLDER_TESTS тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan — **PLACEHOLDER_TESTS/PLACEHOLDER_TESTS**; сборка с `-Werror` — без предупреждений. Fake ADB и PNG fixtures — синтетические тесты, не live Android и не проверка совместимости игр.
+Текущая host-side проверка после удаления Waydroid, применения исправлений QA и переноса frame/inflate работы: `make -j2 verify` — **386 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan — **386/386**; сборка с `-Werror` — без предупреждений. Fake ADB и PNG fixtures — синтетические тесты, не live Android и не проверка совместимости игр.
 
 Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 

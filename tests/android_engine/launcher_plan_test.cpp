@@ -181,7 +181,7 @@ BONK_TEST(launcher_plan, frame_capture_is_ordered_before_ui_and_apps) {
   LauncherRequest request = game_request();
   request.frame_path = "/tmp/frame.png";
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), request);
   REQUIRE(plan.is_ok());
   const std::vector<LauncherStepKind> kinds = kinds_of(plan);
   CHECK(index_of(kinds, LauncherStepKind::WaitForSession) < index_of(kinds, LauncherStepKind::CaptureFrame));
@@ -197,11 +197,11 @@ BONK_TEST(launcher_plan, frame_capture_alone_requires_a_running_session) {
   LauncherRequest request;
   request.frame_path = "/tmp/frame.png";
 
-  const Result<LauncherPlan> stopped = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> stopped = plan_launcher(state(RuntimeState::Stopped), request);
   REQUIRE(stopped.is_error());
-  CHECK_EQ(stopped.error().code, std::string("android.waydroid_start_consent_required"));
+  CHECK_EQ(stopped.error().code, std::string("android.runtime_start_consent_required"));
 
-  const Result<LauncherPlan> running = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> running = plan_launcher(state(RuntimeState::Running), request);
   REQUIRE(running.is_ok());
   const std::vector<LauncherStepKind> kinds = kinds_of(running);
   CHECK(contains(kinds, LauncherStepKind::CaptureFrame));
@@ -212,7 +212,7 @@ BONK_TEST(launcher_plan, probe_only_request_does_not_plan_a_capture) {
   LauncherRequest request;
   request.probe_guest = true;
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Running), request);
   REQUIRE(plan.is_ok());
   CHECK(!contains(kinds_of(plan), LauncherStepKind::CaptureFrame));
 }
