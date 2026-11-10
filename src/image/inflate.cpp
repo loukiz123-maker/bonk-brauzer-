@@ -14,11 +14,11 @@ class BitReader {
   /// Reads `count` bits, least-significant bit first (deflate bit order).
   std::uint32_t bits(int count) {
     while (bit_count_ < count) {
-      if (position_ >= data_.size()) {
+      if (base_ + position_ >= data_.size()) {
         overrun_ = true;
         return 0;
       }
-      buffer_ |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(data_[position_])) << bit_count_;
+      buffer_ |= static_cast<std::uint32_t>(static_cast<std::uint8_t>(data_[base_ + position_])) << bit_count_;
       ++position_;
       bit_count_ += 8;
     }
@@ -28,25 +28,39 @@ class BitReader {
     return value;
   }
 
-  /// Restarts decoding at a new byte-aligned position (stored blocks).
-  void reset(std::string_view data) {
-    data_ = data;
+  /// Byte-aligned position within the whole deflate stream. `position_` counts
+  /// bytes consumed since `base_`, which `reset()` advances; keeping it
+  /// absolute is what lets the stored-block path index `deflate_stream`
+  /// directly instead of indexing the original buffer with a tail-relative
+  /// offset.
+  [[nodiscard]] std::size_t position() const noexcept { return base_ + position_; }
+
+  /// Advances to an absolute byte offset in the stream (end of a stored block
+  /// payload). Does not rebind `data_`, so absolute offsets stay valid.
+  void seek_absolute(std::size_t offset) {
+    base_ = offset;
     position_ = 0;
     buffer_ = 0;
     bit_count_ = 0;
     overrun_ = false;
   }
 
+  /// Discards the remaining bits of the current byte without losing the bytes
+  /// already pulled into the bit buffer. Stored blocks start at a byte
+  /// boundary, so any whole bytes buffered past that boundary belong to the
+  /// block payload and must be handed back to the stream.
   void align_to_byte() {
+    const int whole_bytes_buffered = bit_count_ / 8;
+    position_ -= static_cast<std::size_t>(whole_bytes_buffered);
     buffer_ = 0;
     bit_count_ = 0;
   }
 
   [[nodiscard]] bool overrun() const noexcept { return overrun_; }
-  [[nodiscard]] std::size_t position() const noexcept { return position_; }
 
  private:
   std::string_view data_;
+  std::size_t base_ = 0;
   std::size_t position_ = 0;
   std::uint32_t buffer_ = 0;
   int bit_count_ = 0;
@@ -144,7 +158,8 @@ Result<std::string> inflate_raw(std::string_view deflate_stream, std::size_t max
         return Result<std::string>::failure(inflate_error("output exceeds the configured limit"));
       }
       out.append(deflate_stream.substr(data_start, length));
-      reader.reset(deflate_stream.substr(data_start + length));
+      // Advance past the payload; offsets stay absolute within deflate_stream.
+      reader.seek_absolute(data_start + length);
     } else if (block_type == 1 || block_type == 2) {
       HuffmanTable literal_codes;
       HuffmanTable distance_codes;

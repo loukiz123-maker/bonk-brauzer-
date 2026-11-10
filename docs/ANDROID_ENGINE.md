@@ -262,6 +262,38 @@ start-session -> wait-for-session -> [probe-guest] -> open-ui
 
 ## Live smoke test: не выполнялся, runbook отсутствует
 
+Runtime backend удалён вместе с Waydroid (см. ниже). Выполняемого runbook больше нет: без выбранного backend нечего запускать. Когда владелец выберет backend, runbook нужно написать заново под него.
+
+## Frame provider: один still frame, а не поток
+
+Библиотечный слой (`include/bonk/android/frame_source.hpp`) описывает кадр как наблюдение:
+
+```text
+frame source=still-snapshot format=rgba8 64x64 stride=256 rotation=unknown seq=1
+```
+
+| Поле | Что означает |
+|---|---|
+| `source` | Всегда `still-snapshot`. `streaming` в текущей реализации недостижим. |
+| `format` / `stride` | RGBA8; stride = width × 4. |
+| `rotation` | `unknown`, потому что скриншот не сообщает ориентацию. Значение по умолчанию 0 было бы ложью для вызывающего кода, который отображает тапы в пиксели. |
+| `seq` | Счётчик кадров, назначенный вызывающим кодом, для корреляции с input-действиями. |
+| `capture_time_ns` | Монотонная метка времени; значащи только разности. |
+
+- `capture_still_frame()` принимает `AdbConfig`, поэтому backend-neutral: он не знает про Waydroid или какой-либо конкретный runtime.
+- В текущем дереве **нет CLI-команды**, которая его вызывает. Слой проверен unit-тестами с fake ADB; это не live Android.
+- Это не видеопоток: нет непрерывного захвата, нет измерения латентности, нет синхронизации с input. Gate «frame path» остаётся открытым.
+
+### Исправленный дефект inflate (silent corruption)
+
+При добавлении PNG-энкодера обнаружился баг в `src/image/inflate.cpp`, не связанный с Android: **несколько stored-блоков deflate декодировались неверно**.
+
+- `BitReader::position()` возвращал смещение внутри «хвоста» после `reset()`, но stored-блок индексировал **исходный** буфер этим смещением. После первого блока смещения расходились, и заголовок следующего блока читался из payload предыдущего.
+- Симптомы: `output exceeds the configured limit` или `truncated stored block` на валидных данных.
+- Затрагивало любой PNG, чьи распакованные scanlines превышали 65535 байт — то есть большинство реальных скриншотов.
+- Исправление: `position()`/`bits()` теперь работают с абсолютными смещениями (`base_ + position_`), `seek_absolute()` переводит чтение на конец payload без перепривязки `data_`, а `align_to_byte()` возвращает в поток целиком загруженные байты вместо их отбрасывания.
+- Проверка: 200 случайных multi-block round trip (0 ошибок), 10 потоков реального `zlib.compress` (0 ошибок), регрессионные тесты падают при откате исправления и проходят после.
+
 Прежний runbook описывал запуск через Waydroid и удалён вместе с адаптером. Новый runbook можно написать только после выбора runtime backend. До тех пор ни загрузка Android-гостя, ни запуск тестового APK, ни доставка события ввода внутрь Android не проверены ни в какой среде.
 
 ## Следующие проверяемые этапы
@@ -281,7 +313,7 @@ make test TEST_ARGS='--filter=android_'
 make verify
 ```
 
-Текущая host-side проверка после удаления Waydroid: `make -j2 verify` — **364 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan — **364/364**; сборка с `-Werror` — без предупреждений. Fake ADB и PNG fixtures — синтетические тесты, не live Android и не проверка совместимости игр.
+Текущая host-side проверка после удаления Waydroid, применения исправлений QA и переноса frame/inflate работы: `make -j2 verify` — **PLACEHOLDER_TESTS тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan — **PLACEHOLDER_TESTS/PLACEHOLDER_TESTS**; сборка с `-Werror` — без предупреждений. Fake ADB и PNG fixtures — синтетические тесты, не live Android и не проверка совместимости игр.
 
 Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 

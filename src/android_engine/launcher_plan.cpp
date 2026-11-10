@@ -22,6 +22,8 @@ std::string_view to_string(LauncherStepKind step) noexcept {
       return "wait-for-session";
     case LauncherStepKind::ProbeGuest:
       return "probe-guest";
+    case LauncherStepKind::CaptureFrame:
+      return "capture-frame";
     case LauncherStepKind::OpenUi:
       return "open-ui";
     case LauncherStepKind::InstallApk:
@@ -56,7 +58,7 @@ bool valid_android_package_id(std::string_view package_id) noexcept {
 
 bool launcher_request_has_action(const LauncherRequest& request) noexcept {
   return request.start_confirmed || request.open_ui || !request.apk_path.empty() || !request.package_id.empty() ||
-         request.probe_guest;
+         request.probe_guest || !request.frame_path.empty();
 }
 
 namespace {
@@ -65,7 +67,8 @@ namespace {
 /// deliberately excluded: it is read-only and reports honestly even when the
 /// session is stopped (`not-connected`), so it must not force a session start.
 bool needs_running_session(const LauncherRequest& request) noexcept {
-  return request.start_confirmed || request.open_ui || !request.apk_path.empty() || !request.package_id.empty();
+  return request.start_confirmed || request.open_ui || !request.apk_path.empty() || !request.package_id.empty() ||
+         !request.frame_path.empty();
 }
 
 }  // namespace
@@ -89,7 +92,7 @@ Result<LauncherPlan> plan_launcher(const RuntimeStatus& current, const LauncherR
   // A probe-only request never inspects or changes the runtime state, so it is
   // planned without consulting it.
   if (!needs_running_session(request)) {
-    plan.steps.push_back({LauncherStepKind::ProbeGuest, {}});
+    if (request.probe_guest) plan.steps.push_back({LauncherStepKind::ProbeGuest, {}});
     return Result<LauncherPlan>::success(std::move(plan));
   }
 
@@ -117,6 +120,12 @@ Result<LauncherPlan> plan_launcher(const RuntimeStatus& current, const LauncherR
   // app result, so the UI can distinguish "booted guest" from "session up".
   if (request.probe_guest) {
     plan.steps.push_back({LauncherStepKind::ProbeGuest, {}});
+  }
+
+  // A still frame is captured after the guest probe (so the guest layer is
+  // already reported) and before the UI/app work.
+  if (!request.frame_path.empty()) {
+    plan.steps.push_back({LauncherStepKind::CaptureFrame, request.frame_path.string()});
   }
 
   // The runtime's own UI is the initial display surface; apps are only

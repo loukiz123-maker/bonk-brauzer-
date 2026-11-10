@@ -30,6 +30,7 @@ enum class LauncherStepKind {
   StartSession,
   WaitForSession,
   ProbeGuest,
+  CaptureFrame,
   OpenUi,
   InstallApk,
   LaunchPackage,
@@ -52,6 +53,7 @@ struct LauncherRequest {
   bool install_confirmed = false;  // `--confirm-install`
   std::string package_id;          // empty = no launch
   bool probe_guest = false;        // read-only ADB guest observation
+  std::filesystem::path frame_path;  // empty = no still-frame capture
 };
 
 struct LauncherPlan {

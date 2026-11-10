@@ -177,10 +177,51 @@ BONK_TEST(launcher_plan, probe_only_request_does_not_open_the_ui) {
   CHECK(!plan.value().owns_session);
 }
 
+BONK_TEST(launcher_plan, frame_capture_is_ordered_before_ui_and_apps) {
+  LauncherRequest request = game_request();
+  request.frame_path = "/tmp/frame.png";
+
+  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  REQUIRE(plan.is_ok());
+  const std::vector<LauncherStepKind> kinds = kinds_of(plan);
+  CHECK(index_of(kinds, LauncherStepKind::WaitForSession) < index_of(kinds, LauncherStepKind::CaptureFrame));
+  CHECK(index_of(kinds, LauncherStepKind::CaptureFrame) < index_of(kinds, LauncherStepKind::OpenUi));
+  CHECK(index_of(kinds, LauncherStepKind::CaptureFrame) < index_of(kinds, LauncherStepKind::InstallApk));
+  for (const LauncherStep& step : plan.value().steps) {
+    if (step.kind == LauncherStepKind::CaptureFrame) CHECK_EQ(step.detail, std::string("/tmp/frame.png"));
+  }
+}
+
+BONK_TEST(launcher_plan, frame_capture_alone_requires_a_running_session) {
+  // Unlike the read-only guest probe, capturing a frame needs a live runtime.
+  LauncherRequest request;
+  request.frame_path = "/tmp/frame.png";
+
+  const Result<LauncherPlan> stopped = plan_launcher(state(WaydroidState::Stopped), request);
+  REQUIRE(stopped.is_error());
+  CHECK_EQ(stopped.error().code, std::string("android.waydroid_start_consent_required"));
+
+  const Result<LauncherPlan> running = plan_launcher(state(WaydroidState::Running), request);
+  REQUIRE(running.is_ok());
+  const std::vector<LauncherStepKind> kinds = kinds_of(running);
+  CHECK(contains(kinds, LauncherStepKind::CaptureFrame));
+  CHECK(!running.value().owns_session);
+}
+
+BONK_TEST(launcher_plan, probe_only_request_does_not_plan_a_capture) {
+  LauncherRequest request;
+  request.probe_guest = true;
+
+  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  REQUIRE(plan.is_ok());
+  CHECK(!contains(kinds_of(plan), LauncherStepKind::CaptureFrame));
+}
+
 BONK_TEST(launcher_plan, step_names_are_stable) {
   CHECK_EQ(to_string(LauncherStepKind::StartSession), std::string_view("start-session"));
   CHECK_EQ(to_string(LauncherStepKind::WaitForSession), std::string_view("wait-for-session"));
   CHECK_EQ(to_string(LauncherStepKind::ProbeGuest), std::string_view("probe-guest"));
+  CHECK_EQ(to_string(LauncherStepKind::CaptureFrame), std::string_view("capture-frame"));
   CHECK_EQ(to_string(LauncherStepKind::OpenUi), std::string_view("open-ui"));
   CHECK_EQ(to_string(LauncherStepKind::InstallApk), std::string_view("install-apk"));
   CHECK_EQ(to_string(LauncherStepKind::LaunchPackage), std::string_view("launch-package"));
