@@ -9,7 +9,7 @@ int main(void) {
     struct lynx_serial serial = {0};
     uint8_t value = 0;
     assert(lynx_serial_read(&serial, 5, &value) == 0 && value == 0x60);
-    assert(lynx_serial_read(&serial, 0, &value) == -1); /* no input */
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == 0); /* empty RBR */
     assert(lynx_serial_write(&serial, 1, 1) == -1); /* no IRQs */
     assert(lynx_serial_write(&serial, 2, 1) == -1); /* no FIFO */
     assert(lynx_serial_write(&serial, 4, 1) == -1); /* no modem control */
@@ -27,6 +27,28 @@ int main(void) {
     assert(lynx_serial_write(&serial, 0, 'Z') == -1);
     serial.output_size = 0;
 
+    /* Host input is polled through LSR and consumed in order. */
+    assert(lynx_serial_read(&serial, 5, &value) == 0 && (value & 0x01) == 0);
+    assert(lynx_serial_push_input(&serial, 'h') == 0);
+    assert(lynx_serial_push_input(&serial, 'i') == 0);
+    assert(lynx_serial_read(&serial, 5, &value) == 0 && (value & 0x01) != 0);
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == 'h');
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == 'i');
+    assert(lynx_serial_read(&serial, 5, &value) == 0 && (value & 0x01) == 0);
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == 0);
+    for (unsigned int i = 0; i < LYNX_SERIAL_CAPACITY; ++i)
+        assert(lynx_serial_push_input(&serial, (uint8_t)i) == 0);
+    assert(lynx_serial_push_input(&serial, 0xff) == -1);
+    for (unsigned int i = 0; i < LYNX_SERIAL_CAPACITY; ++i) {
+        assert(lynx_serial_read(&serial, 0, &value) == 0 && value == (uint8_t)i);
+    }
+    assert(serial.input_size == 0);
+    assert(lynx_serial_push_input(&serial, 'x') == 0);
+    serial.lcr = 0x80; /* divisor access must not consume input */
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == serial.divisor_low);
+    serial.lcr = 0;
+    assert(lynx_serial_read(&serial, 0, &value) == 0 && value == 'x');
+
     size_t length = 8192, data_offset = 4096;
     struct kvm_run *run = calloc(1, length);
     assert(run != NULL && sizeof(*run) < data_offset);
@@ -43,6 +65,12 @@ int main(void) {
     run->io.direction = KVM_EXIT_IO_IN;
     run->io.port = LYNX_SERIAL_BASE + 5;
     assert(lynx_serial_io(&serial, run, length) == 0 && *data == 0x60);
+    assert(lynx_serial_push_input(&serial, 'k') == 0);
+    run->io.port = LYNX_SERIAL_BASE + 5;
+    assert(lynx_serial_io(&serial, run, length) == 0 && (*data & 0x01) != 0);
+    run->io.port = LYNX_SERIAL_BASE;
+    assert(lynx_serial_io(&serial, run, length) == 0 && *data == 'k');
+    run->io.port = LYNX_SERIAL_BASE + 5;
     run->io.data_offset = UINT64_MAX;
     assert(lynx_serial_io(&serial, run, length) == -1);
     run->io.data_offset = 0;

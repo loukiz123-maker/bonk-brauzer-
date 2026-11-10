@@ -1,5 +1,6 @@
 /* Minimal bounded polling-only 8250-style register subset for experiments.
- * No interrupts, FIFO, host input, timing, or production device compatibility.
+ * Host-to-guest input is a small ring buffer read by polling LSR/RBR.
+ * No interrupts, FIFO, timing, or production device compatibility.
  */
 #ifndef LYNXDROID_SERIAL8250_H
 #define LYNXDROID_SERIAL8250_H
@@ -18,7 +19,18 @@ struct lynx_serial {
     uint8_t scratch;
     uint8_t output[LYNX_SERIAL_CAPACITY];
     size_t output_size;
+    uint8_t input[LYNX_SERIAL_CAPACITY];
+    size_t input_head;
+    size_t input_size;
 };
+
+/* Host-side injection; the guest sees the byte through LSR and RBR. */
+static inline int lynx_serial_push_input(struct lynx_serial *serial, uint8_t value) {
+    if (serial->input_size >= LYNX_SERIAL_CAPACITY) return -1;
+    serial->input[(serial->input_head + serial->input_size) % LYNX_SERIAL_CAPACITY] = value;
+    ++serial->input_size;
+    return 0;
+}
 
 /* Only operations whose effects we actually implement are accepted. */
 static inline int lynx_serial_write(struct lynx_serial *serial, unsigned int reg, uint8_t value) {
@@ -44,17 +56,22 @@ static inline int lynx_serial_write(struct lynx_serial *serial, unsigned int reg
     }
 }
 
-static inline int lynx_serial_read(const struct lynx_serial *serial, unsigned int reg, uint8_t *value) {
+static inline int lynx_serial_read(struct lynx_serial *serial, unsigned int reg, uint8_t *value) {
     switch (reg) {
     case 0:
-        if (!(serial->lcr & 0x80)) return -1; /* no receive data */
-        *value = serial->divisor_low;
+        if (serial->lcr & 0x80) { *value = serial->divisor_low; return 0; }
+        if (serial->input_size == 0) { *value = 0; return 0; } /* empty RBR */
+        *value = serial->input[serial->input_head];
+        serial->input_head = (serial->input_head + 1) % LYNX_SERIAL_CAPACITY;
+        --serial->input_size;
         return 0;
     case 1: *value = (serial->lcr & 0x80) ? serial->divisor_high : 0; return 0;
     case 2: *value = 1; return 0; /* no interrupt pending; no FIFO */
     case 3: *value = serial->lcr; return 0;
     case 4: *value = 0; return 0;
-    case 5: *value = 0x60; return 0; /* transmit register and shift register empty */
+    case 5: /* data ready when input is queued; transmit always empty */
+        *value = (uint8_t)(0x60 | (serial->input_size != 0 ? 0x01 : 0x00));
+        return 0;
     case 6: *value = 0; return 0;
     case 7: *value = serial->scratch; return 0;
     default: return -1;
