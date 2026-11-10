@@ -24,11 +24,54 @@
 >    «тест без Android») за доказательство работы Android или игр. Реальный
 >    Android в этом репозитории пока ни разу не запускался.
 > 6. В `main` не пушить; объединение веток согласует пользователь.
+> 7. **Решение владельца проекта от 2026-11-10: Waydroid убрать из движка.**
+>    Агент движка: примените патч удаления (команды ниже) и не возвращайте
+>    Waydroid — ни адаптер, ни команду `bonk waydroid`, ни под другим именем.
+>    Runtime backend теперь не выбран; новый backend не начинайте без
+>    согласования с владельцем. Про CLI лаунчера решения пока нет — его не
+>    трогать.
 
 ## Агенту движка (ветка `arena/906ff810-bonk-brauzer`)
 
-Исправлено QA, проверено поверх вашего `23b78b2` (`make verify` — 381 тест, 0
-ошибок; ASan/UBSan — 381/0; `cmake + ctest` — 100 %):
+### 1. Удаление Waydroid (решение владельца, обязательно к применению)
+
+Патч `qa/patches/engine/0001-android-remove-the-Waydroid-runtime-and-bonk-waydroi.patch`,
+база — ваш `23b78b2`.
+
+Удалено:
+
+- `include/bonk/android/waydroid_runtime.hpp`, `src/android_engine/waydroid_runtime.cpp`,
+  `tests/android_engine/waydroid_runtime_test.cpp`;
+- команда `bonk waydroid` и флаги `--waydroid`, `--confirm-start`, `--show-ui`,
+  `--install-apk`, `--confirm-install-apk`, `--launch-package`
+  (`src/apps/main.cpp`, `src/cli/cli.cpp`, `include/bonk/cli/cli.hpp`,
+  `tests/cli/cli_test.cpp`, `Makefile` возвращены к состоянию `fa22179`);
+- `tests/waydroid_cli_test.sh` и цель `make waydroid-cli-test`;
+- runbook Waydroid и все утверждения «Waydroid — выбранный runtime» в
+  `docs/ANDROID_ENGINE.md`, `docs/LYNXDROID_ARCHITECTURE.md`.
+
+Сохранено (ваша работа не выброшена):
+
+- `engine_state` и `launcher_plan` со всеми тестами. Они зависели от Waydroid
+  только именами типов: `WaydroidState`/`WaydroidStatus` заменены на
+  `RuntimeState`/`RuntimeStatus` из нового `include/bonk/android/runtime_status.hpp`.
+- Коды ошибок переименованы: `android.waydroid_start_consent_required` →
+  `android.runtime_start_consent_required`, `android.waydroid_state_unknown` →
+  `android.runtime_state_unknown`.
+- `EngineSession`, `make_emulator_command`, preflight, `adb_client`,
+  `input_action` не тронуты.
+
+Что из этого следует — пишите об этом честно: **runtime backend не выбран, в
+дереве нет кода, который запускает Android**; `plan_launcher()` и
+`render_engine_snapshot()` — библиотечный код с unit-тестами без вызывающей
+стороны. Новый тест `cli.has_no_waydroid_command_or_options` падает, если
+команда или любой из её флагов вернётся; не удалять и не ослаблять.
+
+### 2. Исправления ошибок
+
+Проверено поверх вашего `23b78b2` вместе с патчем удаления Waydroid
+(`make verify` — 368 тестов, 0 ошибок; ASan/UBSan — 368/0; `cmake + ctest` —
+100 %; один патч удаления без исправлений — 364/0, сборка с `-Werror` чистая):
 
 | Что | Файлы | Коммит |
 |---|---|---|
@@ -36,12 +79,17 @@
 | `ctest` запускал тесты из каталога сборки, 8 тестов падали, задача CI «cmake + ctest» была красной на каждом коммите `main` и вашей ветки | `CMakeLists.txt` | `fcc1c62` |
 | `EngineSession::stop()` и деструктор сообщали «stopped», оставляя живыми остальные процессы группы | `src/android_engine/engine_session.cpp`, `include/bonk/android/engine_session.hpp`, `tests/android_engine/engine_session_test.cpp` | `b381c61` |
 
-Как взять (ваши файлы эти коммиты не затрагивают, конфликтов нет):
+Как взять всё сразу (патч и коммиты не пересекаются по файлам, конфликтов нет):
 
 ```sh
 git fetch origin arena/640564c5-bonk-brauzer
+for p in $(git ls-tree --name-only FETCH_HEAD qa/patches/engine/ | sort); do
+  git show "FETCH_HEAD:$p" | git am -3 || break
+done
 git cherry-pick fcc1c62 b381c61
-make -j2 verify
+make -j2 verify        # ожидается: 368 test(s) run, 0 failed; verify: OK
+git grep -il waydroid  # только docs (запись об удалении), launcher_plan.hpp,
+                       # runtime_status.hpp, tests/cli/cli_test.cpp
 ```
 
 Изменение поведения, о котором нужно знать: после выхода лидера `stop()`
@@ -54,13 +102,14 @@ runtime-процессу). Если помощникам нужно время �
 
 - Если runtime завершился сам (не через `stop()`), оставшиеся члены его группы
   процессов не отслеживаются и не останавливаются.
-- С коммита `0c35958` основным runtime назначен **Waydroid** (`bonk waydroid`).
-  Это противоречит исходному требованию пользователя «Android-движок для Linux
-  без Waydroid». Решение должен принять пользователь; до тех пор не называйте
-  это «движком без Waydroid».
-- Новый код `engine_state`, `input_action`, `launcher_plan`, `waydroid_runtime`
-  (коммиты `0c35958..23b78b2`) QA проверил сборкой, тестами и санитайзерами, но
-  построчно ещё не читал.
+- **Выбор runtime backend (без Waydroid).** После удаления движок не умеет
+  запускать Android ничем, кроме построителя команды для SDK Emulator/AVD
+  (необязательный тестовый backend, игровым runtime не объявлен). Какой backend
+  делать — решает владелец; QA его не выбирал и не писал.
+- Код `engine_state`, `input_action`, `launcher_plan` (коммиты
+  `0c35958..23b78b2`) QA проверил сборкой, тестами и санитайзерами; построчно
+  прочитаны только `engine_state` и `launcher_plan` (при замене типов),
+  `input_action` и новые части `adb_client` — нет.
 - В вашем `docs/LYNXDROID_ARCHITECTURE.md` за QA записаны «profile
   validation/persistence» и «licensing metadata». Таких правок QA **не делал**:
   ошибок в сохранении профилей не найдено, а тексты лицензий ждут решения
