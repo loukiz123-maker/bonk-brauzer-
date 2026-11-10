@@ -1,0 +1,475 @@
+From b51e1dcfab49df374689cc3c8663141025f1c2e3 Mon Sep 17 00:00:00 2001
+From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 08:28:33 +0000
+Subject: [PATCH 1/4] fix: launcher drag, keyboard layout, fullscreen and
+ navigation defects
+
+- Canvas kept dragging a control after the canvas lost focus or the button
+  release was delivered elsewhere; any later mouse move relocated the control.
+- Live test and binding capture compared the typed character, so bindings
+  did nothing with a non-Latin layout (Russian). Resolve the key from the
+  typed Latin character, then Qt's key code, then the physical position.
+- Leaving fullscreen always restored a normal window, even when the window
+  was maximized before.
+- Refusing to discard unsaved controls left the clicked navigation button
+  highlighted although the page did not change.
+- One unwrapped label was wider than the editor side panel and forced a
+  horizontal scroll bar.
+
+Adds 20 Qt regression tests.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ src/lynxdroid/gui/control_editor.py       |  62 +++--
+ src/lynxdroid/gui/launcher.py             |  15 +-
+ tests/gui/test_launcher_qa_regressions.py | 281 ++++++++++++++++++++++
+ 3 files changed, 342 insertions(+), 16 deletions(-)
+ create mode 100644 tests/gui/test_launcher_qa_regressions.py
+
+diff --git a/src/lynxdroid/gui/control_editor.py b/src/lynxdroid/gui/control_editor.py
+index 0d34be9..2a006a8 100644
+--- a/src/lynxdroid/gui/control_editor.py
++++ b/src/lynxdroid/gui/control_editor.py
+@@ -44,6 +44,35 @@ def load_controls(path: Path) -> list[dict[str, Any]]:
+         return []
+ 
+ 
++# X11/Wayland (xkb) keycodes of the letter and digit keys by physical position.
++# Used only when neither the typed character nor Qt's key code names a Latin
++# letter or digit, e.g. with a single non-Latin keyboard layout.
++_XKB_POSITION_KEYS: dict[int, str] = {
++    **{10 + i: c for i, c in enumerate("1234567890")},
++    **{24 + i: c for i, c in enumerate("qwertyuiop")},
++    **{38 + i: c for i, c in enumerate("asdfghjkl")},
++    **{52 + i: c for i, c in enumerate("zxcvbnm")},
++}
++
++
++def binding_key_name(event: QKeyEvent) -> str:
++    """Return the lower-case letter/digit a key event stands for, or ``""``.
++
++    Bindings are stored as Latin letters and digits. With a non-Latin layout
++    active (for example Russian) ``event.text()`` is "ц" rather than "w", and
++    the binding silently stopped working. Prefer the typed character when it is
++    already a Latin letter or digit, then Qt's layout-aware key code, then the
++    physical key position.
++    """
++    text = event.text()
++    if len(text) == 1 and text.isascii() and text.isalnum():
++        return text.lower()
++    key = event.key()
++    if Qt.Key.Key_A <= key <= Qt.Key.Key_Z or Qt.Key.Key_0 <= key <= Qt.Key.Key_9:
++        return chr(key).lower()
++    return _XKB_POSITION_KEYS.get(event.nativeScanCode(), "")
++
++
+ class BindingCapture(QPushButton):
+     """Capture one supported binding without globally intercepting input."""
+ 
+@@ -68,19 +97,15 @@ class BindingCapture(QPushButton):
+             return
+         if event.key() == Qt.Key.Key_Escape:
+             self.cancel()
+-        elif (
+-            not event.modifiers()
+-            & (
+-                Qt.KeyboardModifier.ControlModifier
+-                | Qt.KeyboardModifier.AltModifier
+-                | Qt.KeyboardModifier.MetaModifier
+-            )
+-            and len(event.text()) == 1
+-            and event.text().isascii()
+-            and event.text().isalnum()
++        elif not event.modifiers() & (
++            Qt.KeyboardModifier.ControlModifier
++            | Qt.KeyboardModifier.AltModifier
++            | Qt.KeyboardModifier.MetaModifier
+         ):
+-            self.field.setText(event.text().upper())
+-            self.cancel()
++            name = binding_key_name(event)
++            if name:
++                self.field.setText(name.upper())
++                self.cancel()
+         event.accept()
+ 
+     def mousePressEvent(self, event: QMouseEvent) -> None:
+@@ -175,6 +200,10 @@ class Canvas(QWidget):
+                     (position[1] - previous[1]) * 1080 / self.height(),
+                 )
+             return
++        if self.dragging and not event.buttons() & Qt.MouseButton.LeftButton:
++            # The release was delivered elsewhere (focus loss, another window,
++            # live-test mode): do not keep dragging with no button held.
++            self.dragging = False
+         if self.dragging:
+             moved = self.editor.move_selected(
+                 event.position().x() / self.width(),
+@@ -213,7 +242,7 @@ class Canvas(QWidget):
+             event.accept()
+         else:
+             physical = event.nativeScanCode() or event.key()
+-            key = event.text().lower()
++            key = binding_key_name(event)
+             if not event.isAutoRepeat() and physical not in self.pressed_keys:
+                 self.pressed_keys[physical] = key
+                 self.editor.live_key(key, down=True)
+@@ -224,11 +253,12 @@ class Canvas(QWidget):
+             super().keyReleaseEvent(event)
+         elif not event.isAutoRepeat():
+             physical = event.nativeScanCode() or event.key()
+-            key = self.pressed_keys.pop(physical, event.text().lower())
++            key = self.pressed_keys.pop(physical, binding_key_name(event))
+             self.editor.live_key(key, down=False)
+             event.accept()
+ 
+     def focusOutEvent(self, event: QFocusEvent) -> None:
++        self.dragging = False
+         self.pressed_keys.clear()
+         self.last_mouse_position = None
+         self.editor.release_live_inputs()
+@@ -325,7 +355,9 @@ class ControlEditor(QDialog):
+         )
+         self.reload_button.clicked.connect(self.reload_profile)
+         side.addWidget(self.reload_button)
+-        side.addWidget(QLabel("Скопировать сохранённую раскладку из"))
++        copy_label = QLabel("Скопировать сохранённую раскладку из")
++        copy_label.setWordWrap(True)  # wider than the panel with common fonts
++        side.addWidget(copy_label)
+         self.copy_source = QComboBox()
+         self.copy_source.setSizeAdjustPolicy(
+             QComboBox.SizeAdjustPolicy.AdjustToMinimumContentsLengthWithIcon
+diff --git a/src/lynxdroid/gui/launcher.py b/src/lynxdroid/gui/launcher.py
+index 479887d..d2eb104 100644
+--- a/src/lynxdroid/gui/launcher.py
++++ b/src/lynxdroid/gui/launcher.py
+@@ -87,6 +87,7 @@ class LauncherWindow(QMainWindow):
+         self.fullscreen_shortcut.activated.connect(self.toggle_fullscreen)
+         self.escape_shortcut = QShortcut(QKeySequence("Escape"), self)
+         self.escape_shortcut.setEnabled(False)
++        self._maximized_before_fullscreen = False
+         self.escape_shortcut.activated.connect(self._escape)
+         self._reload()
+ 
+@@ -304,9 +305,16 @@ class LauncherWindow(QMainWindow):
+             current = self.pages.currentWidget()
+             if isinstance(current, ControlEditor):
+                 if not current.can_discard():
++                    # The click already checked the navigation button; the page
++                    # did not change, so the highlight must not change either.
++                    self._sync_navigation()
+                     return
+                 current.end_live_test()
+         self.pages.setCurrentIndex(index)
++        self._sync_navigation()
++
++    def _sync_navigation(self) -> None:
++        index = self.pages.currentIndex()
+         for i, button in enumerate((self.home_button, self.library_button, self.about_button)):
+             button.setChecked(i == index)
+ 
+@@ -436,8 +444,13 @@ class LauncherWindow(QMainWindow):
+ 
+     def toggle_fullscreen(self) -> None:
+         if self.isFullScreen():
+-            self.showNormal()
++            # Return to the state the window had before, not always "normal".
++            if self._maximized_before_fullscreen:
++                self.showMaximized()
++            else:
++                self.showNormal()
+         else:
++            self._maximized_before_fullscreen = self.isMaximized()
+             self.showFullScreen()
+         self.fullscreen_button.setText("❐" if self.isFullScreen() else "⛶")
+         title = "Выйти из полного экрана (Esc)" if self.isFullScreen() else "Полный экран (F11)"
+diff --git a/tests/gui/test_launcher_qa_regressions.py b/tests/gui/test_launcher_qa_regressions.py
+new file mode 100644
+index 0000000..4911099
+--- /dev/null
++++ b/tests/gui/test_launcher_qa_regressions.py
+@@ -0,0 +1,281 @@
++"""Regression tests for defects found by the independent QA review.
++
++Each defect test failed against the code it was written for; the "ordinary
++drag" and "normal window" tests are controls that passed before and must keep
++passing. Everything drives real Qt widgets offscreen and never touches Android:
++"live test" below is the editor's dry-run mode, which sends nothing anywhere.
++"""
++
++from __future__ import annotations
++
++import os
++from pathlib import Path
++
++import pytest
++
++_QT_APP = None
++
++
++@pytest.fixture(scope="session")
++def qt_app():
++    os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
++    try:
++        from PySide6.QtWidgets import QApplication
++    except ImportError as exc:
++        pytest.skip(f"Qt runtime not available: {exc}")
++    global _QT_APP
++    _QT_APP = QApplication.instance() or QApplication([])
++    yield _QT_APP
++    _QT_APP.closeAllWindows()
++    _QT_APP.processEvents()
++
++
++@pytest.fixture
++def window(qt_app, tmp_path: Path):
++    from lynxdroid.core.paths import AppPaths
++    from lynxdroid.gui.launcher import LauncherWindow
++
++    paths = AppPaths.resolve(tmp_path)
++    paths.ensure()
++    widget = LauncherWindow(paths)
++    widget.show()
++    qt_app.processEvents()
++    yield widget
++    widget.close()
++    qt_app.processEvents()
++    import shiboken6
++
++    shiboken6.delete(widget)
++
++
++@pytest.fixture
++def editor(window, qt_app, tmp_path: Path):
++    import shiboken6
++
++    from lynxdroid.gui.control_editor import ControlEditor
++
++    widget = ControlEditor(tmp_path / "controls.json", window)
++    widget.show()
++    qt_app.processEvents()
++    yield widget
++    widget.end_live_test()
++    widget._baseline = widget._snapshot()  # nothing to confirm on close
++    widget.close()
++    shiboken6.delete(widget)
++
++
++def _move_without_buttons(canvas, x: float, y: float) -> None:
++    """Deliver a mouse move with no button held (QTest keeps the pressed state)."""
++    from PySide6.QtCore import QEvent, QPointF, Qt
++    from PySide6.QtGui import QMouseEvent
++    from PySide6.QtWidgets import QApplication
++
++    local = QPointF(x, y)
++    event = QMouseEvent(
++        QEvent.Type.MouseMove,
++        local,
++        canvas.mapToGlobal(local),
++        Qt.MouseButton.NoButton,
++        Qt.MouseButton.NoButton,
++        Qt.KeyboardModifier.NoModifier,
++    )
++    QApplication.sendEvent(canvas, event)
++
++
++def _key_event(kind, key: int, text: str, scan_code: int = 0):
++    from PySide6.QtCore import Qt
++    from PySide6.QtGui import QKeyEvent
++
++    return QKeyEvent(kind, key, Qt.KeyboardModifier.NoModifier, scan_code, 0, 0, text)
++
++
++def _press_on_control(canvas, x: float, y: float) -> None:
++    from PySide6.QtCore import QPoint, Qt
++    from PySide6.QtTest import QTest
++
++    QTest.mousePress(
++        canvas,
++        Qt.MouseButton.LeftButton,
++        pos=QPoint(round(canvas.width() * x), round(canvas.height() * y)),
++    )
++
++
++def _reset_qtest_buttons(canvas) -> None:
++    from PySide6.QtCore import QPoint, Qt
++    from PySide6.QtTest import QTest
++
++    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=QPoint(1, 1))
++
++
++def test_drag_does_not_continue_after_the_canvas_loses_focus(editor, qt_app) -> None:
++    from PySide6.QtCore import QEvent
++    from PySide6.QtGui import QFocusEvent
++    from PySide6.QtWidgets import QApplication
++
++    editor.place(0.25, 0.25)
++    canvas = editor.canvas
++    _press_on_control(canvas, 0.25, 0.25)
++    assert canvas.dragging
++    # Alt+Tab, a dialog or a notification takes focus; the release never arrives.
++    QApplication.sendEvent(canvas, QFocusEvent(QEvent.Type.FocusOut))
++    assert not canvas.dragging
++    _move_without_buttons(canvas, canvas.width() * 0.7, canvas.height() * 0.6)
++    assert editor.controls[0]["x"] == pytest.approx(0.25)
++    assert editor.controls[0]["y"] == pytest.approx(0.25)
++    _reset_qtest_buttons(canvas)
++
++
++def test_drag_stops_when_the_button_release_was_lost(editor, qt_app) -> None:
++    editor.place(0.25, 0.25)
++    canvas = editor.canvas
++    _press_on_control(canvas, 0.25, 0.25)
++    # No focus change and no release event: the pointer comes back with no button held.
++    _move_without_buttons(canvas, canvas.width() * 0.7, canvas.height() * 0.6)
++    assert not canvas.dragging
++    assert editor.controls[0]["x"] == pytest.approx(0.25)
++    assert editor.controls[0]["y"] == pytest.approx(0.25)
++    _reset_qtest_buttons(canvas)
++
++
++def test_ordinary_drag_still_moves_the_control(editor, qt_app) -> None:
++    from PySide6.QtCore import QPoint, Qt
++    from PySide6.QtTest import QTest
++
++    editor.place(0.25, 0.25)
++    canvas = editor.canvas
++    _press_on_control(canvas, 0.25, 0.25)
++    end = QPoint(round(canvas.width() * 0.7), round(canvas.height() * 0.6))
++    QTest.mouseMove(canvas, end)
++    QTest.mouseRelease(canvas, Qt.MouseButton.LeftButton, pos=end)
++    assert editor.controls[0]["x"] == pytest.approx(0.7, abs=0.01)
++    assert editor.controls[0]["y"] == pytest.approx(0.6, abs=0.01)
++
++
++@pytest.mark.parametrize(
++    ("key", "text", "scan_code", "expected"),
++    [
++        pytest.param(0x46, "f", 41, "f", id="latin-layout"),
++        pytest.param(0x46, "F", 41, "f", id="latin-layout-shift"),
++        # Russian layout next to a Latin one: Qt reports Key_F, the text is Cyrillic.
++        pytest.param(0x46, "а", 41, "f", id="russian-layout-with-latin-group"),
++        pytest.param(0x46, "А", 41, "f", id="russian-layout-shift"),
++        # Only a Russian layout: Qt reports the Cyrillic code point; use the key position.
++        pytest.param(0x0410, "а", 41, "f", id="russian-layout-only"),
++        pytest.param(0x0426, "ц", 25, "w", id="russian-layout-only-w"),
++        # AZERTY: the typed Latin character wins over the physical position.
++        pytest.param(0x5A, "z", 25, "z", id="azerty-keeps-typed-letter"),
++        pytest.param(0x31, "1", 10, "1", id="digit"),
++        pytest.param(0x20, " ", 65, "", id="space-is-not-a-binding"),
++        pytest.param(0x01000030, "", 67, "", id="function-key-is-not-a-binding"),
++    ],
++)
++def test_binding_key_name_is_layout_independent(
++    qt_app, key: int, text: str, scan_code: int, expected: str
++) -> None:
++    from PySide6.QtCore import QEvent
++
++    from lynxdroid.gui.control_editor import binding_key_name
++
++    assert binding_key_name(_key_event(QEvent.Type.KeyPress, key, text, scan_code)) == expected
++
++
++@pytest.mark.parametrize(
++    ("key", "text", "scan_code"),
++    [
++        pytest.param(0x46, "а", 0, id="latin-group-available"),
++        pytest.param(0x0410, "а", 41, id="russian-only"),
++    ],
++)
++def test_live_test_reacts_to_keys_typed_with_a_russian_layout(
++    editor, qt_app, key: int, text: str, scan_code: int
++) -> None:
++    from PySide6.QtCore import QEvent
++    from PySide6.QtWidgets import QApplication
++
++    editor.kind.setCurrentText("Огонь")
++    editor.key.setText("F")
++    editor.place(0.3, 0.4)
++    editor.live_button.click()
++    assert editor.test_engine is not None
++    QApplication.sendEvent(editor.canvas, _key_event(QEvent.Type.KeyPress, key, text, scan_code))
++    assert len(editor.test_engine.active_pointers) == 1
++    QApplication.sendEvent(editor.canvas, _key_event(QEvent.Type.KeyRelease, key, text, scan_code))
++    assert not editor.test_engine.active_pointers
++
++
++def test_binding_capture_accepts_a_key_typed_with_a_russian_layout(editor, qt_app) -> None:
++    from PySide6.QtCore import QEvent
++    from PySide6.QtWidgets import QApplication
++
++    button = editor.capture_button
++    button.click()
++    assert button.armed
++    QApplication.sendEvent(button, _key_event(QEvent.Type.KeyPress, 0x46, "а", 41))
++    assert editor.key.text() == "F" and not button.armed
++
++
++def test_fullscreen_returns_to_the_maximized_state(window, qt_app) -> None:
++    window.showMaximized()
++    qt_app.processEvents()
++    if not window.isMaximized():
++        pytest.skip("this Qt platform does not report a maximized window")
++    window.toggle_fullscreen()
++    qt_app.processEvents()
++    assert window.isFullScreen()
++    window.toggle_fullscreen()
++    qt_app.processEvents()
++    assert not window.isFullScreen()
++    assert window.isMaximized()
++
++
++def test_fullscreen_returns_to_a_normal_window(window, qt_app) -> None:
++    window.showNormal()
++    qt_app.processEvents()
++    window.toggle_fullscreen()
++    qt_app.processEvents()
++    window.toggle_fullscreen()
++    qt_app.processEvents()
++    assert not window.isFullScreen() and not window.isMaximized()
++
++
++def test_refused_navigation_keeps_the_highlight_on_the_current_page(
++    window, qt_app, tmp_path, monkeypatch
++) -> None:
++    from PySide6.QtWidgets import QMessageBox
++
++    apk = tmp_path / "Game.apk"
++    apk.write_bytes(b"PK\x03\x04test")
++    window.library.add(apk)
++    window.controls_tool.click()
++    editor = window.pages.currentWidget()
++    editor.place(0.2, 0.3)  # unsaved change
++    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.No)
++    window.library_button.click()
++    assert window.pages.currentWidget() is editor
++    assert not window.library_button.isChecked()
++    assert not window.home_button.isChecked() and not window.about_button.isChecked()
++    monkeypatch.setattr(QMessageBox, "question", lambda *a: QMessageBox.StandardButton.Yes)
++    window.library_button.click()
++    assert window.pages.currentIndex() == 1 and window.library_button.isChecked()
++
++
++def test_editor_side_panel_labels_fit_or_wrap(editor, qt_app) -> None:
++    from PySide6.QtWidgets import QLabel, QScrollArea
++
++    scroll = editor.findChild(QScrollArea)
++    panel = scroll.widget()
++    margins = panel.layout().contentsMargins()
++    # The panel is at most this wide; a vertical scroll bar takes its share.
++    available = (
++        scroll.maximumWidth()
++        - scroll.verticalScrollBar().sizeHint().width()
++        - margins.left()
++        - margins.right()
++        - 2 * scroll.frameWidth()
++    )
++    too_wide = [
++        label.text()
++        for label in panel.findChildren(QLabel)
++        if not label.wordWrap() and label.fontMetrics().horizontalAdvance(label.text()) > available
++    ]
++    assert not too_wide, f"labels force a horizontal scroll bar: {too_wide}"
+-- 
+2.39.5
+

@@ -1,0 +1,282 @@
+From 6a8e287b596e325600a51d4a1fbf920ea4deedcd Mon Sep 17 00:00:00 2001
+From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 08:28:33 +0000
+Subject: [PATCH 2/4] fix: web preview keyboard layout handling and
+ profile-load race
+
+- Key capture and the live test matched event.key against [a-z0-9], so they
+  ignored every key under a non-Latin layout. Fall back to event.code.
+- A layout import that arrived while a profile was still loading or saving
+  raced with that operation; refuse it with the existing 'please wait' note.
+- The browser tests imported a layout right after opening the editor without
+  waiting for the profile load, and failed on slower machines (15/19 locally).
+  Wait for the profile first.
+
+Adds two browser regression tests.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ tests/browser/preview.test.cjs | 83 +++++++++++++++++++++++++++-------
+ web-preview/app.js             | 19 ++++++--
+ 2 files changed, 82 insertions(+), 20 deletions(-)
+
+diff --git a/tests/browser/preview.test.cjs b/tests/browser/preview.test.cjs
+index d93206e..1754a73 100644
+--- a/tests/browser/preview.test.cjs
++++ b/tests/browser/preview.test.cjs
+@@ -121,7 +121,7 @@ test('automatic reload waits for a dirty draft and resumes after save', async ()
+   version = 'before';
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls'); await addMarker(page);
++    await page.click('#open-controls'); await waitForProfile(page); await addMarker(page);
+     await page.waitForTimeout(1800); // allow the initial version request
+     version = 'after';
+     await page.waitForSelector('#editor-status:text("отложено")', {timeout: 7000});
+@@ -129,7 +129,7 @@ test('automatic reload waits for a dirty draft and resumes after save', async ()
+     const reload = page.waitForNavigation({waitUntil: 'load', timeout: 8000});
+     await page.click('#save-controls');
+     await reload;
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await waitForProfile(page);
+     assert.equal(await page.locator('#canvas .marker').count(), 1);
+   } finally { await context.close(); }
+@@ -138,7 +138,7 @@ test('automatic reload waits for a dirty draft and resumes after save', async ()
+ test('shifted release clears the physical key and clicking stop does not restart', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.selectOption('#control-kind', {label: 'Огонь'});
+     await page.locator('#control-key').fill('1'); await addMarker(page);
+     await page.click('#live-test');
+@@ -156,7 +156,7 @@ test('shifted release clears the physical key and clicking stop does not restart
+ test('layout import is validated, undoable and export does not save it', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     const imported = {schema: 1, controls: [{kind: 'Огонь', key: 'G', x: 0.4, y: 0.6}]};
+     const jsonFile = data => ({name: 'layout.json', mimeType: 'application/json', buffer: data});
+     await page.locator('#import-file').setInputFiles(jsonFile(Buffer.from(JSON.stringify(imported))));
+@@ -186,7 +186,7 @@ test('corrupt profile remains read-only and is never overwritten', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+     await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{broken'));
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await waitForProfile(page);
+     assert.equal(await page.locator('#save-controls').isDisabled(), true);
+     assert.equal(await page.locator('#import-controls').isDisabled(), true);
+@@ -204,7 +204,7 @@ test('corrupt profile remains read-only and is never overwritten', async () => {
+ test('mouse binding capture and held fire work locally', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.selectOption('#control-kind', {label: 'Огонь'});
+     await page.click('#capture-key');
+     await page.click('#capture-key');
+@@ -229,7 +229,7 @@ test('mouse binding capture and held fire work locally', async () => {
+ test('changing a binding stops the old live test before applying the edit', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.selectOption('#control-kind', {label: 'Огонь'});
+     await addMarker(page);
+     await page.click('#live-test');
+@@ -261,7 +261,7 @@ test('browser without Web Locks refuses writes without losing drafts', async ()
+     await page.locator('#file').setInputFiles(apk('Offline.apk'));
+     await page.waitForSelector('#message:text("не поддерживает защиту")');
+     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-library-v1')), null);
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await addMarker(page);
+     await page.click('#save-controls');
+     await page.waitForSelector('#editor-status:text("не поддерживает защиту")');
+@@ -275,7 +275,7 @@ test('copying a saved game layout is confirmed, undoable and never auto-saves',
+   try {
+     await page.locator('#file').setInputFiles([apk('Alpha.apk'), apk('Beta.apk')]);
+     await page.waitForFunction(() => JSON.parse(localStorage.getItem('lynxdroid-preview-library-v1') || '[]').length === 2);
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await addMarker(page);
+     await page.click('#save-controls');
+     await page.waitForSelector('#editor-status:text("Раскладка сохранена")');
+@@ -327,7 +327,7 @@ test('legacy profile migrates and reload repairs a stale valid mirror', async ()
+   try {
+     const legacy = JSON.stringify({schema: 1, controls: [{kind: 'Огонь', key: 'K', x: 0.5, y: 0.5}]});
+     await page.evaluate(value => localStorage.setItem('lynxdroid-preview-controls-v1', value), legacy);
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.waitForSelector('#canvas .marker:text("K")');
+     await page.evaluate(() => localStorage.setItem('lynxdroid-preview-controls-v1', '{"schema":1,"controls":[]}'));
+     await page.click('#reload-profile');
+@@ -345,7 +345,7 @@ test('unavailable IndexedDB leaves a legacy profile untouched and read-only', as
+     await page.goto(url);
+     const legacy = '{"schema":1,"controls":[]}';
+     await page.evaluate(value => localStorage.setItem('lynxdroid-preview-controls-v1', value), legacy);
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.waitForSelector('#editor-status:text("Сохранение отключено")');
+     assert.equal(await page.locator('#save-controls').isDisabled(), true);
+     assert.equal(await page.evaluate(() => localStorage.getItem('lynxdroid-preview-controls-v1')), legacy);
+@@ -379,7 +379,7 @@ test('simultaneous saves of one profile have exactly one winner', async () => {
+ test('control list selects overlapping markers and stays in sync with edits', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     const draft = {schema: 1, controls: [
+       {kind: 'Огонь', key: 'F', x: 0.5, y: 0.5},
+       {kind: 'Огонь', key: 'G', x: 0.5, y: 0.5}
+@@ -409,7 +409,7 @@ test('control list selects overlapping markers and stays in sync with edits', as
+ test('keyboard nudge uses small and large steps, clamps and undoes', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     const draft = {schema: 1, controls: [{kind: 'Огонь', key: 'F', x: 0.98, y: 0.5}]};
+     await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
+     await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
+@@ -428,7 +428,7 @@ test('keyboard nudge uses small and large steps, clamps and undoes', async () =>
+ test('double tap emits a delayed offline demo and cancels on focus loss', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     await page.selectOption('#control-kind', {label: 'Двойное нажатие'});
+     await addMarker(page);
+     await page.locator('#test-key').fill('F'); await page.click('#test-mapping');
+@@ -454,7 +454,7 @@ test('double tap emits a delayed offline demo and cancels on focus loss', async
+ test('multitouch markers hold independent contacts and clear on blur', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     const draft = {schema: 1, controls: [
+       {kind: 'Мультитач', key: 'F', x: 0.25, y: 0.5},
+       {kind: 'Мультитач', key: 'G', x: 0.75, y: 0.5}
+@@ -477,7 +477,7 @@ test('multitouch markers hold independent contacts and clear on blur', async ()
+ test('camera toggles and dragging follows mouse while held in offline test', async () => {
+   const {context, pages: [page]} = await freshPages();
+   try {
+-    await page.click('#open-controls');
++    await page.click('#open-controls'); await waitForProfile(page);
+     const draft = {schema: 1, controls: [
+       {kind: 'Камера', key: 'C', x: 0.3, y: 0.5},
+       {kind: 'Перетаскивание', key: 'D', x: 0.6, y: 0.5}
+@@ -500,3 +500,54 @@ test('camera toggles and dragging follows mouse while held in offline test', asy
+     assert.equal(await page.locator('#canvas .touch-point').count(), 0);
+   } finally { await context.close(); }
+ });
++
++// --- QA regressions ---------------------------------------------------------
++
++test('live test and key capture work with a non-Latin keyboard layout', async () => {
++  const {context, pages: [page]} = await freshPages();
++  try {
++    await page.click('#open-controls'); await waitForProfile(page);
++    // Russian layout: the physical F key types "а".
++    await page.click('#capture-key');
++    await page.locator('#capture-key').evaluate(el => el.dispatchEvent(new KeyboardEvent('keydown', {key:'а', code:'KeyF', bubbles:true, cancelable:true})));
++    assert.equal(await page.locator('#control-key').inputValue(), 'F');
++    await page.selectOption('#control-kind', {label: 'Огонь'});
++    await page.locator('#control-key').fill('F');
++    await addMarker(page);
++    await page.click('#live-test');
++    const send = (type, key, code) => page.locator('#canvas').evaluate((el, e) => el.dispatchEvent(new KeyboardEvent(e.type, {key: e.key, code: e.code, bubbles: true, cancelable: true})), {type, key, code});
++    await send('keydown', 'а', 'KeyF');
++    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
++    assert.match(await page.locator('#editor-status').textContent(), /удерживается: 1/);
++    await send('keyup', 'а', 'KeyF');
++    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
++    // A Latin layout that moves letters (AZERTY) keeps the typed character:
++    // the key in the F position types "q" there and must not trigger F...
++    await send('keydown', 'q', 'KeyF');
++    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
++    await send('keyup', 'q', 'KeyF');
++    // ...while a typed "f" does, wherever the key physically is.
++    await send('keydown', 'f', 'KeyU');
++    assert.equal(await page.locator('#canvas .marker.active').count(), 1);
++    await send('keyup', 'f', 'KeyU');
++    // Keys that are neither letters nor digits are still ignored.
++    await send('keydown', ' ', 'Space');
++    assert.equal(await page.locator('#canvas .marker.active').count(), 0);
++  } finally { await context.close(); }
++});
++
++test('layout import is refused while a profile is still loading or saving', async () => {
++  const {context, pages: [page]} = await freshPages();
++  try {
++    await page.click('#open-controls'); await waitForProfile(page);
++    await page.evaluate(() => setProfileBusy(true));
++    const draft = {schema: 1, controls: [{kind: 'Огонь', key: 'F', x: 0.5, y: 0.5}]};
++    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
++    await page.waitForSelector('#message:text("Подождите завершения работы с раскладкой")');
++    assert.equal(await page.locator('#canvas .marker').count(), 0);
++    await page.evaluate(() => setProfileBusy(false));
++    await page.locator('#import-file').setInputFiles({name: 'layout.json', mimeType: 'application/json', buffer: Buffer.from(JSON.stringify(draft))});
++    await page.waitForSelector('#editor-status:text("Раскладка импортирована")');
++    assert.equal(await page.locator('#canvas .marker').count(), 1);
++  } finally { await context.close(); }
++});
+diff --git a/web-preview/app.js b/web-preview/app.js
+index b6cf9ee..e78eedf 100644
+--- a/web-preview/app.js
++++ b/web-preview/app.js
+@@ -249,6 +249,14 @@ function renderControls() {
+   $('#redo-control').disabled = redoStack.length === 0;
+ }
+ function activeTouchCount() { return controls.filter(c => controlKeys(c).some(k => liveHeld.has(k))).length; }
++// Bindings are Latin letters and digits. With a non-Latin layout (for example
++// Russian) event.key is "ц" instead of "w" and the binding silently stopped
++// working: prefer the typed character, then fall back to the physical key.
++function bindingKeyName(event) {
++  if (/^[a-z0-9]$/i.test(event.key)) return event.key.toLowerCase();
++  const match = /^(?:Key([A-Z])|Digit([0-9]))$/.exec(event.code || '');
++  return match ? (match[1] || match[2]).toLowerCase() : '';
++}
+ let capturingKey = false;
+ let ignoreCaptureClick = false;
+ function cancelCapture() { capturingKey = false; $('#capture-key').textContent = 'Назначить нажатием'; }
+@@ -259,7 +267,7 @@ $('#capture-key').addEventListener('keydown', event => {
+   if (!capturingKey) return;
+   event.preventDefault();
+   if (event.key === 'Escape') cancelCapture();
+-  else if (/^[a-z0-9]$/i.test(event.key) && !event.ctrlKey && !event.altKey && !event.metaKey) { $('#control-key').value = event.key.toUpperCase(); cancelCapture(); }
++  else if (bindingKeyName(event) && !event.ctrlKey && !event.altKey && !event.metaKey) { $('#control-key').value = bindingKeyName(event).toUpperCase(); cancelCapture(); }
+ });
+ $('#capture-key').addEventListener('mousedown', event => {
+   if (!capturingKey || ![0, 2].includes(event.button)) return;
+@@ -491,8 +499,8 @@ function testUp(key) {
+ $('#canvas').addEventListener('keydown', event => {
+   if (!liveTest) return;
+   if (event.key === 'Escape') { event.preventDefault(); endLiveTest(); return; }
+-  const key = event.key.toLowerCase();
+-  if (!/^[a-z0-9]$/.test(key) || event.repeat) return;
++  const key = bindingKeyName(event);
++  if (!key || event.repeat) return;
+   event.preventDefault(); physicalKeys.set(event.code || key, key); testDown(key);
+ });
+ $('#canvas').addEventListener('keyup', event => {
+@@ -539,10 +547,13 @@ $('#reset-controls').addEventListener('click', () => {
+   if (!controls.length) return;
+   recordChange(); controls = []; selectControl(null); $('#editor-status').textContent = 'Шаблон очищен • не сохранено';
+ });
+-$('#import-controls').addEventListener('click', () => { if (controlsValid) $('#import-file').click(); });
++$('#import-controls').addEventListener('click', () => { if (controlsValid && !profileBusy) $('#import-file').click(); });
+ $('#import-file').addEventListener('change', async event => {
+   const file = event.target.files[0]; event.target.value = '';
+   if (!file) return;
++  // A profile load or save is still running: it would overwrite the import (or
++  // the import would be applied to a profile that is about to be replaced).
++  if (profileBusy) { message('Подождите завершения работы с раскладкой.'); return; }
+   const generation = profileGeneration;
+   try {
+     if (file.size > 128 * 1024) throw new Error('Файл раскладки больше 128 КБ');
+-- 
+2.39.5
+

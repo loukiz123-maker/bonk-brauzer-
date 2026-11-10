@@ -1,0 +1,72 @@
+From 16bcac96a0bde4f3010861af4dfc6b7828c6f0ca Mon Sep 17 00:00:00 2001
+From: loukiz123-maker <235840753+loukiz123-maker@users.noreply.github.com>
+Date: Tue, 10 Nov 2026 08:33:33 +0000
+Subject: [PATCH 3/4] fix: stop the Android agent from deleting a caller-chosen
+ file
+
+TouchAgentService took a socket path from an Intent extra and deleted any
+non-directory file at that path before listening. LocalServerSocket binds an
+abstract-namespace name and never creates a file, so the cleanup had nothing
+legitimate to remove; it only let whoever can start the service delete files
+with the agent's UID.
+
+The agent is still not built or run anywhere in this repository: the added
+test is a source-level guard, not evidence that the agent works.
+
+Co-authored-by: arena-agent <297053741+arena-agent@users.noreply.github.com>
+---
+ .../id/lynxdroid/agent/TouchAgentService.java     | 11 +++++------
+ tests/input/test_agent_protocol.py                | 15 +++++++++++++++
+ 2 files changed, 20 insertions(+), 6 deletions(-)
+
+diff --git a/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java b/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java
+index b3adba6..596032a 100644
+--- a/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java
++++ b/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java
+@@ -86,12 +86,11 @@ public class TouchAgentService extends Service {
+     }
+ 
+     private void serve(String path) {
+-        File socketFile = new File(path);
+-        // Remove a stale socket from a previous run; never delete a directory.
+-        if (socketFile.exists() && !socketFile.isDirectory()) {
+-            //noinspection ResultOfMethodCallIgnored
+-            socketFile.delete();
+-        }
++        // LocalServerSocket binds a name in the abstract namespace and never
++        // creates a file, so there is no stale socket file to clean up. The
++        // name arrives in an Intent extra: deleting "the file at that path"
++        // let whoever can start this service remove any file this UID may
++        // delete. Nothing on disk is touched here.
+         try {
+             server = new LocalServerSocket(new File(path).getAbsolutePath());
+             Log.i(TAG, "listening on " + path);
+diff --git a/tests/input/test_agent_protocol.py b/tests/input/test_agent_protocol.py
+index 63e7874..3242fe3 100644
+--- a/tests/input/test_agent_protocol.py
++++ b/tests/input/test_agent_protocol.py
+@@ -97,6 +97,21 @@ class TestHandshakeShape:
+         )
+ 
+ 
++class TestAgentDoesNotTouchFiles:
++    """A source-level guard, not a run of the agent (it is not built here).
++
++    The socket name comes from an Intent extra. The service used to delete
++    whatever non-directory file existed at that path before listening, although
++    its abstract-namespace socket never creates a file.
++    """
++
++    def test_the_service_never_deletes_a_file(self) -> None:
++        java = SERVICE.read_text(encoding="utf-8")
++        code = re.sub(r"//[^\n]*", "", java)  # ignore comments
++        assert not re.search(r"\.delete(OnExit)?\(", code)
++        assert "Files.delete" not in code
++
++
+ class TestDocumentationMatches:
+     def test_the_documented_frame_format_is_the_implemented_one(self) -> None:
+         readme = AGENT_README.read_text(encoding="utf-8")
+-- 
+2.39.5
+
