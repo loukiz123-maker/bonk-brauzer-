@@ -1,3 +1,4 @@
+#include <cctype>
 #include <string_view>
 #include <vector>
 
@@ -55,78 +56,6 @@ BONK_TEST(cli, selftest_command) {
   CHECK_EQ(options.value().command, Command::SelfTest);
 }
 
-BONK_TEST(cli, waydroid_launcher_options) {
-  const auto options = parse({"waydroid", "--waydroid", "/opt/bin/waydroid", "--confirm-start", "--show-ui",
-                              "--install-apk", "/home/user/game.apk", "--confirm-install", "--launch-package",
-                              "com.example.game"});
-  REQUIRE(options.is_ok());
-  CHECK_EQ(options.value().command, Command::Waydroid);
-  CHECK_EQ(options.value().waydroid_executable, std::string("/opt/bin/waydroid"));
-  CHECK(options.value().waydroid_executable_explicit);
-  CHECK(options.value().waydroid_confirm_start);
-  CHECK(options.value().waydroid_show_ui);
-  CHECK_EQ(options.value().waydroid_install_apk, std::string("/home/user/game.apk"));
-  CHECK(options.value().waydroid_confirm_install);
-  CHECK_EQ(options.value().waydroid_launch_package, std::string("com.example.game"));
-}
-
-BONK_TEST(cli, waydroid_install_requires_per_apk_confirmation) {
-  const auto missing_confirmation = parse({"waydroid", "--install-apk", "/tmp/game.apk"});
-  REQUIRE(missing_confirmation.is_error());
-  CHECK_EQ(missing_confirmation.error().code, std::string("cli.usage"));
-
-  const auto missing_apk = parse({"waydroid", "--confirm-install"});
-  REQUIRE(missing_apk.is_error());
-  CHECK_EQ(missing_apk.error().code, std::string("cli.usage"));
-
-  const auto empty_apk = parse({"waydroid", "--install-apk", ""});
-  REQUIRE(empty_apk.is_error());
-  CHECK_EQ(empty_apk.error().code, std::string("cli.usage"));
-
-  const auto empty_package = parse({"waydroid", "--launch-package", ""});
-  REQUIRE(empty_package.is_error());
-  CHECK_EQ(empty_package.error().code, std::string("cli.usage"));
-  const auto option_as_package = parse({"waydroid", "--launch-package", "--confirm-start"});
-  REQUIRE(option_as_package.is_error());
-  CHECK_EQ(option_as_package.error().code, std::string("cli.usage"));
-}
-
-BONK_TEST(cli, waydroid_options_are_scoped_to_waydroid_command) {
-  const auto options = parse({"version", "--waydroid", "/usr/bin/waydroid"});
-  REQUIRE(options.is_error());
-  CHECK_EQ(options.error().code, std::string("cli.usage"));
-
-  const auto adb = parse({"version", "--adb", "/usr/bin/adb"});
-  REQUIRE(adb.is_error());
-  CHECK_EQ(adb.error().code, std::string("cli.usage"));
-}
-
-BONK_TEST(cli, waydroid_guest_probe_requires_adb_consent) {
-  const auto no_consent = parse({"waydroid", "--adb", "/usr/bin/adb"});
-  REQUIRE(no_consent.is_error());
-  CHECK_EQ(no_consent.error().code, std::string("cli.usage"));
-  CHECK(no_consent.error().message.find("--confirm-adb") != std::string::npos);
-
-  const auto consent_without_adb = parse({"waydroid", "--confirm-adb"});
-  REQUIRE(consent_without_adb.is_error());
-  CHECK_EQ(consent_without_adb.error().code, std::string("cli.usage"));
-
-  const auto serial_without_adb = parse({"waydroid", "--adb-serial", "192.168.240.112:5555"});
-  REQUIRE(serial_without_adb.is_error());
-  CHECK_EQ(serial_without_adb.error().code, std::string("cli.usage"));
-
-  const auto empty_serial = parse({"waydroid", "--adb", "/usr/bin/adb", "--confirm-adb", "--adb-serial", ""});
-  REQUIRE(empty_serial.is_error());
-  CHECK_EQ(empty_serial.error().code, std::string("cli.usage"));
-
-  const auto ok = parse({"waydroid", "--adb", "/usr/bin/adb", "--confirm-adb", "--adb-serial", "192.168.240.112:5555"});
-  REQUIRE(ok.is_ok());
-  CHECK_EQ(ok.value().waydroid_adb, std::string("/usr/bin/adb"));
-  CHECK(ok.value().waydroid_confirm_adb);
-  CHECK_EQ(ok.value().waydroid_adb_serial, std::string("192.168.240.112:5555"));
-}
-
-
 BONK_TEST(cli, rejects_unknown_flag) {
   const auto options = parse({"modules", "--nope"});
   REQUIRE(options.is_error());
@@ -137,6 +66,25 @@ BONK_TEST(cli, rejects_unknown_command) {
   const auto options = parse({"frobnicate"});
   REQUIRE(options.is_error());
   CHECK_EQ(options.error().code, std::string("cli.unknown_command"));
+}
+
+// The Waydroid launcher was removed on the project owner's decision: LynxDroid
+// must not depend on Waydroid. Keep it from quietly coming back.
+BONK_TEST(cli, has_no_waydroid_command_or_options) {
+  const auto command = parse({"waydroid"});
+  REQUIRE(command.is_error());
+  CHECK_EQ(command.error().code, std::string("cli.unknown_command"));
+
+  for (const std::string_view flag : {"--waydroid", "--confirm-start", "--show-ui", "--install-apk",
+                                      "--confirm-install", "--launch-package"}) {
+    const auto options = parse({"modules", flag});
+    REQUIRE(options.is_error());
+    CHECK_EQ(options.error().code, std::string("cli.unknown_flag"));
+  }
+
+  std::string help = cli_help_text();
+  for (char& c : help) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+  CHECK(help.find("waydroid") == std::string::npos);
 }
 
 BONK_TEST(cli, rejects_bad_stage_values) {
@@ -166,8 +114,6 @@ BONK_TEST(cli, help_text_lists_all_stages) {
   const std::string text = cli_help_text();
   CHECK(text.find("modules [--stage N]") != std::string::npos);
   CHECK(text.find("usage: bonk <command>") != std::string::npos);
-  CHECK(text.find("waydroid [options]") != std::string::npos);
-  CHECK(text.find("--confirm-adb") != std::string::npos);
   for (int stage = 0; stage <= 7; ++stage) {
     CHECK(text.find("  " + std::to_string(stage) + "  ") != std::string::npos);
   }

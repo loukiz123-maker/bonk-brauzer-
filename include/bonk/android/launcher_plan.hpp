@@ -1,15 +1,16 @@
 // LynxDroid launcher plan.
 //
-// The order in which a launcher may touch a Waydroid host is a safety
+// The order in which a launcher may touch a runtime backend is a safety
 // contract, not an implementation detail:
 //
 //   validate the request -> observe the runtime -> (consent) start session
 //   -> wait for running -> open the runtime UI -> install one confirmed APK
 //   -> launch one exact package -> supervise the session we own
 //
-// Encoding the order as data makes it testable without a Waydroid host and
-// keeps `bonk waydroid` from drifting into "start something because the user
-// asked for a game".
+// Encoding the order as data makes it testable without any runtime installed
+// and keeps a launcher from drifting into "start something because the user
+// asked for a game". No runtime backend executes this plan yet: the Waydroid
+// adapter that did was removed (see runtime_status.hpp).
 //
 // Nothing here spawns a process; every function is pure.
 #pragma once
@@ -19,7 +20,7 @@
 #include <string_view>
 #include <vector>
 
-#include "bonk/android/waydroid_runtime.hpp"
+#include "bonk/android/runtime_status.hpp"
 #include "bonk/core/result.hpp"
 
 namespace bonk::android {
@@ -72,12 +73,12 @@ struct LauncherPlan {
 /// Refusals (no step is ever produced alongside an error):
 ///   android.invalid_package_name        - malformed package ID
 ///   android.apk_install_consent_required - APK without per-file consent
-///   android.waydroid_start_consent_required - start needed but not confirmed
-///   android.waydroid_state_unknown      - runtime state cannot be trusted
+///   android.runtime_start_consent_required - start needed but not confirmed
+///   android.runtime_state_unknown       - runtime state cannot be trusted
 ///
 /// A request with no action at all produces an empty plan, which is how a
 /// status-only invocation is expressed.
-[[nodiscard]] Result<LauncherPlan> plan_launcher(const WaydroidStatus& current,
+[[nodiscard]] Result<LauncherPlan> plan_launcher(const RuntimeStatus& current,
                                                  const LauncherRequest& request);
 
 /// True when the request asks for at least one runtime-touching action.

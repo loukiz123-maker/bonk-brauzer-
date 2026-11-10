@@ -61,7 +61,7 @@ bool launcher_request_has_action(const LauncherRequest& request) noexcept {
 
 namespace {
 
-/// Actions that need a running Waydroid session. The ADB guest probe is
+/// Actions that need a running runtime session. The ADB guest probe is
 /// deliberately excluded: it is read-only and reports honestly even when the
 /// session is stopped (`not-connected`), so it must not force a session start.
 bool needs_running_session(const LauncherRequest& request) noexcept {
@@ -70,7 +70,7 @@ bool needs_running_session(const LauncherRequest& request) noexcept {
 
 }  // namespace
 
-Result<LauncherPlan> plan_launcher(const WaydroidStatus& current, const LauncherRequest& request) {
+Result<LauncherPlan> plan_launcher(const RuntimeStatus& current, const LauncherRequest& request) {
   // Validation runs before any runtime interaction, so a malformed request can
   // never start a session as a side effect of being rejected.
   if (!request.package_id.empty() && !valid_android_package_id(request.package_id)) {
@@ -93,17 +93,17 @@ Result<LauncherPlan> plan_launcher(const WaydroidStatus& current, const Launcher
     return Result<LauncherPlan>::success(std::move(plan));
   }
 
-  if (current.session == WaydroidState::Unknown) {
+  if (current.session == RuntimeState::Unknown) {
     return Result<LauncherPlan>::failure(Error::make(
-        "android.waydroid_state_unknown", "cannot plan Waydroid actions while its session state is unknown"));
+        "android.runtime_state_unknown", "cannot plan runtime actions while the session state is unknown"));
   }
 
-  const bool session_is_running = current.session == WaydroidState::Running;
+  const bool session_is_running = current.session == RuntimeState::Running;
   if (!session_is_running) {
     if (!request.start_confirmed) {
       return Result<LauncherPlan>::failure(Error::make(
-          "android.waydroid_start_consent_required",
-          "Waydroid is stopped; starting it requires explicit --confirm-start consent"));
+          "android.runtime_start_consent_required",
+          "the runtime is stopped; starting it requires explicit start consent"));
     }
     plan.steps.push_back({LauncherStepKind::StartSession, {}});
     plan.steps.push_back({LauncherStepKind::WaitForSession, {}});
@@ -119,7 +119,7 @@ Result<LauncherPlan> plan_launcher(const WaydroidStatus& current, const Launcher
     plan.steps.push_back({LauncherStepKind::ProbeGuest, {}});
   }
 
-  // The Waydroid UI is the initial supported display surface; apps are only
+  // The runtime's own UI is the initial display surface; apps are only
   // launched once it is up.
   const bool app_action = !request.apk_path.empty() || !request.package_id.empty();
   if (request.open_ui || request.start_confirmed || app_action) {

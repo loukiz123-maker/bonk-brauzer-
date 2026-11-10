@@ -13,6 +13,18 @@ std::string_view token_or_absent(std::string_view value) noexcept {
 
 }  // namespace
 
+std::string_view to_string(RuntimeState state) noexcept {
+  switch (state) {
+    case RuntimeState::Unknown:
+      return "unknown";
+    case RuntimeState::Stopped:
+      return "stopped";
+    case RuntimeState::Running:
+      return "running";
+  }
+  return "unknown";
+}
+
 std::string_view to_string(AppPhase phase) noexcept {
   switch (phase) {
     case AppPhase::NotRequested:
@@ -56,7 +68,7 @@ bool app_is_running(const EngineSnapshot& snapshot) noexcept {
   return snapshot.app.foreground_confirmed;
 }
 
-EngineSnapshot make_engine_snapshot(const WaydroidStatus& status, bool owned) {
+EngineSnapshot make_engine_snapshot(const RuntimeStatus& status, bool owned) {
   EngineSnapshot snapshot;
   snapshot.runtime.session = status.session;
   snapshot.runtime.container = status.container;
@@ -64,7 +76,7 @@ EngineSnapshot make_engine_snapshot(const WaydroidStatus& status, bool owned) {
   return snapshot;
 }
 
-EngineSnapshot make_engine_snapshot(const WaydroidStatus& status, bool owned, const GuestStatus& guest) {
+EngineSnapshot make_engine_snapshot(const RuntimeStatus& status, bool owned, const GuestStatus& guest) {
   EngineSnapshot snapshot = make_engine_snapshot(status, owned);
   snapshot.guest.state = guest.state;
   snapshot.guest.observed = true;

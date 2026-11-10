@@ -11,9 +11,9 @@ using namespace bonk::android;
 namespace {
 
 EngineSnapshot booted_snapshot() {
-  WaydroidStatus status;
-  status.session = WaydroidState::Running;
-  status.container = WaydroidState::Running;
+  RuntimeStatus status;
+  status.session = RuntimeState::Running;
+  status.container = RuntimeState::Running;
   GuestStatus guest;
   guest.state = GuestState::BootComplete;
   guest.serial = "192.168.240.112:5555";
@@ -24,9 +24,9 @@ EngineSnapshot booted_snapshot() {
 }  // namespace
 
 BONK_TEST(engine_state, runtime_running_is_not_guest_ready) {
-  WaydroidStatus status;
-  status.session = WaydroidState::Running;
-  status.container = WaydroidState::Running;
+  RuntimeStatus status;
+  status.session = RuntimeState::Running;
+  status.container = RuntimeState::Running;
 
   const EngineSnapshot snapshot = make_engine_snapshot(status, /*owned=*/false);
 
@@ -38,8 +38,8 @@ BONK_TEST(engine_state, runtime_running_is_not_guest_ready) {
 }
 
 BONK_TEST(engine_state, unobserved_guest_never_renders_as_a_state) {
-  WaydroidStatus status;
-  status.session = WaydroidState::Running;
+  RuntimeStatus status;
+  status.session = RuntimeState::Running;
   EngineSnapshot snapshot = make_engine_snapshot(status, false);
   // Even a caller that sets a state must not have it rendered as observed.
   snapshot.guest.state = GuestState::BootComplete;
@@ -60,7 +60,7 @@ BONK_TEST(engine_state, boot_complete_guest_is_ready_for_app_actions) {
 
 BONK_TEST(engine_state, guest_ready_requires_a_running_owned_session_state) {
   EngineSnapshot snapshot = booted_snapshot();
-  snapshot.runtime.session = WaydroidState::Stopped;
+  snapshot.runtime.session = RuntimeState::Stopped;
 
   CHECK(snapshot.guest.observed);
   CHECK(!guest_ready_for_app_actions(snapshot));
@@ -134,7 +134,7 @@ BONK_TEST(engine_state, rendered_snapshot_is_line_oriented_and_greppable) {
 }
 
 BONK_TEST(engine_state, unknown_values_render_without_blank_tokens) {
-  WaydroidStatus status;  // both unknown
+  RuntimeStatus status;  // both unknown
   EngineSnapshot snapshot = make_engine_snapshot(status, false);
 
   const std::string rendered = render_engine_snapshot(snapshot);
@@ -145,8 +145,8 @@ BONK_TEST(engine_state, unknown_values_render_without_blank_tokens) {
 }
 
 BONK_TEST(engine_state, detail_lines_are_kept_out_of_state_tokens) {
-  WaydroidStatus status;
-  status.session = WaydroidState::Running;
+  RuntimeStatus status;
+  status.session = RuntimeState::Running;
   GuestStatus guest;
   guest.state = GuestState::BootComplete;
   guest.detail = "Android reports sys.boot_completed=1; app/game readiness is not checked";

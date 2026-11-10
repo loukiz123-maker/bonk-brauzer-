@@ -39,8 +39,8 @@ std::size_t index_of(const std::vector<LauncherStepKind>& kinds, LauncherStepKin
   return kinds.size();
 }
 
-WaydroidStatus state(WaydroidState session) {
-  WaydroidStatus status;
+RuntimeStatus state(RuntimeState session) {
+  RuntimeStatus status;
   status.session = session;
   status.container = session;
   return status;
@@ -50,7 +50,7 @@ WaydroidStatus state(WaydroidState session) {
 
 BONK_TEST(launcher_plan, status_only_request_plans_nothing) {
   const LauncherRequest request;
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Running), request);
 
   REQUIRE(plan.is_ok());
   CHECK(plan.value().steps.empty());
@@ -62,17 +62,17 @@ BONK_TEST(launcher_plan, stopped_session_without_consent_is_refused) {
   LauncherRequest request;
   request.package_id = "com.example.game";
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), request);
 
   REQUIRE(plan.is_error());
-  CHECK_EQ(plan.error().code, std::string("android.waydroid_start_consent_required"));
+  CHECK_EQ(plan.error().code, std::string("android.runtime_start_consent_required"));
 }
 
 BONK_TEST(launcher_plan, confirmed_start_owns_the_session_and_supervises_it) {
   LauncherRequest request;
   request.start_confirmed = true;
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), request);
 
   REQUIRE(plan.is_ok());
   CHECK(plan.value().owns_session);
@@ -90,7 +90,7 @@ BONK_TEST(launcher_plan, running_session_is_never_adopted) {
   request.start_confirmed = true;
   request.package_id = "com.example.game";
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Running), request);
 
   REQUIRE(plan.is_ok());
   CHECK(!plan.value().owns_session);
@@ -105,10 +105,10 @@ BONK_TEST(launcher_plan, unknown_state_blocks_every_action) {
   LauncherRequest request;
   request.open_ui = true;
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Unknown), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Unknown), request);
 
   REQUIRE(plan.is_error());
-  CHECK_EQ(plan.error().code, std::string("android.waydroid_state_unknown"));
+  CHECK_EQ(plan.error().code, std::string("android.runtime_state_unknown"));
 }
 
 BONK_TEST(launcher_plan, invalid_package_is_refused_before_any_runtime_step) {
@@ -116,7 +116,7 @@ BONK_TEST(launcher_plan, invalid_package_is_refused_before_any_runtime_step) {
   request.start_confirmed = true;
   request.package_id = "not a package";
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), request);
 
   REQUIRE(plan.is_error());
   CHECK_EQ(plan.error().code, std::string("android.invalid_package_name"));
@@ -127,14 +127,14 @@ BONK_TEST(launcher_plan, apk_without_per_file_consent_is_refused_before_starting
   request.start_confirmed = true;
   request.apk_path = "/home/user/game.apk";  // install_confirmed stays false
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), request);
 
   REQUIRE(plan.is_error());
   CHECK_EQ(plan.error().code, std::string("android.apk_install_consent_required"));
 }
 
 BONK_TEST(launcher_plan, full_game_flow_is_ordered_and_complete) {
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Stopped), game_request());
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Stopped), game_request());
 
   REQUIRE(plan.is_ok());
   const std::vector<LauncherStepKind> kinds = kinds_of(plan);
@@ -155,7 +155,7 @@ BONK_TEST(launcher_plan, guest_probe_precedes_ui_and_app_actions) {
   LauncherRequest request = game_request();
   request.probe_guest = true;
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Running), request);
 
   REQUIRE(plan.is_ok());
   const std::vector<LauncherStepKind> kinds = kinds_of(plan);
@@ -168,7 +168,7 @@ BONK_TEST(launcher_plan, probe_only_request_does_not_open_the_ui) {
   LauncherRequest request;
   request.probe_guest = true;
 
-  const Result<LauncherPlan> plan = plan_launcher(state(WaydroidState::Running), request);
+  const Result<LauncherPlan> plan = plan_launcher(state(RuntimeState::Running), request);
 
   REQUIRE(plan.is_ok());
   const std::vector<LauncherStepKind> kinds = kinds_of(plan);

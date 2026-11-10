@@ -6,7 +6,7 @@
 // live Android evidence.
 //
 // Layers:
-//   runtime : host process/service state (Waydroid session + container)
+//   runtime : host process/service state of the runtime backend (see runtime_status.hpp)
 //   guest   : Android guest reachability (ADB transport + sys.boot_completed)
 //   app     : request/command result for one package ID (never app readiness)
 //   input   : whether an input command was sent, and whether the guest witnessed it
@@ -19,21 +19,21 @@
 #include <string_view>
 
 #include "bonk/android/adb_client.hpp"
-#include "bonk/android/waydroid_runtime.hpp"
+#include "bonk/android/runtime_status.hpp"
 
 namespace bonk::android {
 
 /// Host-side runtime observation. `owned` is true only when this launcher
 /// process started the foreground session and is responsible for stopping it.
 struct RuntimeObservation {
-  WaydroidState session = WaydroidState::Unknown;
-  WaydroidState container = WaydroidState::Unknown;
+  RuntimeState session = RuntimeState::Unknown;
+  RuntimeState container = RuntimeState::Unknown;
   bool owned = false;
   std::string detail;
 
   /// True only when the session reports running. A running session does not
   /// mean the guest booted and says nothing about the app.
-  [[nodiscard]] bool session_running() const noexcept { return session == WaydroidState::Running; }
+  [[nodiscard]] bool session_running() const noexcept { return session == RuntimeState::Running; }
 };
 
 /// Android guest observation. `observed` is false until an ADB query actually
@@ -109,8 +109,8 @@ struct EngineSnapshot {
 
 /// Builds a snapshot from the observations that are actually available.
 /// `guest` and `app` default to the honest "not observed / not requested".
-[[nodiscard]] EngineSnapshot make_engine_snapshot(const WaydroidStatus& status, bool owned);
-[[nodiscard]] EngineSnapshot make_engine_snapshot(const WaydroidStatus& status, bool owned,
+[[nodiscard]] EngineSnapshot make_engine_snapshot(const RuntimeStatus& status, bool owned);
+[[nodiscard]] EngineSnapshot make_engine_snapshot(const RuntimeStatus& status, bool owned,
                                                  const GuestStatus& guest);
 
 }  // namespace bonk::android

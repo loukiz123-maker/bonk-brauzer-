@@ -27,7 +27,6 @@ const CommandEntry kCommands[] = {
     {"help", Command::Help},         {"version", Command::Version}, {"modules", Command::Modules},
     {"selftest", Command::SelfTest}, {"render", Command::Render},   {"dom", Command::DumpDom},
     {"fetch", Command::Fetch},       {"view", Command::View},      {"js", Command::Js},
-    {"waydroid", Command::Waydroid},
 };
 
 }  // namespace
@@ -91,38 +90,6 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.show_diagnostics = true;
       continue;
     }
-    if (arg == "--confirm-start") {
-      options.waydroid_confirm_start = true;
-      continue;
-    }
-    if (arg == "--confirm-install") {
-      options.waydroid_confirm_install = true;
-      continue;
-    }
-    if (arg == "--show-ui") {
-      options.waydroid_show_ui = true;
-      continue;
-    }
-    if (arg == "--adb") {
-      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--adb requires an executable path"));
-      options.waydroid_adb = args[++i];
-      if (options.waydroid_adb.empty()) {
-        return Result<CliOptions>::failure(usage_error("--adb executable path cannot be empty"));
-      }
-      continue;
-    }
-    if (arg == "--adb-serial") {
-      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--adb-serial requires a device serial"));
-      options.waydroid_adb_serial = args[++i];
-      if (options.waydroid_adb_serial.empty() || options.waydroid_adb_serial.front() == '-') {
-        return Result<CliOptions>::failure(usage_error("--adb-serial requires a device serial, not an option"));
-      }
-      continue;
-    }
-    if (arg == "--confirm-adb") {
-      options.waydroid_confirm_adb = true;
-      continue;
-    }
     if (arg == "-o" || arg == "--out") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--out requires a path"));
       options.output = args[++i];
@@ -145,31 +112,6 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
     if (arg == "--font") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--font requires a path"));
       options.font_path = args[++i];
-      continue;
-    }
-    if (arg == "--waydroid") {
-      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--waydroid requires an executable path"));
-      options.waydroid_executable = args[++i];
-      if (options.waydroid_executable.empty()) {
-        return Result<CliOptions>::failure(usage_error("--waydroid executable path cannot be empty"));
-      }
-      options.waydroid_executable_explicit = true;
-      continue;
-    }
-    if (arg == "--install-apk") {
-      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--install-apk requires an APK path"));
-      options.waydroid_install_apk = args[++i];
-      if (options.waydroid_install_apk.empty()) {
-        return Result<CliOptions>::failure(usage_error("--install-apk path cannot be empty"));
-      }
-      continue;
-    }
-    if (arg == "--launch-package") {
-      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--launch-package requires a package ID"));
-      options.waydroid_launch_package = args[++i];
-      if (options.waydroid_launch_package.empty() || options.waydroid_launch_package.front() == '-') {
-        return Result<CliOptions>::failure(usage_error("--launch-package requires a package ID, not an option"));
-      }
       continue;
     }
     if (arg == "--css") {
@@ -268,32 +210,6 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       return Result<CliOptions>::failure(usage_error("--debug-boxes/--dump-layout are only valid for `bonk render`"));
     }
   }
-  const bool has_waydroid_options = options.waydroid_executable_explicit || !options.waydroid_install_apk.empty() ||
-                                    !options.waydroid_launch_package.empty() ||
-                                    options.waydroid_confirm_start || options.waydroid_confirm_install ||
-                                    options.waydroid_show_ui || !options.waydroid_adb.empty() ||
-                                    !options.waydroid_adb_serial.empty() || options.waydroid_confirm_adb;
-  if (options.command != Command::Waydroid && has_waydroid_options) {
-    return Result<CliOptions>::failure(usage_error("Waydroid options are only valid for `bonk waydroid`"));
-  }
-  if (options.command == Command::Waydroid) {
-    if (options.waydroid_confirm_install && options.waydroid_install_apk.empty()) {
-      return Result<CliOptions>::failure(usage_error("--confirm-install requires --install-apk PATH"));
-    }
-    if (!options.waydroid_install_apk.empty() && !options.waydroid_confirm_install) {
-      return Result<CliOptions>::failure(usage_error("--install-apk requires separate --confirm-install consent"));
-    }
-    if (options.waydroid_confirm_adb && options.waydroid_adb.empty()) {
-      return Result<CliOptions>::failure(usage_error("--confirm-adb requires --adb PATH"));
-    }
-    if (!options.waydroid_adb.empty() && !options.waydroid_confirm_adb) {
-      return Result<CliOptions>::failure(
-          usage_error("--adb requires separate --confirm-adb consent: it may start the user-level ADB server"));
-    }
-    if (!options.waydroid_adb_serial.empty() && options.waydroid_adb.empty()) {
-      return Result<CliOptions>::failure(usage_error("--adb-serial requires --adb PATH"));
-    }
-  }
   return Result<CliOptions>::success(std::move(options));
 }
 
@@ -312,17 +228,6 @@ std::string cli_help_text() {
   out += "                    --scroll N            start scrolled down N pixels\n";
   out += "                    --click X,Y           click before screenshotting\n";
   out += "  js <file.js|code> run a script in the engine (own lexer, parser, interpreter)\n";
-  out += "  waydroid [options]  inspect or launch the installed Linux Waydroid runtime\n";
-  out += "                       stays foreground when Bonk starts the session; Ctrl-C stops it\n";
-  out += "    --waydroid PATH       Waydroid executable (default /usr/bin/waydroid)\n";
-  out += "    --confirm-start      explicitly allow starting a stopped host session\n";
-  out += "    --show-ui            open Waydroid's full UI (requires a running session)\n";
-  out += "    --install-apk PATH  install this APK; pair with --confirm-install\n";
-  out += "    --confirm-install   confirm installation of the selected APK only\n";
-  out += "    --launch-package ID launch this exact Android package\n";
-  out += "    --adb PATH           observe the Android guest over this ADB binary\n";
-  out += "    --confirm-adb        consent to ADB use (may start the user ADB server)\n";
-  out += "    --adb-serial SERIAL  select the transport used for the guest probe\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";
   out += "  selftest          run fast runtime invariant checks\n";

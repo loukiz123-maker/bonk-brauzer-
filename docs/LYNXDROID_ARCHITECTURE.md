@@ -1,24 +1,24 @@
 # LynxDroid: standalone Android gaming engine architecture
 
-**Status:** architecture draft for a Linux-hosted Android gaming runtime. Waydroid is the current prototype candidate, not a guaranteed or final backend. This document does not declare compatibility with every game or with BlueStacks. It also does not authorize or implement a connection to the legacy Android agent.
+**Status:** architecture draft for a Linux-hosted Android gaming runtime. **No runtime backend is selected.** Waydroid was a prototype candidate and has been removed by the project owner's decision of 2026-11-10: LynxDroid must not depend on Waydroid. Do not reintroduce it without a new explicit decision. This document does not declare compatibility with every game or with BlueStacks. It also does not authorize or implement a connection to the legacy Android agent.
 
 ## Product boundary
 
-LynxDroid is a standalone runtime launcher and guest-control product. It must not depend on Bonk's browser window, DOM, X11 event loop, or browser storage. In this checkout, `bonk waydroid` is a command-line launcher around a user-installed Waydroid CLI; it opens Waydroid's own UI. It is not yet the standalone graphical launcher, an embedded display surface, or a complete game-control product.
+LynxDroid is a standalone runtime launcher and guest-control product. It must not depend on Bonk's browser window, DOM, X11 event loop, or browser storage. In this checkout there is no launcher command and no runtime adapter: the former `bonk waydroid` command and its adapter were removed. What remains is a set of runtime-neutral host-side library blocks (process supervision, ADB guest operations, layered engine state, launcher plan, typed input actions) covered by unit tests. It is not a standalone graphical launcher, an embedded display surface, or a game-control product, and it does not start Android.
 
 ```text
 LynxDroid UI / CLI (user session; explicit consent)
            │ local, versioned control API — interface not frozen
            ▼
 LynxDroid host controller (unprivileged)
-   ├── Runtime backend: Waydroid session lifecycle
+   ├── Runtime backend: NOT SELECTED (no adapter in the tree)
    ├── Guest bridge: selected Android guest / ADB operations
    ├── App workflow: selected APK + exact package ID
    ├── Frame provider: not implemented as a stream
    └── Input provider: coarse ADB commands; in-guest delivery unverified
            │                         │
            ▼                         ▼
-Waydroid host service/container   Android guest/apps
+Runtime backend (not selected)    Android guest/apps
 ```
 
 The runtime process, Android guest, app, frame stream, and input delivery are separate capabilities and must not be collapsed into one `running` flag.
@@ -33,23 +33,25 @@ Keep at least these independent observations in API/UI responses:
 - **Input:** requested, transport accepted/rejected, and—only with an in-guest witness—observed by the target app. A successful `adb shell input` exit code alone cannot establish delivery to the game.
 - **Frames:** unavailable, snapshot available, or streaming. A single PNG screenshot is not a frame stream and must not be reported as interactive video.
 
-These layers are now represented explicitly in `include/bonk/android/engine_state.hpp` and rendered by `bonk waydroid` as stable `engine ...` lines. The renderer is the contract the host runbook greps; a state is only printed as fact when it was actually observed. Only the controller that explicitly started a runtime may stop its owned foreground process. Waydroid session termination can affect a shared host container, so ownership and the stop consequence must be visible. Never take over or stop a pre-existing session implicitly.
+These layers are represented explicitly in `include/bonk/android/engine_state.hpp` and rendered by `render_engine_snapshot()` as stable `engine ...` lines; the runtime layer uses the backend-neutral `RuntimeState` / `RuntimeStatus` types from `include/bonk/android/runtime_status.hpp`. No command prints these lines at present. A state is only rendered as fact when it was actually observed. Only the controller that explicitly started a runtime may stop its owned foreground process. Stopping a runtime session can affect a shared host service, container, or VM, so ownership and the stop consequence must be visible. Never take over or stop a pre-existing session implicitly.
 
 ## Startup and game-launch flow
 
-1. **Inspect, read-only.** Query the installed Waydroid CLI and report session/container state. Do not initialize images, download system files, use `sudo`, or alter host permissions.
-2. **Preflight the desktop session.** Check that the selected executable and current user Wayland/D-Bus environment are usable. Binder/GPU availability and image initialization need target-host validation; do not infer them from process creation.
-3. **Obtain explicit start consent.** If Waydroid is stopped, start only after the user confirms. Supervise the foreground session and wait for `waydroid status` to report running, bounded by a timeout. If a session was already running, do not claim ownership.
-4. **Open the runtime UI.** The initial supported display is Waydroid's own window. Embedding it in Bonk or another host window is a separate compositor/frame-transport project.
+This is the target flow for whichever runtime backend is selected. The ordering and consent rules are encoded in `plan_launcher()` (`include/bonk/android/launcher_plan.hpp`) and unit-tested; nothing executes the plan today.
+
+1. **Inspect, read-only.** Query the selected runtime and report session/container state. Do not initialize images, download system files, use `sudo`, or alter host permissions.
+2. **Preflight the host.** Check that the selected executable and the host facilities the chosen backend needs are usable. Virtualization/GPU availability and image initialization need target-host validation; do not infer them from process creation.
+3. **Obtain explicit start consent.** If the runtime is stopped, start only after the user confirms. Supervise the foreground session and wait for the runtime to report running, bounded by a timeout. If a session was already running, do not claim ownership.
+4. **Open the runtime UI.** How the guest display is shown depends on the backend and is undecided. Embedding it in a host window is a separate compositor/frame-transport project.
 5. **Install only a user-selected APK.** Require a separate confirmation for that exact absolute path. Do not infer package IDs from filenames or silently replace/downgrade an install.
 6. **Launch by exact package ID.** Treat the host command result as a request result, not app readiness. Verify the guest's foreground activity or an app-side smoke-test signal.
 7. **Verify the input path inside Android.** Use a test app/agent that records received actions. Collect evidence for tap, swipe, key, and any later control mapping. Do not connect the legacy agent until its address namespace, peer/client verification, and protocol version are agreed.
-8. **Stop deliberately.** On Ctrl-C/SIGTERM, stop only the process group owned by LynxDroid and report the final runtime and guest states. Record whether the shared Waydroid container also stopped.
+8. **Stop deliberately.** On Ctrl-C/SIGTERM, stop only the process group owned by LynxDroid and report the final runtime and guest states. Record whether any shared host service or container also stopped.
 
 ## Process and module boundaries
 
 - **Launcher/controller:** user-facing consent, runtime selection, bounded orchestration, status reporting, APK choice, package ID choice.
-- **Runtime adapter:** Waydroid-specific status/start/UI/install/launch commands. It does not own Android boot semantics or change host configuration.
+- **Runtime adapter:** backend-specific status/start/UI/install/launch commands. **Not implemented** — no backend is selected and the Waydroid adapter was removed. It must not own Android boot semantics or change host configuration.
 - **Guest bridge:** ADB transport selection, guest boot polling, package and input operations. ADB server auto-start remains a separate explicit consent boundary.
 - **Frame provider:** future source of frames with width, height, pixel format, stride, rotation, sequence, and monotonic timestamp. Keep frame bytes separate from control messages; don't base64 a video stream into JSON.
 - **Input provider:** validated, typed actions (`input_action.hpp`): tap, straight-line swipe with bounded duration, single key code. Each action carries the guest viewport it was captured against and a caller-assigned sequence. Still coarse: no path gestures, key-down/up, pointer identity, or cancellation, and `observed_in_guest` stays false until an in-guest witness reports the action.
@@ -62,11 +64,11 @@ The old `TouchAgentService` and its Python client are not treated as a compatibl
 
 ## Acceptance gates
 
-Each gate requires evidence from a real target Linux/Waydroid host; synthetic CLI/ADB fakes are useful regression tests but do not satisfy these gates.
+Each gate requires evidence from a real target Linux host running the selected runtime; synthetic ADB fakes are useful regression tests but do not satisfy these gates.
 
 | Gate | Required evidence |
 |---|---|
-| Guest boot | Waydroid session/container status plus ADB device state and `sys.boot_completed` (via the consent-gated `--adb ... --confirm-adb` probe); record image/version and host environment. Evidence must show `engine guest=boot-complete observed=yes`. |
+| Guest boot | Runtime session status plus ADB device state and `sys.boot_completed` (via the consent-gated ADB probe); record image/version and host environment. Evidence must show `engine guest=boot-complete observed=yes`. |
 | Test APK | APK source/hash, exact package ID, installation result, and a guest foreground witness: `engine app=launch-command-succeeded ... foreground-confirmed=yes` from `dumpsys activity activities`. A successful CLI exit alone is insufficient. |
 | Input delivery | A test app inside Android records the expected tap/swipe/key event and coordinates/order. Capture its guest-side log or test result; host command success alone is insufficient. The `engine input ... observed-in-guest=` token must be `yes` for this gate. |
 | Frame path | Repeated frames with format/stride/rotation/sequence/timestamps and measured latency; a static PNG fixture is not evidence. |
@@ -76,11 +78,11 @@ Each gate requires evidence from a real target Linux/Waydroid host; synthetic CL
 
 | Requested result | Status | Reason |
 |---|---|---|
-| Android guest boot | **Not run** | No Waydroid/ADB, Wayland/D-Bus session, Binder device, GPU render node, or `/dev/kvm` is available. |
-| Test APK launch inside Android | **Not run** | No real guest or test APK is available; the synthetic CLI fixture is not an installable APK. |
+| Android guest boot | **Not run** | No runtime backend is selected, and no ADB, emulator/AVD, GPU render node, or `/dev/kvm` is available. |
+| Test APK launch inside Android | **Not run** | No real guest or test APK is available. |
 | Input event observed inside Android | **Not run** | No guest-side test app/agent is available to record a tap/swipe/key event. |
 
-These gates are still open; do not represent synthetic CLI/ADB fakes as live Android results.
+These gates are still open; do not represent synthetic ADB fakes as live Android results.
 
 ## Parallel QA ownership
 
