@@ -65,3 +65,32 @@ def test_real_kvm_hlt_only_when_explicitly_enabled(binary: Path) -> None:
     )
     assert result.returncode == 0, result.stderr
     assert "Android was not started" in result.stdout
+
+
+def test_guest_io_validation_on_synthetic_kvm_exits(tmp_path: Path) -> None:
+    compiler = shutil.which("cc")
+    if platform.system() != "Linux" or compiler is None:
+        pytest.skip("Linux C compiler and KVM headers required")
+    harness = Path(__file__).with_name("kvm_io_test.c")
+    target = tmp_path / "kvm-io-test"
+    result = subprocess.run(
+        [
+            compiler,
+            "-std=c11",
+            "-O2",
+            "-Wall",
+            "-Wextra",
+            "-Werror",
+            "-I",
+            str(SOURCE.parent),
+            "-o",
+            str(target),
+            str(harness),
+        ],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    result = subprocess.run([str(target)], capture_output=True, text=True, check=False)
+    assert result.returncode == 0, result.stderr

@@ -1,8 +1,8 @@
 /*
  * LynxDroid: minimal x86 KVM guest execution experiment, NOT Android.
  *
- * No external image or guest code is accepted. One built-in HLT instruction
- * runs with interrupts disabled; the process then destroys the VM. This is a
+ * No external image or guest code is accepted. A built-in test guest outputs
+ * three bytes on debug port 0xe9, halts, then the process destroys the VM. This is a
  * low-level hardware experiment, not a virtual machine manager.
  *
  * Build on x86_64 Linux: cc -std=c11 -O2 -Wall -Wextra -Werror -o kvm-hello kvm_hello.c
@@ -19,6 +19,8 @@
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
+
+#include "kvm_io.h"
 
 #if defined(__x86_64__)
 #define GUEST_MEMORY_SIZE 0x10000u
@@ -57,7 +59,12 @@ static int run_experiment(void) {
     guest_memory = mmap(NULL, GUEST_MEMORY_SIZE, PROT_READ | PROT_WRITE,
                         MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
     if (guest_memory == MAP_FAILED) { perror("guest mmap"); goto done; }
-    ((uint8_t *)guest_memory)[GUEST_CODE_ADDRESS] = 0xf4; /* x86 HLT */
+    /* mov al, byte; out 0xe9, al (three times), then hlt. */
+    static const uint8_t guest_code[] = {
+        0xb0, 'O', 0xe6, 0xe9, 0xb0, 'K', 0xe6, 0xe9,
+        0xb0, '\n', 0xe6, 0xe9, 0xf4
+    };
+    memcpy((uint8_t *)guest_memory + GUEST_CODE_ADDRESS, guest_code, sizeof(guest_code));
     memory.slot = 0;
     memory.guest_phys_addr = 0;
     memory.memory_size = GUEST_MEMORY_SIZE;
@@ -88,21 +95,34 @@ static int run_experiment(void) {
     sigemptyset(&action.sa_mask);
     if (sigaction(SIGALRM, &action, &old_action) < 0) { perror("sigaction"); goto done; }
     alarm_installed = 1;
+    static const char expected[] = "OK\n";
+    size_t received = 0;
     alarm(5);
-    int status = ioctl(vcpu_fd, KVM_RUN, 0);
-    int run_errno = errno;
-    alarm(0);
-    if (status < 0) {
-        errno = run_errno;
-        if (timed_out && errno == EINTR) fprintf(stderr, "KVM_RUN timed out after 5 seconds\n");
-        else perror("KVM_RUN");
-        goto done;
+    for (unsigned int exits = 0; exits < 4; ++exits) {
+        if (timed_out) { fprintf(stderr, "KVM_RUN timed out after 5 seconds\n"); goto done; }
+        int status = ioctl(vcpu_fd, KVM_RUN, 0);
+        int run_errno = errno;
+        if (status < 0) {
+            errno = run_errno;
+            if (timed_out && errno == EINTR) fprintf(stderr, "KVM_RUN timed out after 5 seconds\n");
+            else perror("KVM_RUN");
+            goto done;
+        }
+        if (run->exit_reason == KVM_EXIT_IO) {
+            if (lynx_consume_output(run, run_size, expected, sizeof(expected) - 1, &received) < 0) {
+                fprintf(stderr, "Invalid or unexpected guest I/O\n"); goto done;
+            }
+        } else if (run->exit_reason == KVM_EXIT_HLT && received == sizeof(expected) - 1) {
+            alarm(0);
+            puts("KVM guest output OK and halted successfully; Android was not started.");
+            result = 0;
+            goto done;
+        } else {
+            fprintf(stderr, "Unexpected KVM exit or incomplete output: %u\n", run->exit_reason);
+            goto done;
+        }
     }
-    if (run->exit_reason != KVM_EXIT_HLT) {
-        fprintf(stderr, "Unexpected KVM exit reason: %u\n", run->exit_reason); goto done;
-    }
-    puts("KVM guest HLT executed successfully; Android was not started.");
-    result = 0;
+    fprintf(stderr, "Too many KVM exits\n");
 done:
     if (alarm_installed) { alarm(0); sigaction(SIGALRM, &old_action, NULL); }
     if (run != MAP_FAILED) munmap(run, run_size);
@@ -116,7 +136,7 @@ done:
 
 int main(int argc, char **argv) {
     if (argc != 2 || strcmp(argv[1], "--confirm") != 0) {
-        fprintf(stderr, "Usage: %s --confirm (creates a temporary VM and runs one x86 HLT)\n", argv[0]);
+        fprintf(stderr, "Usage: %s --confirm (creates a temporary VM and runs a built-in x86 test guest)\n", argv[0]);
         return 2;
     }
 #if defined(__x86_64__)
