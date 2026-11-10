@@ -392,6 +392,28 @@ BONK_TEST(android_adb, times_out_with_last_guest_state_when_boot_does_not_comple
   CHECK(status.error().message.find("not-connected") != std::string::npos);
 }
 
+BONK_TEST(android_adb, exhausted_budget_reports_boot_timeout_not_a_transport_error) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+
+  // Too little overall budget to fit a guest query. The wait must report its
+  // own expiry instead of spawning a child that is reaped as an ADB timeout.
+  const Result<android::GuestStatus> status = android::wait_for_guest_boot(
+      fake.config(), std::chrono::milliseconds{30}, std::chrono::milliseconds{5},
+      std::chrono::milliseconds{5000});
+  REQUIRE(status.is_error());
+  CHECK_EQ(status.error().code, std::string("android.guest_boot_timeout"));
+
+  // The deadline constrained the query, so a small remaining budget after a
+  // successful first poll is still a boot-wait timeout, not a transport error.
+  const Result<android::GuestStatus> tight = android::wait_for_guest_boot(
+      fake.config(), std::chrono::milliseconds{120}, std::chrono::milliseconds{5},
+      std::chrono::milliseconds{5000});
+  REQUIRE(tight.is_error());
+  CHECK_EQ(tight.error().code, std::string("android.guest_boot_timeout"));
+  CHECK(tight.error().message.find("android.adb_timeout") == std::string::npos);
+}
+
 BONK_TEST(android_adb, requires_a_running_runtime_before_querying_guest_boot) {
   FakeAdb fake;
   REQUIRE(fake.ready());

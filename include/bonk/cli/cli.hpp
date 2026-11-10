@@ -59,6 +59,11 @@ struct CliOptions {
   bool waydroid_confirm_start = false;
   bool waydroid_confirm_install = false;
   bool waydroid_show_ui = false;
+  // Read-only guest observation over ADB. Both flags are required: pointing at
+  // an adb binary is not consent to start the user-level ADB server.
+  std::string waydroid_adb;
+  std::string waydroid_adb_serial;
+  bool waydroid_confirm_adb = false;
 
   std::vector<std::string> positionals;
 };

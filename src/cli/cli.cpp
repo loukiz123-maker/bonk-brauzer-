@@ -103,6 +103,26 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
       options.waydroid_show_ui = true;
       continue;
     }
+    if (arg == "--adb") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--adb requires an executable path"));
+      options.waydroid_adb = args[++i];
+      if (options.waydroid_adb.empty()) {
+        return Result<CliOptions>::failure(usage_error("--adb executable path cannot be empty"));
+      }
+      continue;
+    }
+    if (arg == "--adb-serial") {
+      if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--adb-serial requires a device serial"));
+      options.waydroid_adb_serial = args[++i];
+      if (options.waydroid_adb_serial.empty() || options.waydroid_adb_serial.front() == '-') {
+        return Result<CliOptions>::failure(usage_error("--adb-serial requires a device serial, not an option"));
+      }
+      continue;
+    }
+    if (arg == "--confirm-adb") {
+      options.waydroid_confirm_adb = true;
+      continue;
+    }
     if (arg == "-o" || arg == "--out") {
       if (i + 1 >= args.size()) return Result<CliOptions>::failure(usage_error("--out requires a path"));
       options.output = args[++i];
@@ -251,7 +271,8 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
   const bool has_waydroid_options = options.waydroid_executable_explicit || !options.waydroid_install_apk.empty() ||
                                     !options.waydroid_launch_package.empty() ||
                                     options.waydroid_confirm_start || options.waydroid_confirm_install ||
-                                    options.waydroid_show_ui;
+                                    options.waydroid_show_ui || !options.waydroid_adb.empty() ||
+                                    !options.waydroid_adb_serial.empty() || options.waydroid_confirm_adb;
   if (options.command != Command::Waydroid && has_waydroid_options) {
     return Result<CliOptions>::failure(usage_error("Waydroid options are only valid for `bonk waydroid`"));
   }
@@ -261,6 +282,16 @@ Result<CliOptions> parse_cli_args(std::span<const std::string_view> raw_args) {
     }
     if (!options.waydroid_install_apk.empty() && !options.waydroid_confirm_install) {
       return Result<CliOptions>::failure(usage_error("--install-apk requires separate --confirm-install consent"));
+    }
+    if (options.waydroid_confirm_adb && options.waydroid_adb.empty()) {
+      return Result<CliOptions>::failure(usage_error("--confirm-adb requires --adb PATH"));
+    }
+    if (!options.waydroid_adb.empty() && !options.waydroid_confirm_adb) {
+      return Result<CliOptions>::failure(
+          usage_error("--adb requires separate --confirm-adb consent: it may start the user-level ADB server"));
+    }
+    if (!options.waydroid_adb_serial.empty() && options.waydroid_adb.empty()) {
+      return Result<CliOptions>::failure(usage_error("--adb-serial requires --adb PATH"));
     }
   }
   return Result<CliOptions>::success(std::move(options));
@@ -289,6 +320,9 @@ std::string cli_help_text() {
   out += "    --install-apk PATH  install this APK; pair with --confirm-install\n";
   out += "    --confirm-install   confirm installation of the selected APK only\n";
   out += "    --launch-package ID launch this exact Android package\n";
+  out += "    --adb PATH           observe the Android guest over this ADB binary\n";
+  out += "    --confirm-adb        consent to ADB use (may start the user ADB server)\n";
+  out += "    --adb-serial SERIAL  select the transport used for the guest probe\n";
   out += "  modules [--stage N] [--markdown]   list engine modules and their stage\n";
   out += "  version [--full]  print version (and toolchain)\n";
   out += "  selftest          run fast runtime invariant checks\n";

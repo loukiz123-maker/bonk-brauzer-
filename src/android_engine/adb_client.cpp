@@ -30,6 +30,9 @@ constexpr auto kMaxAdbCommandTimeout = std::chrono::minutes{1};
 constexpr auto kMaxAdbSwipeDuration = std::chrono::seconds{30};
 constexpr auto kMaxGuestBootWaitTimeout = std::chrono::minutes{5};
 constexpr auto kMaxGuestBootPollInterval = std::chrono::seconds{30};
+// Smallest per-query budget worth spawning an ADB process for. Below this the
+// remaining overall budget is treated as expired.
+constexpr auto kMinGuestBootQueryBudget = std::chrono::milliseconds{20};
 
 bool ascii_alpha(unsigned char character) {
   return (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z');
@@ -407,7 +410,11 @@ Result<GuestStatus> wait_for_guest_boot_impl(EngineSession* session, const AdbCo
     // A guest-state query can use up to two ADB processes (devices + getprop).
     // Halve the remaining budget so both commands fit within the overall wait.
     const auto query_command_timeout = std::min(command_timeout, remaining / 2);
-    if (query_command_timeout.count() <= 0) {
+    // When the remaining budget is already too small to fit one query, that is
+    // the overall wait expiring - not an ADB failure. Spawning a child process
+    // with a near-zero budget would be reaped as `android.adb_timeout`, which
+    // misreports a plain boot-wait timeout as a transport error.
+    if (query_command_timeout < kMinGuestBootQueryBudget) {
       return guest_boot_timeout(have_last_status ? &last_status : nullptr);
     }
 
@@ -416,6 +423,12 @@ Result<GuestStatus> wait_for_guest_boot_impl(EngineSession* session, const AdbCo
       if (session != nullptr) {
         const Status runtime_status = require_running_runtime(session, true);
         if (runtime_status.is_error()) return Result<GuestStatus>::failure(runtime_status.error());
+      }
+      // A query that ran out of time inside the overall budget is also the
+      // overall wait expiring when the deadline is what constrained it.
+      if (current.error().code == "android.adb_timeout" &&
+          query_command_timeout < command_timeout) {
+        return guest_boot_timeout(have_last_status ? &last_status : nullptr);
       }
       return Result<GuestStatus>::failure(current.error());
     }

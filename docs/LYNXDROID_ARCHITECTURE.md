@@ -33,7 +33,7 @@ Keep at least these independent observations in API/UI responses:
 - **Input:** requested, transport accepted/rejected, and—only with an in-guest witness—observed by the target app. A successful `adb shell input` exit code alone cannot establish delivery to the game.
 - **Frames:** unavailable, snapshot available, or streaming. A single PNG screenshot is not a frame stream and must not be reported as interactive video.
 
-Only the controller that explicitly started a runtime may stop its owned foreground process. Waydroid session termination can affect a shared host container, so ownership and the stop consequence must be visible. Never take over or stop a pre-existing session implicitly.
+These layers are now represented explicitly in `include/bonk/android/engine_state.hpp` and rendered by `bonk waydroid` as stable `engine ...` lines. The renderer is the contract the host runbook greps; a state is only printed as fact when it was actually observed. Only the controller that explicitly started a runtime may stop its owned foreground process. Waydroid session termination can affect a shared host container, so ownership and the stop consequence must be visible. Never take over or stop a pre-existing session implicitly.
 
 ## Startup and game-launch flow
 
@@ -66,9 +66,9 @@ Each gate requires evidence from a real target Linux/Waydroid host; synthetic CL
 
 | Gate | Required evidence |
 |---|---|
-| Guest boot | Waydroid session/container status plus ADB device state and `sys.boot_completed`; record image/version and host environment. |
+| Guest boot | Waydroid session/container status plus ADB device state and `sys.boot_completed` (via the consent-gated `--adb ... --confirm-adb` probe); record image/version and host environment. Evidence must show `engine guest=boot-complete observed=yes`. |
 | Test APK | APK source/hash, exact package ID, installation result, guest foreground activity or an app-side readiness signal. A successful CLI exit alone is insufficient. |
-| Input delivery | A test app inside Android records the expected tap/swipe/key event and coordinates/order. Capture its guest-side log or test result; host command success alone is insufficient. |
+| Input delivery | A test app inside Android records the expected tap/swipe/key event and coordinates/order. Capture its guest-side log or test result; host command success alone is insufficient. The `engine input ... observed-in-guest=` token must be `yes` for this gate. |
 | Frame path | Repeated frames with format/stride/rotation/sequence/timestamps and measured latency; a static PNG fixture is not evidence. |
 | Game compatibility | Test each named game on a documented image/ABI/GPU/driver configuration. Track ARM translation, Google services/Play Integrity, DRM and anti-cheat limitations; never promise “any game” without measured evidence. |
 

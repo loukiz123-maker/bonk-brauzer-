@@ -95,7 +95,37 @@ BONK_TEST(cli, waydroid_options_are_scoped_to_waydroid_command) {
   const auto options = parse({"version", "--waydroid", "/usr/bin/waydroid"});
   REQUIRE(options.is_error());
   CHECK_EQ(options.error().code, std::string("cli.usage"));
+
+  const auto adb = parse({"version", "--adb", "/usr/bin/adb"});
+  REQUIRE(adb.is_error());
+  CHECK_EQ(adb.error().code, std::string("cli.usage"));
 }
+
+BONK_TEST(cli, waydroid_guest_probe_requires_adb_consent) {
+  const auto no_consent = parse({"waydroid", "--adb", "/usr/bin/adb"});
+  REQUIRE(no_consent.is_error());
+  CHECK_EQ(no_consent.error().code, std::string("cli.usage"));
+  CHECK(no_consent.error().message.find("--confirm-adb") != std::string::npos);
+
+  const auto consent_without_adb = parse({"waydroid", "--confirm-adb"});
+  REQUIRE(consent_without_adb.is_error());
+  CHECK_EQ(consent_without_adb.error().code, std::string("cli.usage"));
+
+  const auto serial_without_adb = parse({"waydroid", "--adb-serial", "192.168.240.112:5555"});
+  REQUIRE(serial_without_adb.is_error());
+  CHECK_EQ(serial_without_adb.error().code, std::string("cli.usage"));
+
+  const auto empty_serial = parse({"waydroid", "--adb", "/usr/bin/adb", "--confirm-adb", "--adb-serial", ""});
+  REQUIRE(empty_serial.is_error());
+  CHECK_EQ(empty_serial.error().code, std::string("cli.usage"));
+
+  const auto ok = parse({"waydroid", "--adb", "/usr/bin/adb", "--confirm-adb", "--adb-serial", "192.168.240.112:5555"});
+  REQUIRE(ok.is_ok());
+  CHECK_EQ(ok.value().waydroid_adb, std::string("/usr/bin/adb"));
+  CHECK(ok.value().waydroid_confirm_adb);
+  CHECK_EQ(ok.value().waydroid_adb_serial, std::string("192.168.240.112:5555"));
+}
+
 
 BONK_TEST(cli, rejects_unknown_flag) {
   const auto options = parse({"modules", "--nope"});
@@ -137,6 +167,7 @@ BONK_TEST(cli, help_text_lists_all_stages) {
   CHECK(text.find("modules [--stage N]") != std::string::npos);
   CHECK(text.find("usage: bonk <command>") != std::string::npos);
   CHECK(text.find("waydroid [options]") != std::string::npos);
+  CHECK(text.find("--confirm-adb") != std::string::npos);
   for (int stage = 0; stage <= 7; ++stage) {
     CHECK(text.find("  " + std::to_string(stage) + "  ") != std::string::npos);
   }

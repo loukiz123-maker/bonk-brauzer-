@@ -50,6 +50,20 @@ esac
 FAKE
 chmod +x "$tmp/waydroid"
 printf 'synthetic APK placeholder, never sent to Android\n' > "$tmp/game.apk"
+
+# Fake ADB for the read-only guest probe. It is not a real Android guest.
+cat > "$tmp/adb" <<'FAKEADB'
+#!/bin/sh
+set -eu
+log=${BONK_FAKE_ADB_LOG:?}
+printf '%s\n' "$*" >> "$log"
+case "${1-}" in
+  devices) printf 'List of devices attached\n192.168.240.112:5555\tdevice\n' ;;
+  *) printf '1\n' ;;
+esac
+FAKEADB
+chmod +x "$tmp/adb"
+export BONK_FAKE_ADB_LOG="$tmp/adb.log"
 export BONK_FAKE_WAYDROID_STATE="$tmp/state"
 export BONK_FAKE_WAYDROID_LOG="$tmp/argv.log"
 
@@ -71,7 +85,15 @@ grep -q 'not an existing regular file' "$tmp/missing-apk.log"
 
 # A no-action invocation only reports status.
 status_output=$("$bin" waydroid --waydroid "$tmp/waydroid")
-printf '%s\n' "$status_output" | grep -q 'session=stopped'
+printf '%s\n' "$status_output" | grep -q '^engine runtime=stopped'
+# A status-only run must not claim a booted guest, a launched app or frames.
+printf '%s\n' "$status_output" | grep -q '^engine guest=unknown observed=no'
+printf '%s\n' "$status_output" | grep -q '^engine app=not-requested'
+printf '%s\n' "$status_output" | grep -q '^engine frames=unavailable'
+if printf '%s\n' "$status_output" | grep -q 'boot-complete'; then
+  echo "status-only invocation claimed a booted Android guest" >&2
+  exit 1
+fi
 if grep -q '^session start$' "$BONK_FAKE_WAYDROID_LOG"; then
   echo "status-only invocation unexpectedly started Waydroid" >&2
   exit 1
@@ -142,5 +164,41 @@ grep -q "^app install $tmp/game.apk$" "$BONK_FAKE_WAYDROID_LOG"
 grep -q '^app launch com.example.game$' "$BONK_FAKE_WAYDROID_LOG"
 grep -q 'Bonk-managed Waydroid session stopped' "$tmp/owned-session.log"
 [ "$(cat "$tmp/state")" = STOPPED ]
+
+# A successful `app launch` command is a request result, never app readiness.
+if grep -q 'foreground-confirmed=yes' "$tmp/owned-session.log"; then
+  echo "launcher claimed the launched app was confirmed inside Android" >&2
+  exit 1
+fi
+grep -q '^engine input sent=no observed-in-guest=no$' "$tmp/owned-session.log"
+
+
+# Guest probe: explicit ADB consent is required, and the reported guest layer
+# comes from the probe rather than from the runtime status.
+printf RUNNING > "$tmp/state"
+: > "$BONK_FAKE_ADB_LOG"
+if "$bin" waydroid --waydroid "$tmp/waydroid" --adb "$tmp/adb" > "$tmp/no-adb-consent.log" 2>&1; then
+  echo "expected --adb without --confirm-adb to fail" >&2
+  exit 1
+fi
+grep -q -- '--confirm-adb' "$tmp/no-adb-consent.log"
+[ ! -s "$BONK_FAKE_ADB_LOG" ]
+
+guest_output=$("$bin" waydroid --waydroid "$tmp/waydroid" --adb "$tmp/adb" --confirm-adb \
+  --adb-serial 192.168.240.112:5555)
+printf '%s\n' "$guest_output" | grep -q '^engine guest=boot-complete observed=yes serial=192.168.240.112:5555'
+printf '%s\n' "$guest_output" | grep -q '^engine app=not-requested'
+# A booted guest still does not imply frames or confirmed app readiness.
+printf '%s\n' "$guest_output" | grep -q '^engine frames=unavailable'
+if printf '%s\n' "$guest_output" | grep -q 'foreground-confirmed=yes'; then
+  echo "booted-guest probe claimed a confirmed foreground app" >&2
+  exit 1
+fi
+
+# A failed probe leaves the guest unobserved instead of guessing.
+: > "$BONK_FAKE_ADB_LOG"
+failed_probe=$("$bin" waydroid --waydroid "$tmp/waydroid" --adb "$tmp/absent-adb" --confirm-adb 2>&1)
+printf '%s\n' "$failed_probe" | grep -q '^engine guest=unknown observed=no'
+printf '%s\n' "$failed_probe" | grep -q 'engine detail guest=guest probe failed:'
 
 echo "Waydroid CLI synthetic end-to-end: PASS (not a live Waydroid test)"

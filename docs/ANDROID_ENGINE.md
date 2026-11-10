@@ -186,6 +186,42 @@ Android images в репозиторий не добавляются. Польз
 
 Эта миграция требует согласования с агентом редактора и в код первого этапа не входит.
 
+## Наблюдаемое состояние движка (layered snapshot)
+
+`bonk waydroid` больше не печатает одну строку session/container. Каждый слой наблюдается отдельно и печатается стабильными machine-readable строками (`src/android_engine/engine_state.cpp`):
+
+```text
+engine runtime=stopped container=unknown owned=no
+engine guest=unknown observed=no serial=-
+engine app=not-requested package=- foreground-confirmed=no
+engine input sent=no observed-in-guest=no
+engine frames=unavailable
+```
+
+Инварианты, закреплённые тестами `engine_state` и синтетическим CLI-тестом:
+
+- `runtime=running` ничего не говорит о госте: `guest` остаётся `unknown observed=no`, пока ADB-запрос реально не выполнился. Неопрошенный гость никогда не рендерится как `boot-complete`, даже если вызывающий код выставил такое значение в структуре.
+- `guest=boot-complete` означает только `sys.boot_completed=1`, а не готовность приложения.
+- `app=launch-command-succeeded` — результат команды. `foreground-confirmed=yes` требует свидетеля внутри Android и никогда не выводится из нулевого exit code.
+- `input sent=yes` относится к хостовой команде; `observed-in-guest=yes` требует подтверждения внутри гостя.
+- `frames=unavailable` не выводится из живого гостя: одиночный PNG не является потоком.
+
+Разбор строк для evidence: `engine detail ...` содержит свободный текст и не участвует в сравнении state-токенов.
+
+### Опциональный guest probe (ADB)
+
+Read-only наблюдение гостя включается явно и только с отдельным согласием, потому что обращение к ADB может поднять user-level ADB server:
+
+```sh
+./build/bonk waydroid --adb /absolute/path/adb --confirm-adb \
+  --adb-serial 192.168.240.112:5555
+```
+
+- `--adb` без `--confirm-adb` отклоняется на разборе аргументов (`cli.usage`); ADB-процесс не запускается.
+- `--adb-serial` выбирает transport для probe и сам по себе не включает ADB.
+- Провал probe не выдумывает состояние: `guest` остаётся `unknown observed=no`, причина печатается в `engine detail guest=guest probe failed: ...`, остальной вывод команды выполняется дальше.
+- Probe не стартует сессию, не устанавливает APK и не запускает приложение.
+
 ## Runbook: первый live smoke test на целевом Linux-хосте
 
 Этот сценарий **не запускался в sandbox**. На тестовом ПК Waydroid должен быть установлен и инициализирован отдельно; выполнять команды от desktop-пользователя внутри его Wayland/D-Bus-сессии. Сначала проверять на выбранном безопасном приложении, затем на конкретной лицензированной игре.
@@ -211,6 +247,16 @@ waydroid status                         # baseline, не меняет состо
   --launch-package com.example.game
 ```
 
+После старта сессии сними guest-слой отдельным read-only probe и сохрани вывод как evidence:
+
+```sh
+./build/bonk waydroid --adb /absolute/path/adb --confirm-adb \
+  --adb-serial "$SERIAL" | tee guest-probe.log
+grep '^engine guest=' guest-probe.log      # ожидается boot-complete observed=yes
+```
+
+До `boot-complete observed=yes` установка и запуск приложения не считаются проверенными, даже если команды завершились успешно.
+
 Bonk ждёт только пока `waydroid status` покажет running (до 120 секунд), а не пока Android или игра готовы. При старте Bonk остаётся foreground; Ctrl-C посылает stop только принадлежащей ему process group, что может затронуть общий Waydroid container. Сверь `waydroid status` до и после выхода. Зафиксируй distro/kernel, Waydroid/image version и ABI, GPU/driver, APK/game version и package ID, CLI output, видимый результат запуска и факт остановки. Не считать успешный exit `app launch` доказательством готовности игры.
 
 ## Следующие проверяемые этапы
@@ -230,6 +276,8 @@ make waydroid-cli-test  # synthetic CLI flow; does not require Waydroid
 make verify
 ```
 
-Текущая host-side проверка после добавления CLI-лаунчера: `make -j2 verify` — **334 теста, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **334/334**; полный `-Werror verify` (приложение и тесты) — **334/334**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
+Текущая host-side проверка после добавления layered snapshot и guest probe: `make -j2 verify` — **349 тестов, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **349/349**; полный `-Werror verify` (приложение и тесты) — **349/349**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
+
+Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 
 Для реального Waydroid smoke test нужны пользовательская Waydroid установка, Wayland/D-Bus desktop session, Binder и GPU render device, а также выбранный тестовый APK. В sandbox отсутствуют `waydroid`, `adb`, `WAYLAND_DISPLAY`, D-Bus session address, Binder device, GPU render node и `/dev/kvm`; поэтому запуск и игра на настоящем Waydroid host здесь не проверены.
