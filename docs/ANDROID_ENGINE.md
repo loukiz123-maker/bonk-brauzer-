@@ -1,43 +1,50 @@
 # Android-движок: архитектура и проверяемые этапы
 
-**Статус:** реализованы host-side планировщик и супервизор процесса, read-only preflight, перечисление ADB-транспортов и guest-state probe с bounded wait загрузки, одиночный PNG screenshot, tap/key-команды, ограниченный линейный swipe, запрос путей установленного пакета, запуск приложения и установка явно выбранного APK по подтверждению вызывающего кода. Проверены unit-тестами и тестовым ADB shim; настоящий Android-гость/ADB/AVD в этой среде не запускались. Видеоканала и управления произвольным состоянием pointer/key нет.
+**Статус:** по запросу переключаем целевой Linux gaming-runtime с Android SDK Emulator на Waydroid — контейнерный Android с прямым доступом к host hardware, а не копию закрытого BlueStacks. Добавлены host-side Waydroid adapter и CLI-лаунчер `bonk waydroid`: read-only status, подтверждённый старт сессии, открытие full UI, установка выбранного APK и запуск точного package ID. Также остаются generic ADB и SDK Emulator APIs. Проверено сборкой, unit-тестами и synthetic CLI end-to-end shim; Waydroid, Wayland compositor, Binder, GPU acceleration и настоящие игры в этой среде отсутствуют. Поддержка «любых игр», game-control mapping и интегрированный видеоканал не заявляются. Архитектурный draft LynxDroid и host acceptance gates: [docs/LYNXDROID_ARCHITECTURE.md](LYNXDROID_ARCHITECTURE.md).
 
 ## Исходное состояние репозитория
 
-Текущий checkout — C++20-проект **Bonk Brauzer**, а не отдельный репозиторий LynxDroid. В нём есть HTML/CSS/JS-движок и X11-оболочка, но нет Android runtime, Waydroid, scrcpy, лаунчера, APK-раскладок или кода редактора управления. Поэтому этот этап добавляет отдельный host-side модуль и не меняет браузерную оболочку или чужие файлы интерфейса.
+Текущий checkout — C++20-проект **Bonk Brauzer**, а не отдельный репозиторий LynxDroid. В нём есть HTML/CSS/JS-движок и X11-оболочка, но нет установленного/поставляемого Android runtime, Waydroid image, scrcpy, GUI-игрового лаунчера, APK-раскладок или кода редактора управления. Добавлены host-side adapter и CLI-лаунчер к внешнему Waydroid; Android UI пока не встраивается в окно Bonk.
 
 Сборка проекта подхватывает новые `src/*/*.cpp` и `tests/*/*.cpp` автоматически. Проверенный до изменений базовый результат: `make -j2 verify` — 271 тест, ошибок нет.
 
 ## Архитектурное решение
 
-### Целевой runtime-кандидат
+### Целевой runtime-кандидат: Waydroid на Linux
 
-Первый проверяемый runtime-кандидат — **Android SDK Emulator с уже созданным пользователем AVD**, запускаемый как отдельный процесс. Это VM-подход, не контейнер и не Waydroid. Текущий код лишь строит argv `emulator -avd <name> [-no-window]` и управляет жизненным циклом foreground-процесса.
+После уточнения цели (игровой Android player на Linux) **Android SDK Emulator/AVD больше не считается основным gaming runtime**. Первый кандидат — пользовательская установка [Waydroid](https://github.com/waydroid/waydroid): upstream описывает его как Android в Linux-контейнере с доступом Android-системы к host hardware. Это ближе к производительности нативного Linux runtime, чем developer-oriented AVD, но это **не технология BlueStacks и не гарантия совместимости игр**.
 
-Runtime и AVD должны быть установлены/созданы пользователем самостоятельно. Приложение не скачивает образы, не принимает SDK-лицензии за пользователя, не устанавливает системные пакеты и не меняет системные настройки. Перед запуском будущий launcher должен явно попросить выбрать SDK executable и AVD; нельзя подменять это автоматической загрузкой неизвестного образа.
+BlueStacks — закрытый продукт; его внутренний runtime нельзя переиспользовать или скопировать из этого checkout. В проекте реализован отдельный adapter и CLI-лаунчер `bonk waydroid` для установленного пользователем Waydroid: read-only `waydroid status`, foreground `waydroid session start`, `waydroid show-full-ui`, `waydroid app install` и `waydroid app launch`. Adapter не скачивает/инициализирует Android images, не запускает `sudo`, не загружает kernel modules и не меняет системные права.
 
-Это выбор для первого прототипа, а не окончательный вывод о производительности или совместимости. До первого Android boot smoke test нужно проверить на целевом Linux-хосте доступность аппаратной виртуализации, старт AVD без окна и получение состояния загрузки через ADB. Текущий preflight смотрит только на наличие и права `/dev/kvm`, а не тестирует ioctl или реальное ускорение. Если официальные AVD не дают нужного видеоканала/графики на поддерживаемых конфигурациях, runtime остаётся заменяемым через `RuntimeCommand`; альтернативу (например, Cuttlefish) надо отдельно проверить по требованиям, образам и лицензиям.
+Waydroid требует подходящий Linux-хост с настроенным Wayland session/D-Bus, Binder support и доступом к GPU render device. `session start` использует окружение desktop-пользователя; текущая оболочка Bonk — X11 и не встраивает Wayland surface. `show-full-ui` открывает UI самого Waydroid, а не выводит кадры внутрь окна Bonk. Runtime/process start не является Android boot/readiness сигналом.
+
+### CLI-лаунчер
+
+- `bonk waydroid [--waydroid /absolute/path]` только читает и печатает session/container status; он не стартует runtime.
+- `bonk waydroid --confirm-start` явно разрешает старт остановленной сессии, ждёт до 120 секунд, пока `waydroid status` покажет running и foreground-процесс останется жив, затем открывает Waydroid full UI. Если сессия уже запущена, Bonk использует её без принятия владения.
+- `--show-ui` открывает UI существующей сессии; `--install-apk /absolute/file.apk --confirm-install` устанавливает только явно выбранный файл; `--launch-package com.example.game` запускает ровно переданный package ID. При любом из этих действий full UI открывается автоматически.
+- Если сессия остановлена, действия без `--confirm-start` завершаются ошибкой и ничего не стартуют. Установка требует отдельного `--confirm-install` для этого APK.
+- Когда Bonk сам стартовал foreground `session start`, процесс лаунчера остаётся активным и супервизирует его до естественного выхода либо Ctrl-C/SIGTERM. При завершении Bonk останавливает только принадлежащую ему process group; Waydroid может остановить общий host container. Для уже работающей внешней сессии Bonk не запускает stop и не удерживает её процесс.
+- CLI не является отдельным графическим интерфейсом, не отображает каталог установленных игр и не встраивает Waydroid surface в X11 окно Bonk.
+
+«Любые игры» технически обещать нельзя: совместимость зависит от ABI и ARM translation, Vulkan/GPU, Google Play Services, Play Integrity, DRM и anti-cheat; отдельные игры могут блокировать контейнер или виртуальное устройство. Первый этап — проверка выбранной игры на целевом железе, а не обещание каталога BlueStacks. Android SDK Emulator остаётся необязательным тестовым backend; Cuttlefish также не выбран как gaming runtime.
 
 ### Границы модулей
 
 ```text
-Лаунчер
-  ├─ запросы start / stop / status
-  ├─ центральная поверхность: кадры Android
-  └─ touch / key input
-       │
-       ▼
-Android bridge (host-side API; IPC лаунчера ещё нет)
-  ├─ EngineSession: владеет только созданным runtime-процессом
-  ├─ Guest monitor: отдельно определяет booting / ready / failure
-  ├─ Frame source: один PNG screenshot → RGBA (не видеопоток)
-  └─ Input sink: tap/key и единичный прямолинейный swipe через ADB (не произвольный путь или joystick)
-       │
-       ▼
-Пользовательский Android SDK Emulator + AVD
+Bonk Browser (текущая desktop оболочка — X11; Waydroid surface не встраивается)
+  └─ host-side Android adapter (IPC лаунчера ещё нет)
+       ├─ EngineSession owns `waydroid session start` foreground child
+       ├─ Waydroid CLI: status / confirmed session start / install / launch / full UI
+       └─ generic ADB helpers остаются для диагностики и SDK Emulator backend
+              │
+              ▼
+Пользовательский Waydroid system service + Android container
+  ├─ host Wayland session + Linux Binder/GPU devices
+  └─ собственное Android UI окно (не видеоканал Bonk)
 ```
 
-`EngineSession::start()` означает только, что ОС создала процесс. `ProcessState::Running` **не** означает, что Android загрузился, что лаунчер получил кадр или что игра запущена. `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()`, `query_installed_package_paths()` и `launch_installed_package()` выполняют отдельные ADB-команды; все требуют явного согласия перед возможным запуском пользовательского ADB server. Настоящий AVD в этой среде отсутствует.
+`EngineSession::start()` означает только, что ОС создала процесс. `start_waydroid_session()` дополнительно проверяет `waydroid status`, отказывается брать уже запущенную сессию и требует подтверждения, потому что запуск/остановка session может затронуть общий Waydroid container. `ProcessState::Running` **не** означает, что Android загрузился или игра готова. Вызовы `list_adb_devices()`, `query_guest_status()`, `wait_for_guest_boot()`, `wait_for_runtime_and_guest_boot()`, `capture_screenshot_rgba()`, `send_tap_normalized()`, `send_swipe_normalized()`, `send_android_key()`, `query_installed_package_paths()` и `launch_installed_package()` остаются отдельными generic ADB-командами и требуют явного ADB-server consent. Waydroid native UI запускается отдельно; кадры и game-control mapping в Bonk пока отсутствуют.
 
 ## Контракт лаунчера
 
@@ -45,9 +52,9 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 
 | Направление | Контракт |
 |---|---|
-| Запуск | `start(profile_id)`; профиль указывает на уже существующий AVD. Ответ содержит отдельные `runtime_state` и `guest_state`. |
+| Запуск | Linux gaming pilot использует установленный пользователем Waydroid и текущий Wayland/D-Bus environment; SDK Emulator/AVD остаётся опциональным тестовым backend. `start_waydroid_session()` не инициализирует images и требует отдельного подтверждения. Ответ содержит отдельные `runtime_state` и `guest_state`. |
 | Остановка | `stop(grace_period)`; сначала штатное завершение, затем явная эскалация. Остановка затрагивает только процессную группу, созданную движком. |
-| Состояние | `Stopped`, `Starting`, `RuntimeRunning`, `GuestBooting`, `Ready`, `Stopping`, `Failed`; поля runtime и guest нельзя смешивать. В текущем коде доступны состояния процесса `stopped/running/exited/failed`; `wait_for_guest_boot()` ограниченно опрашивает ADB до `sys.boot_completed=1`, что всё ещё не означает готовность игры. |
+| Состояние | `Stopped`, `Starting`, `RuntimeRunning`, `GuestBooting`, `Ready`, `Stopping`, `Failed`; поля runtime и guest нельзя смешивать. В текущем коде доступны состояния процесса `stopped/running/exited/failed`; `wait_for_guest_boot()` опрашивает ADB до `sys.boot_completed=1`, а `wait_for_runtime_and_guest_boot()` дополнительно обнаруживает завершение принадлежащего `EngineSession` runtime во время ожидания. Ни один вызов не означает готовность игры и не заменяет непрерывный монитор состояния. |
 | Кадры | Сейчас `capture_screenshot_rgba()` возвращает один декодированный PNG RGBA без sequence/timestamp/rotation; лимит 32 MiB сжатого PNG и 16 777 216 пикселей. Это не видеопоток и не гарантия низкой задержки. Будущий IPC/frame API должен добавить stride, sequence, monotonic timestamp и rotation. |
 | Touch | Есть одиночный tap и прямолинейный swipe через `send_swipe_normalized()`: обе пары координат нормализованы в `[0,1]` и округляются в пиксели `[0,width-1] × [0,height-1]`; swipe длится 1 ms..30 s. ADB shell просит Android синтезировать жест, но доставка Down/Move/Up в приложение не подтверждена live-тестом. Нет caller-controlled событий, произвольной траектории, pointer ID, отмены, multitouch или joystick; letterbox/rotation учитывает вызывающий UI. |
 | Клавиши | Сейчас только одиночный `adb shell input keyevent <numeric-code>` (1..65535); KeyDown/KeyUp, repeat и удержание не реализованы. Не передавать сырые клавиши хоста как Android-коды без явного преобразования. |
@@ -57,9 +64,9 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 
 ### Блокер интеграции со старым Android-агентом
 
-По предоставленному QA-отчёту, старый `TouchAgentService` создаёт `LocalServerSocket(String)` в абстрактном namespace Android, тогда как Python-клиент подключается к файловому pathname. Эти адресации несовместимы; C++-модуль пока не содержит IPC-клиента и не должен подключаться к агенту, пока стороны не согласуют namespace/address, проверку клиента и версию протокола. Нужен явный handshake и проверка peer/прав до передачи команд. **Решение на текущий этап: интеграцию отложить**; C++ host-side API остаётся самостоятельным до появления исходников агента, AVD и тестового APK для совместного smoke test. Источники из отчёта: [TouchAgentService.java](https://github.com/loukiz123-maker/bonk-brauzer-/blob/8d13e22/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java#L88-L118) и [Android LocalServerSocket API](https://developer.android.com/reference/android/net/LocalServerSocket).
+По предоставленному QA-отчёту, старый `TouchAgentService` создаёт `LocalServerSocket(String)` в абстрактном namespace Android, тогда как Python-клиент подключается к файловому pathname. Эти адресации несовместимы; C++-модуль пока не содержит IPC-клиента и не должен подключаться к агенту, пока стороны не согласуют namespace/address, проверку клиента и версию протокола. Нужен явный handshake и проверка peer/прав до передачи команд. **Решение на текущий этап: интеграцию отложить**; C++ host-side API остаётся самостоятельным до появления исходников агента, согласованного IPC-протокола, установленного Waydroid/target host и тестового APK для совместного smoke test. Источники из отчёта: [TouchAgentService.java](https://github.com/loukiz123-maker/bonk-brauzer-/blob/8d13e22/android_agent/app/src/main/java/id/lynxdroid/agent/TouchAgentService.java#L88-L118) и [Android LocalServerSocket API](https://developer.android.com/reference/android/net/LocalServerSocket).
 
-Реализованы построение команды AVD, управление процессом в одном адресном пространстве, проверки выбранных файлов/INI, ADB guest-state query и bounded wait boot, установка выбранного APK, запуск установленного приложения, одиночный PNG snapshot, tap/key и линейный swipe фиксированной длительности. IPC-сокет, автоматический guest monitor, поток кадров и caller-controlled последовательность touch-событий остаются явно незавершёнными.
+Реализованы generic EngineSession, optional SDK Emulator/AVD command builder, Waydroid CLI adapter и CLI-команда `bonk waydroid` (status, explicit session start, selected APK install, exact package launch и full UI), ADB guest-state query и bounded boot wait. IPC-сокет, непрерывный guest monitor, Bonk-integrated frame surface, low-latency video и BlueStacks-style game-control mapping остаются незавершёнными; synthetic CLI flow проверен fake Waydroid process, настоящий Waydroid host и игра не тестировались.
 
 ## Этап 1: выполненная работа
 
@@ -68,8 +75,12 @@ Android bridge (host-side API; IPC лаунчера ещё нет)
 - `include/bonk/android/engine_session.hpp` — типы `RuntimeCommand`, `EmulatorConfig`, `ProcessState`, `SessionStatus` и класс `EngineSession`.
 - `src/android_engine/engine_session.cpp` — `posix_spawn` с явным абсолютным путём (без shell/PATH-поиска), отдельная process group, non-blocking `poll`, `SIGTERM` → `SIGKILL`, сбор exit code/signal и очистка дочернего процесса в деструкторе.
 - `tests/android_engine/engine_session_test.cpp` — тесты командной строки, ошибок отсутствующего executable, повторного запуска, штатного выхода, NUL в аргументах и остановки тестового `/bin/sleep`.
+- `include/bonk/android/waydroid_runtime.hpp` / `src/android_engine/waydroid_runtime.cpp` — абсолютнопутевые argv builders, bounded parser/query `waydroid status`, подтверждённый старт foreground Waydroid session, install выбранного APK, запуск package ID и `show-full-ui`.
+- `tests/android_engine/waydroid_runtime_test.cpp` — Fake Waydroid CLI проверяет status, consent, владение сессией, ожидание состояния и argv операций.
+- `include/bonk/cli/cli.hpp`, `src/cli/cli.cpp`, `src/apps/main.cpp` — команда `bonk waydroid`: status-only по умолчанию, явный consent на старт и APK install, открытие UI, exact package launch и supervision/cleanup принадлежащей процессной группы.
+- `tests/waydroid_cli_test.sh` — synthetic end-to-end проверка собранного CLI: status, отказ без consent, reuse внешней сессии, запуск, APK install, package launch и SIGTERM cleanup. Файл APK синтетический и никогда не передаётся реальному Android.
 
-`make_emulator_command()` только формирует аргументы; он не проверяет и не устанавливает SDK/AVD. Ошибки запуска имеют машинно-читаемые коды `android.*` и текст системной ошибки. Командные аргументы передаются напрямую через `argv`; пользовательские строки не интерпретируются shell.
+`make_emulator_command()` только формирует аргументы; он не проверяет и не устанавливает SDK/AVD. `start_waydroid_session()` требует уже установленный/инициализированный Waydroid, текущую Wayland/D-Bus сессию и отдельное подтверждение; он не скачивает образ и не изменяет систему напрямую. Ошибки запуска имеют машинно-читаемые коды `android.*`; аргументы передаются напрямую через `argv`, пользовательские строки не интерпретируются shell.
 
 ## Этап 2: non-destructive runtime preflight
 
@@ -91,7 +102,7 @@ Preflight не запускает найденные executable, не загру
 
 `list_adb_devices()` не требует выбранного serial: он возвращает строки `adb devices -l` с состояниями, а повторяющийся serial маркирует как `Unknown`, чтобы вызывающий код мог запросить однозначный выбор. `query_guest_status()` отдельно проверяет переданный serial через `adb devices -l`; только для состояния `device` читает `adb -s SERIAL shell getprop sys.boot_completed`. Ответы различают `NotConnected`, `Offline`, `Unauthorized`, `AdbOnline`, `Booting`, `BootComplete` и `Unknown`. `BootComplete` значит только, что свойство Android равно `1`; это не готовность приложения или игры. Эти текстовые ADB-запросы ограничены 64 KiB вывода на поток и таймаутом не более 60 секунд на команду.
 
-Запуск `adb` может автоматически поднять пользовательский ADB server и создать `~/.android/adbkey`. Поэтому `AdbConfig::allow_adb_server_autostart` по умолчанию `false`; каждый API, запускающий ADB, откажет до процесса, пока вызывающий код не выставит `true` после явного согласия пользователя. На этом этапе реальные ADB/AVD отсутствовали.
+Запуск `adb` может автоматически поднять пользовательский ADB server и создать `~/.android/adbkey`. Поэтому `AdbConfig::allow_adb_server_autostart` по умолчанию `false`; каждый API, запускающий ADB, откажет до процесса, пока вызывающий код не выставит `true` после явного согласия пользователя. На этом этапе реальные ADB/AVD/Waydroid отсутствовали.
 
 ## Этап 4: одиночный PNG snapshot и ограниченные команды ввода
 
@@ -106,7 +117,7 @@ Preflight не запускает найденные executable, не загру
 - `include/bonk/image/image.hpp`, `src/image/inflate.cpp`, `src/image/png.cpp`: добавлены лимитированный inflate и overload PNG decode с пределом пикселей; PNG decoder также ограничивает распакованные и RGBA-буферы 256 MiB.
 - `tests/android_engine/adb_client_test.cpp` проверяет fixture PNG и fake ADB executable, точные argv/capture/tap/swipe/key/install/launch, явные install/launch failure reports и bounded boot polling; `tests/image/png_test.cpp` проверяет лимиты inflater/декодера. Fake ADB и `tests/fixtures/logo.png` — только синтетические тестовые данные, не проверка настоящего Android.
 
-Настоящие `adb`, Emulator и AVD в окружении отсутствуют, поэтому нет live-проверки формата кадров и успешной доставки tap/swipe/keyevent на госте. ADB user server может быть запущен при первом вызове; запрет по умолчанию сохраняется.
+Настоящие `adb`, Emulator/AVD и Waydroid в окружении отсутствуют, поэтому нет live-проверки формата кадров и успешной доставки tap/swipe/keyevent на госте. ADB user server может быть запущен при первом вызове; запрет по умолчанию сохраняется.
 
 ## Этап 5: запуск уже установленного приложения
 
@@ -117,14 +128,15 @@ Preflight не запускает найденные executable, не загру
 - Fake ADB проверяет argv, consent gating, явные launch failure строки в обоих потоках и их приоритет над ненулевым exit code, но не подтверждает наличие пакета, выбор launcher activity или успешный запуск в Android.
 - `parse_adb_package_paths_output()` ограничивает текст 64 KiB, принимает только `package:/absolute/path` строки и возвращает guest пути без префикса. Явный `Error: package not found` получает `android.package_not_installed` даже при ненулевом exit code; malformed output, timeout и прочие ошибки остаются ошибками. Пустой вектор означает лишь, что успешный ответ не содержал путей.
 
-Этот API — host-side строительный блок; запуск APK из библиотеки лаунчера и live smoke test остаются отдельными задачами.
+Этот ADB API остаётся самостоятельным host-side строительным блоком для SDK/ADB backend; CLI Waydroid запускает приложения отдельным Waydroid-native adapter через `waydroid app launch`. Реальные package/APK operations и live smoke test на Android всё ещё требуют целевого хоста.
 
 ## Этап 6: bounded ожидание загрузки гостя
 
 - `wait_for_guest_boot()` повторяет guest-state query, пока выбранный serial не сообщит `sys.boot_completed=1`; любые неготовые состояния гостя продолжают опрашиваться до общего дедлайна.
+- `wait_for_runtime_and_guest_boot()` принимает уже запущенный `EngineSession`, проверяет его состояние до и после каждого ADB query и возвращает `android.runtime_exited_during_boot`, если runtime завершился до готовности гостя. Если сессия изначально не запущена, возвращается `android.runtime_not_running`, причём ADB не вызывается. Функция сама не стартует и не останавливает runtime; `EngineSession` остаётся однопоточным и принадлежит вызывающему потоку.
 - По умолчанию общий timeout — 120 s, интервал — 500 ms, timeout каждой ADB-команды — 5 s. Общий timeout ограничен пятью минутами, polling interval — 1 ms..30 s; бюджет одного query уменьшается с учётом того, что он может запустить две ADB-команды. Ошибка timeout содержит последнее наблюдённое состояние.
-- Ожидание не запускает Emulator/AVD и не устанавливает/запускает приложение. `sys.boot_completed=1` — только boot property, а не готовность лаунчера или игры; всё ещё нужен live smoke test.
-- Fake ADB проверяет последовательность `0 → 1`, consent и timeout при отсутствующем serial; это не подтверждение настоящей загрузки Android.
+- Ожидание не запускает Waydroid, Emulator/AVD и не устанавливает/запускает приложение. `sys.boot_completed=1` — только boot property, а не готовность лаунчера или игры; всё ещё нужен live smoke test.
+- Fake ADB проверяет последовательность `0 → 1`, consent и timeout при отсутствующем serial; тесты дополнительной обёртки покрывают отказ до ADB без работающей runtime-сессии, успешное ожидание и раннее завершение процесса. Это не подтверждение настоящей загрузки Android.
 
 ## Этап 7: установка выбранного APK
 
@@ -143,23 +155,24 @@ Preflight не запускает найденные executable, не загру
 
 ### Рассмотренные компоненты (код не копируется и не связывается)
 
-- **Android SDK Emulator / AVD** — внешний пользовательский пакет. Источники: [официальная документация по аргументам emulator](https://developer.android.com/studio/run/emulator-commandline) и [условия Android Studio/SDK](https://developer.android.com/studio/terms). На этом этапе пакет не распространяется; перед любым bundling надо проверить лицензии именно выбранной версии SDK, system image, notices и права на распространение. Пользователь сам выбирает образ и подтверждает применимые условия.
+- **Waydroid** — выбранный Linux runtime-кандидат. [Upstream README](https://github.com/waydroid/waydroid) описывает Android в Linux-контейнере и доступ к host hardware; upstream CLI/session код подтверждает Wayland/D-Bus модель: [session manager](https://github.com/waydroid/waydroid/blob/main/tools/actions/session_manager.py), [app manager](https://github.com/waydroid/waydroid/blob/main/tools/actions/app_manager.py). Репозиторий лицензирован GPL-3.0; Bonk пока только запускает явно выбранный внешний CLI, Waydroid код/images не копирует и не связывает. Перед bundling/distribution нужен отдельный license/dependency review.
+- **Android SDK Emulator / AVD** — внешний пользовательский optional test backend. Источники: [официальная документация по аргументам emulator](https://developer.android.com/studio/run/emulator-commandline) и [условия Android Studio/SDK](https://developer.android.com/studio/terms). На этом этапе пакет не распространяется; перед любым bundling надо проверить лицензии именно выбранной версии SDK, system image, notices и права на распространение. Пользователь сам выбирает образ и подтверждает применимые условия.
 - **QEMU** — проверен текст лицензии в [репозитории QEMU](https://github.com/qemu/qemu/blob/master/LICENSE): QEMU как целое выпущен под GPL version 2; файлы могут иметь дополнительные совместимые лицензии, а распространяемый пакет содержит отдельно лицензируемые компоненты/firmware. QEMU не добавлен и не связывается. Прямое включение или распространение потребует отдельного покомпонентного license review и выполнения условий GPL.
 - **Cuttlefish** — проверен файл [LICENSE проекта](https://github.com/google/android-cuttlefish/blob/main/LICENSE): лицензия задаётся по перечисленным путям/файлам и не является единой лицензией на весь runtime. Cuttlefish не добавлен; перед выбором потребуется аудит всего нужного набора исходников, бинарных компонентов и образов.
 
-Так как код этих компонентов не включён, их copyright/NOTICE файлы в данный этап не копируются. Это не разрешение на их дальнейшее распространение. Установка системного Android-пакета, драйверов, правил устройств или изменение прав `/dev/kvm` автоматически не выполняются.
+Так как код внешних runtime-компонентов не включён, их copyright/NOTICE файлы в данный этап не копируются. Это не разрешение на дальнейшее распространение. Bonk не устанавливает Waydroid, не выполняет `waydroid init`, не скачивает system/vendor images, не вызывает `sudo`, не загружает Binder modules, не меняет device permissions и не меняет `/dev/kvm`.
 
 ## Происхождение образов и ограничения
 
-Образ Android в репозиторий не добавляется. На следующем этапе разрешённый источник по умолчанию — только выбранный пользователем пакет из официального Android SDK Repository; никаких автоматических загрузок при старте. Для каждой AVD-конфигурации нужно сохранять минимум: идентификатор SDK-пакета и версию (например, API level и ABI), путь к system image, Android build fingerprint после загрузки, SDK/образ license/NOTICE, а также SHA-256 полученного пакета или выбранного образа. Если пользователь явно выберет внешний образ, до запуска интерфейс должен запросить происхождение (проект/build ID или URL), показать лицензию и сохранить хэш; неизвестные образы не получать из сети.
+Android images в репозиторий не добавляются. Пользователь самостоятельно устанавливает и инициализирует Waydroid из проверенного источника; никаких автоматических загрузок при старте Bonk нет. Для внешнего/custom image надо сохранить build/channel, происхождение и SHA-256. SDK Emulator/AVD остаётся optional test backend; при его использовании пользователь выбирает официальный SDK package и принимает его лицензию отдельно.
 
 Ограничения, которые должны оставаться видимыми до тестирования:
 
-- Наличие `/dev/kvm`, права пользователя, CPU-виртуализация и возможности host GPU зависят от Linux-машины. Preflight проверяет только видимость устройства и права чтения/записи; ioctl, реальное ускорение и права устройств не меняет.
-- ABI образа важен: x86_64 AVD не гарантирует запуск ARM-only native libraries; наличие ARM translation нельзя предполагать.
-- GPU/Vulkan/OpenGL, разрешение, suspend/resume, аудио и latency требуют отдельной проверки на конкретном host+image.
-- Google Play, Play Integrity, DRM, anti-cheat и правила отдельных приложений могут запрещать или ломать запуск в VM. Никаких игровых APK или Google components в проекте нет.
-- Нет измерений FPS и совместимости с Standoff 2, Free Fire или другими играми; эти свойства не заявлены.
+- Waydroid зависит от конкретной Linux kernel/configuration: Wayland socket, D-Bus session, Binder support, GPU render node и права устройств должны работать. Preflight и live test на реальном desktop-хосте ещё не реализованы.
+- ABI image важен: x86_64 Android environment не гарантирует запуск ARM-only native libraries; наличие совместимого ARM translation слоя нельзя предполагать.
+- GPU/Vulkan/OpenGL, resolution, suspend/resume, audio и latency требуют проверки на конкретном host+image.
+- Google Play Services, Play Integrity, DRM, anti-cheat и политика игры могут блокировать Android container/virtual device. Никаких game APK или Google components в проекте нет.
+- Нет измерений FPS и совместимости со Standoff 2, Free Fire или другими играми. «Любые игры» и преимущества BlueStacks не заявляются без тестов.
 
 ## Безопасное сопоставление раскладок
 
@@ -173,22 +186,50 @@ Preflight не запускает найденные executable, не загру
 
 Эта миграция требует согласования с агентом редактора и в код первого этапа не входит.
 
+## Runbook: первый live smoke test на целевом Linux-хосте
+
+Этот сценарий **не запускался в sandbox**. На тестовом ПК Waydroid должен быть установлен и инициализирован отдельно; выполнять команды от desktop-пользователя внутри его Wayland/D-Bus-сессии. Сначала проверять на выбранном безопасном приложении, затем на конкретной лицензированной игре.
+
+```sh
+make -j2 all
+waydroid status                         # baseline, не меняет состояние
+./build/bonk waydroid                   # Bonk status-only query
+./build/bonk waydroid --confirm-start   # явный старт, UI и foreground supervision
+```
+
+Для уже установленного приложения запусти отдельный процесс команды с точным ID пакета:
+
+```sh
+./build/bonk waydroid --confirm-start --launch-package com.example.game
+```
+
+Для выбранного APK требуются абсолютный путь и отдельное подтверждение именно этого файла:
+
+```sh
+./build/bonk waydroid --confirm-start \
+  --install-apk /absolute/path/game.apk --confirm-install \
+  --launch-package com.example.game
+```
+
+Bonk ждёт только пока `waydroid status` покажет running (до 120 секунд), а не пока Android или игра готовы. При старте Bonk остаётся foreground; Ctrl-C посылает stop только принадлежащей ему process group, что может затронуть общий Waydroid container. Сверь `waydroid status` до и после выхода. Зафиксируй distro/kernel, Waydroid/image version и ABI, GPU/driver, APK/game version и package ID, CLI output, видимый результат запуска и факт остановки. Не считать успешный exit `app launch` доказательством готовности игры.
+
 ## Следующие проверяемые этапы
 
-1. **Live runtime + APK smoke test:** после явного согласия запустить установленный Emulator/ADB и пользовательский AVD, установить явно выбранный тестовый APK и запустить его; проверить guest boot, snapshot и фактическую доставку событий в Android. Для этого необходимы SDK/AVD/тестовый APK и доступный агент.
-2. **Агент ввода и протокол:** до IPC-клиента согласовать исправление расхождения abstract-vs-filesystem socket namespace, проверку клиента и версию handshake с владельцем старого агента. Затем отдельно реализовать/проверить DOWN/MOVE/UP внутри гостя. Одиночный `input swipe` — лишь ограниченный shell-сгенерированный жест, он не заменяет управляемый протоколом сценарий и не является live-проверкой.
-3. **Поток кадров:** измерить latency и выбрать устойчивый кадрный транспорт для игр. Одиночный `adb screencap` не является игровым видеопотоком.
-4. **IPC лаунчера:** согласовать с другим агентом версионированный Unix socket, reconnect, состояния процесса и гостя отдельно, лимиты и тесты некорректных кадров/команд. Не менять внешний вид лаунчера без необходимости.
-5. **Пакетные раскладки:** согласовать добавочную миграцию с редактором, реализовать package-ID lookup, сохранить старые записи и проверить rollback.
-6. **Совместимость/производительность:** только измерения на реальных конфигурациях, лицензированных образах и конкретных приложениях. FPS, Standoff 2, Free Fire, Google Play и ARM-native compatibility не обещаются без отдельных тестов.
+1. **Waydroid live game smoke test:** выполнить runbook выше на реальном Wayland desktop с Binder/GPU и тестовым APK. Нужны настоящий Wayland host, Waydroid image, GPU и APK; текущая sandbox среда их не имеет.
+2. **Game-control mapping:** только после runtime smoke test определить модель клавиатура/мышь → Android touch. DOWN/MOVE/UP, удержания и multitouch требуют подтверждённого input transport; старый агент остаётся заблокирован до согласования namespace/address, проверки клиента и версии протокола.
+3. **Видеоповерхность:** сначала использовать Waydroid own window; если требуется BlueStacks-style embedded surface, выбрать/реализовать Wayland compositor/frame IPC и измерить latency. Одиночный `adb screencap` для игр не годится.
+4. **Linux preflight и владение runtime:** добавить проверки Wayland socket, Waydroid initialization, Binder/GPU и безопасной политики stop/shared-container на целевом distro; не запускать privileged setup автоматически.
+5. **IPC лаунчера:** согласовать версионированный Unix socket, reconnect, раздельные process/guest states, лимиты и тесты некорректных кадров/команд.
+6. **Совместимость/производительность:** тестировать на конкретном лицензированном образе/железе и каждой игре. FPS, Standoff 2, Free Fire, Google Play, anti-cheat и ARM-native compatibility не обещаются без тестов.
 
 ## Проверка
 
 ```sh
 make test TEST_ARGS='--filter=android_'
+make waydroid-cli-test  # synthetic CLI flow; does not require Waydroid
 make verify
 ```
 
-Текущая host-side проверка: `make -j2 verify` — **318 тестов, 0 ошибок**, selftest PASS, `verify: OK`; ASan/UBSan и `-Werror` — `android_` 43/43. Fake ADB/PNG fixtures — синтетические тесты, не live Android.
+Текущая host-side проверка после добавления CLI-лаунчера: `make -j2 verify` — **334 теста, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **334/334**; полный `-Werror verify` (приложение и тесты) — **334/334**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
 
-Тестовый `/bin/sleep` проверяет только lifecycle POSIX-процесса; это не Android-тест. Для реального smoke test нужны установленный пользователем Android SDK Emulator, существующий AVD, тестовый APK и Linux-хост с поддерживаемой виртуализацией. `adb`, `emulator`, AVD и Android agent в текущем checkout/окружении отсутствуют.
+Для реального Waydroid smoke test нужны пользовательская Waydroid установка, Wayland/D-Bus desktop session, Binder и GPU render device, а также выбранный тестовый APK. В sandbox отсутствуют `waydroid`, `adb`, `WAYLAND_DISPLAY`, D-Bus session address, Binder device, GPU render node и `/dev/kvm`; поэтому запуск и игра на настоящем Waydroid host здесь не проверены.

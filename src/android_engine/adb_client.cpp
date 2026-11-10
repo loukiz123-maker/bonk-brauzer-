@@ -354,6 +354,88 @@ Result<GuestStatus> guest_boot_timeout(const GuestStatus* last_status) {
   return Result<GuestStatus>::failure(Error::make("android.guest_boot_timeout", std::move(message)));
 }
 
+Status require_running_runtime(EngineSession* session, bool was_previously_running) {
+  if (session == nullptr) return Status::success();
+  const SessionStatus runtime = session->poll();
+  if (runtime.state == ProcessState::Running) return Status::success();
+
+  std::string message = "Android runtime is not running while waiting for guest boot (state: ";
+  message += to_string(runtime.state);
+  if (runtime.exit_code.has_value()) message += ", exit code: " + std::to_string(*runtime.exit_code);
+  if (runtime.termination_signal.has_value()) {
+    message += ", signal: " + std::to_string(*runtime.termination_signal);
+  }
+  if (!runtime.message.empty()) message += ", detail: " + runtime.message;
+  message += ")";
+  const std::string code = was_previously_running ? "android.runtime_exited_during_boot" : "android.runtime_not_running";
+  return Status::failure(Error::make(code, std::move(message)));
+}
+
+Result<GuestStatus> wait_for_guest_boot_impl(EngineSession* session, const AdbConfig& config,
+                                             std::chrono::milliseconds timeout,
+                                             std::chrono::milliseconds poll_interval,
+                                             std::chrono::milliseconds command_timeout) {
+  if (timeout.count() <= 0 || timeout > kMaxGuestBootWaitTimeout) {
+    return Result<GuestStatus>::failure(
+        Error::make("android.invalid_timeout", "guest boot wait timeout must be between 1 ms and 5 minutes"));
+  }
+  if (poll_interval.count() <= 0 || poll_interval > kMaxGuestBootPollInterval) {
+    return Result<GuestStatus>::failure(
+        Error::make("android.invalid_poll_interval", "guest boot poll interval must be between 1 ms and 30 seconds"));
+  }
+  const Status command_timeout_valid = validate_timeout(command_timeout);
+  if (command_timeout_valid.is_error()) return Result<GuestStatus>::failure(command_timeout_valid.error());
+
+  if (session != nullptr) {
+    const Status runtime_status = require_running_runtime(session, false);
+    if (runtime_status.is_error()) return Result<GuestStatus>::failure(runtime_status.error());
+  }
+
+  const auto deadline = std::chrono::steady_clock::now() + timeout;
+  GuestStatus last_status;
+  bool have_last_status = false;
+  while (true) {
+    if (session != nullptr) {
+      const Status runtime_status = require_running_runtime(session, true);
+      if (runtime_status.is_error()) return Result<GuestStatus>::failure(runtime_status.error());
+    }
+
+    const auto now = std::chrono::steady_clock::now();
+    if (now >= deadline) return guest_boot_timeout(have_last_status ? &last_status : nullptr);
+
+    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
+    // A guest-state query can use up to two ADB processes (devices + getprop).
+    // Halve the remaining budget so both commands fit within the overall wait.
+    const auto query_command_timeout = std::min(command_timeout, remaining / 2);
+    if (query_command_timeout.count() <= 0) {
+      return guest_boot_timeout(have_last_status ? &last_status : nullptr);
+    }
+
+    const Result<GuestStatus> current = query_guest_status(config, query_command_timeout);
+    if (current.is_error()) {
+      if (session != nullptr) {
+        const Status runtime_status = require_running_runtime(session, true);
+        if (runtime_status.is_error()) return Result<GuestStatus>::failure(runtime_status.error());
+      }
+      return Result<GuestStatus>::failure(current.error());
+    }
+    if (session != nullptr) {
+      const Status runtime_status = require_running_runtime(session, true);
+      if (runtime_status.is_error()) return Result<GuestStatus>::failure(runtime_status.error());
+    }
+
+    last_status = current.value();
+    have_last_status = true;
+    if (last_status.state == GuestState::BootComplete) return Result<GuestStatus>::success(last_status);
+
+    const auto after_query = std::chrono::steady_clock::now();
+    if (after_query >= deadline) return guest_boot_timeout(&last_status);
+    const auto sleep_budget = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - after_query);
+    if (sleep_budget.count() <= 0) return guest_boot_timeout(&last_status);
+    std::this_thread::sleep_for(std::min(poll_interval, sleep_budget));
+  }
+}
+
 }  // namespace
 
 std::string_view to_string(GuestState state) noexcept {
@@ -768,44 +850,14 @@ Result<GuestStatus> query_guest_status(const AdbConfig& config, std::chrono::mil
 Result<GuestStatus> wait_for_guest_boot(const AdbConfig& config, std::chrono::milliseconds timeout,
                                         std::chrono::milliseconds poll_interval,
                                         std::chrono::milliseconds command_timeout) {
-  if (timeout.count() <= 0 || timeout > kMaxGuestBootWaitTimeout) {
-    return Result<GuestStatus>::failure(
-        Error::make("android.invalid_timeout", "guest boot wait timeout must be between 1 ms and 5 minutes"));
-  }
-  if (poll_interval.count() <= 0 || poll_interval > kMaxGuestBootPollInterval) {
-    return Result<GuestStatus>::failure(
-        Error::make("android.invalid_poll_interval", "guest boot poll interval must be between 1 ms and 30 seconds"));
-  }
-  const Status command_timeout_valid = validate_timeout(command_timeout);
-  if (command_timeout_valid.is_error()) return Result<GuestStatus>::failure(command_timeout_valid.error());
+  return wait_for_guest_boot_impl(nullptr, config, timeout, poll_interval, command_timeout);
+}
 
-  const auto deadline = std::chrono::steady_clock::now() + timeout;
-  GuestStatus last_status;
-  bool have_last_status = false;
-  while (true) {
-    const auto now = std::chrono::steady_clock::now();
-    if (now >= deadline) return guest_boot_timeout(have_last_status ? &last_status : nullptr);
-
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - now);
-    // A guest-state query can use up to two ADB processes (devices + getprop).
-    // Halve the remaining budget so both commands fit within the overall wait.
-    const auto query_command_timeout = std::min(command_timeout, remaining / 2);
-    if (query_command_timeout.count() <= 0) {
-      return guest_boot_timeout(have_last_status ? &last_status : nullptr);
-    }
-
-    const Result<GuestStatus> current = query_guest_status(config, query_command_timeout);
-    if (current.is_error()) return Result<GuestStatus>::failure(current.error());
-    last_status = current.value();
-    have_last_status = true;
-    if (last_status.state == GuestState::BootComplete) return Result<GuestStatus>::success(last_status);
-
-    const auto after_query = std::chrono::steady_clock::now();
-    if (after_query >= deadline) return guest_boot_timeout(&last_status);
-    const auto sleep_budget = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - after_query);
-    if (sleep_budget.count() <= 0) return guest_boot_timeout(&last_status);
-    std::this_thread::sleep_for(std::min(poll_interval, sleep_budget));
-  }
+Result<GuestStatus> wait_for_runtime_and_guest_boot(EngineSession& session, const AdbConfig& config,
+                                                    std::chrono::milliseconds timeout,
+                                                    std::chrono::milliseconds poll_interval,
+                                                    std::chrono::milliseconds command_timeout) {
+  return wait_for_guest_boot_impl(&session, config, timeout, poll_interval, command_timeout);
 }
 
 }  // namespace bonk::android

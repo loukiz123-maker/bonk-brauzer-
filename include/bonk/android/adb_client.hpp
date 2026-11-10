@@ -147,4 +147,13 @@ struct PixelPoint {
     std::chrono::milliseconds poll_interval = std::chrono::milliseconds{500},
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
 
+/// Like wait_for_guest_boot(), but also polls an already-started EngineSession.
+/// Fails immediately if the runtime is not running, or if it exits during boot
+/// polling. It never starts or stops the runtime process.
+[[nodiscard]] Result<GuestStatus> wait_for_runtime_and_guest_boot(
+    EngineSession& session, const AdbConfig& config,
+    std::chrono::milliseconds timeout = std::chrono::milliseconds{120000},
+    std::chrono::milliseconds poll_interval = std::chrono::milliseconds{500},
+    std::chrono::milliseconds command_timeout = std::chrono::milliseconds{5000});
+
 }  // namespace bonk::android

@@ -3,13 +3,23 @@
 // Exit codes: 0 success, 1 failed check / render error, 2 usage error.
 // Scripts and CI rely on them, so they are covered by tests/cli_test.cpp.
 
+#include <cerrno>
+#include <chrono>
+#include <csignal>
 #include <cstdio>
+#include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
+#include <signal.h>
+
+#include "bonk/android/engine_session.hpp"
+#include "bonk/android/waydroid_runtime.hpp"
 #include "bonk/apps/pipeline.hpp"
 #include "bonk/cli/cli.hpp"
 #include "bonk/core/diag.hpp"
@@ -259,6 +269,217 @@ int run_fetch(const bonk::CliOptions& options) {
   return 0;
 }
 
+volatile std::sig_atomic_t waydroid_stop_requested = 0;
+
+void request_waydroid_stop(int) noexcept { waydroid_stop_requested = 1; }
+
+class WaydroidSignalGuard final {
+ public:
+  WaydroidSignalGuard() = default;
+  WaydroidSignalGuard(const WaydroidSignalGuard&) = delete;
+  WaydroidSignalGuard& operator=(const WaydroidSignalGuard&) = delete;
+
+  ~WaydroidSignalGuard() {
+    if (!installed_) return;
+    (void)::sigaction(SIGINT, &old_interrupt_, nullptr);
+    (void)::sigaction(SIGTERM, &old_terminate_, nullptr);
+  }
+
+  bool install(std::string& error) {
+    struct sigaction action {};
+    action.sa_handler = request_waydroid_stop;
+    ::sigemptyset(&action.sa_mask);
+    action.sa_flags = 0;
+    waydroid_stop_requested = 0;
+    if (::sigaction(SIGINT, &action, &old_interrupt_) != 0) {
+      error = std::string("cannot handle SIGINT: ") + std::strerror(errno);
+      return false;
+    }
+    if (::sigaction(SIGTERM, &action, &old_terminate_) != 0) {
+      const int saved_errno = errno;
+      (void)::sigaction(SIGINT, &old_interrupt_, nullptr);
+      error = std::string("cannot handle SIGTERM: ") + std::strerror(saved_errno);
+      return false;
+    }
+    installed_ = true;
+    return true;
+  }
+
+ private:
+  struct sigaction old_interrupt_ {};
+  struct sigaction old_terminate_ {};
+  bool installed_ = false;
+};
+
+void print_waydroid_status(const bonk::android::WaydroidStatus& status) {
+  std::printf("Waydroid status: session=%.*s, container=%.*s\n",
+              static_cast<int>(bonk::android::to_string(status.session).size()),
+              bonk::android::to_string(status.session).data(),
+              static_cast<int>(bonk::android::to_string(status.container).size()),
+              bonk::android::to_string(status.container).data());
+}
+
+bool waydroid_action_requested(const bonk::CliOptions& options) {
+  return options.waydroid_confirm_start || options.waydroid_show_ui || !options.waydroid_install_apk.empty() ||
+         !options.waydroid_launch_package.empty();
+}
+
+int stop_owned_waydroid(bonk::android::EngineSession& session) {
+  const bonk::Status stopped = session.stop();
+  if (stopped.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", stopped.error().to_string().c_str());
+    return 1;
+  }
+  print("Bonk-managed Waydroid session stopped.\n");
+  return 0;
+}
+
+int wait_for_owned_waydroid(bonk::android::EngineSession& session) {
+  print("Waydroid is running in its own UI. Press Ctrl-C to stop this Bonk-managed session.\n");
+  for (;;) {
+    if (waydroid_stop_requested != 0) return stop_owned_waydroid(session);
+    const bonk::android::SessionStatus runtime = session.poll();
+    if (runtime.state == bonk::android::ProcessState::Running) {
+      std::this_thread::sleep_for(std::chrono::milliseconds{100});
+      continue;
+    }
+    if (runtime.state == bonk::android::ProcessState::Exited && runtime.exit_code.has_value() &&
+        *runtime.exit_code == 0) {
+      print("Waydroid session exited normally.\n");
+      return 0;
+    }
+    if (runtime.state == bonk::android::ProcessState::Failed || runtime.state == bonk::android::ProcessState::Exited) {
+      std::string message = "Waydroid session process ended unexpectedly";
+      if (runtime.exit_code.has_value()) message += " with exit code " + std::to_string(*runtime.exit_code);
+      if (runtime.termination_signal.has_value()) {
+        message += " after signal " + std::to_string(*runtime.termination_signal);
+      }
+      if (!runtime.message.empty()) message += ": " + runtime.message;
+      std::fprintf(stderr, "bonk: %s\n", message.c_str());
+      return 1;
+    }
+    if (runtime.state == bonk::android::ProcessState::Stopped) {
+      print("Waydroid session stopped.\n");
+      return 0;
+    }
+  }
+}
+
+int run_waydroid(const bonk::CliOptions& options) {
+  const bonk::android::WaydroidConfig config{options.waydroid_executable};
+  const bonk::Result<bonk::android::RuntimeCommand> status_command =
+      bonk::android::make_waydroid_status_command(config);
+  if (status_command.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", status_command.error().to_string().c_str());
+    return 2;
+  }
+  if (!options.waydroid_install_apk.empty()) {
+    const std::filesystem::path selected_apk{options.waydroid_install_apk};
+    const bonk::Result<bonk::android::RuntimeCommand> install_command =
+        bonk::android::make_waydroid_install_apk_command(config, selected_apk);
+    if (install_command.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", install_command.error().to_string().c_str());
+      return 2;
+    }
+    std::error_code file_status_error;
+    if (!std::filesystem::is_regular_file(selected_apk, file_status_error) || file_status_error) {
+      std::fprintf(stderr, "bonk: selected APK path is not an existing regular file\n");
+      return 1;
+    }
+    std::ifstream apk_file{selected_apk, std::ios::binary};
+    if (!apk_file) {
+      std::fprintf(stderr, "bonk: selected APK file is not readable\n");
+      return 1;
+    }
+  }
+  if (!options.waydroid_launch_package.empty()) {
+    const bonk::Result<bonk::android::RuntimeCommand> launch_command =
+        bonk::android::make_waydroid_launch_package_command(config, options.waydroid_launch_package);
+    if (launch_command.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", launch_command.error().to_string().c_str());
+      return 2;
+    }
+  }
+
+  const bonk::Result<bonk::android::WaydroidStatus> initial = bonk::android::query_waydroid_status(config);
+  if (initial.is_error()) {
+    std::fprintf(stderr, "bonk: %s\n", initial.error().to_string().c_str());
+    return 1;
+  }
+  print_waydroid_status(initial.value());
+  if (!waydroid_action_requested(options)) return 0;
+
+  bonk::android::EngineSession owned_session;
+  WaydroidSignalGuard signal_guard;
+  bool owns_session = false;
+  if (initial.value().session == bonk::android::WaydroidState::Stopped) {
+    if (!options.waydroid_confirm_start) {
+      std::fprintf(stderr,
+                   "bonk: Waydroid is stopped. Re-run with --confirm-start to explicitly start the host session.\n");
+      return 1;
+    }
+    std::string signal_error;
+    if (!signal_guard.install(signal_error)) {
+      std::fprintf(stderr, "bonk: %s\n", signal_error.c_str());
+      return 1;
+    }
+    const bonk::Status started = bonk::android::start_waydroid_session(owned_session, config, true);
+    if (started.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", started.error().to_string().c_str());
+      return 1;
+    }
+    owns_session = true;
+    print("Starting the explicitly confirmed Waydroid session...\n");
+    const bonk::Result<bonk::android::WaydroidStatus> ready =
+        bonk::android::wait_for_waydroid_session(owned_session, config);
+    if (ready.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", ready.error().to_string().c_str());
+      return 1;
+    }
+    print_waydroid_status(ready.value());
+  } else if (initial.value().session == bonk::android::WaydroidState::Unknown) {
+    std::fprintf(stderr, "bonk: cannot use Waydroid because its session state is unknown\n");
+    return 1;
+  } else if (options.waydroid_confirm_start) {
+    print("An existing Waydroid session is already running; Bonk will not take ownership of it.\n");
+  }
+
+  if (waydroid_stop_requested != 0 && owns_session) return stop_owned_waydroid(owned_session);
+
+  const bool show_ui = options.waydroid_show_ui || options.waydroid_confirm_start ||
+                       !options.waydroid_install_apk.empty() || !options.waydroid_launch_package.empty();
+  if (show_ui) {
+    const bonk::Status shown = bonk::android::show_waydroid_full_ui(config);
+    if (shown.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", shown.error().to_string().c_str());
+      return 1;
+    }
+    print("Waydroid full UI opened.\n");
+    if (waydroid_stop_requested != 0 && owns_session) return stop_owned_waydroid(owned_session);
+  }
+  if (!options.waydroid_install_apk.empty()) {
+    const bonk::Status installed = bonk::android::install_waydroid_selected_apk(
+        config, options.waydroid_install_apk, options.waydroid_confirm_install);
+    if (installed.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", installed.error().to_string().c_str());
+      return 1;
+    }
+    std::printf("Waydroid install command completed for %s.\n", options.waydroid_install_apk.c_str());
+    if (waydroid_stop_requested != 0 && owns_session) return stop_owned_waydroid(owned_session);
+  }
+  if (!options.waydroid_launch_package.empty()) {
+    const bonk::Status launched = bonk::android::launch_waydroid_package(config, options.waydroid_launch_package);
+    if (launched.is_error()) {
+      std::fprintf(stderr, "bonk: %s\n", launched.error().to_string().c_str());
+      return 1;
+    }
+    std::printf("Waydroid launch command completed for %s.\n", options.waydroid_launch_package.c_str());
+  }
+
+  if (!owns_session) return 0;
+  return wait_for_owned_waydroid(owned_session);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -318,6 +539,9 @@ int main(int argc, char** argv) {
       print(out);
       return 0;
     }
+
+    case bonk::Command::Waydroid:
+      return run_waydroid(options);
 
     case bonk::Command::SelfTest: {
       const bonk::SelfTestReport report = bonk::run_self_test();

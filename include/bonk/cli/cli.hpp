@@ -8,6 +8,7 @@
 //   bonk modules --stage 2             roadmap introspection
 //   bonk version --full                version + toolchain
 //   bonk selftest                      runtime invariants
+//   bonk waydroid --confirm-start      launch an installed Waydroid session
 //
 // Parsing lives in a library (not in main.cpp) so it can be unit tested without
 // spawning processes.
@@ -22,7 +23,7 @@
 
 namespace bonk {
 
-enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View, Js };
+enum class Command { Help, Version, Modules, SelfTest, Render, DumpDom, Fetch, View, Js, Waydroid };
 
 std::string_view command_name(Command command);
 
@@ -48,6 +49,16 @@ struct CliOptions {
   float scroll = 0.0f;      // initial scroll offset (CSS px)
   int click_x = -1;         // >= 0 together with click_y: click before screenshotting
   int click_y = -1;
+
+  // Waydroid Linux gaming runtime. Starts a host-owned Android session only
+  // after explicit confirmation; optional APK installation needs its own flag.
+  std::string waydroid_executable = "/usr/bin/waydroid";
+  bool waydroid_executable_explicit = false;
+  std::string waydroid_install_apk;
+  std::string waydroid_launch_package;
+  bool waydroid_confirm_start = false;
+  bool waydroid_confirm_install = false;
+  bool waydroid_show_ui = false;
 
   std::vector<std::string> positionals;
 };

@@ -392,6 +392,47 @@ BONK_TEST(android_adb, times_out_with_last_guest_state_when_boot_does_not_comple
   CHECK(status.error().message.find("not-connected") != std::string::npos);
 }
 
+BONK_TEST(android_adb, requires_a_running_runtime_before_querying_guest_boot) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  android::EngineSession session;
+
+  const Result<android::GuestStatus> status = android::wait_for_runtime_and_guest_boot(
+      session, fake.config(), std::chrono::seconds{1}, std::chrono::milliseconds{5}, std::chrono::milliseconds{250});
+  REQUIRE(status.is_error());
+  CHECK_EQ(status.error().code, std::string("android.runtime_not_running"));
+  CHECK(fake.arguments().empty());
+}
+
+BONK_TEST(android_adb, waits_for_guest_boot_and_keeps_runtime_process_separate) {
+  FakeAdb fake{true};
+  REQUIRE(fake.ready());
+  android::EngineSession session;
+  REQUIRE(session.start({"/bin/sleep", {"30"}}).is_ok());
+
+  const Result<android::GuestStatus> status = android::wait_for_runtime_and_guest_boot(
+      session, fake.config(), std::chrono::seconds{1}, std::chrono::milliseconds{5}, std::chrono::milliseconds{250});
+  REQUIRE(status.is_ok());
+  CHECK(status.value().state == android::GuestState::BootComplete);
+  CHECK(session.poll().state == android::ProcessState::Running);
+  CHECK_EQ(fake.boot_query_count(), std::string("2"));
+  REQUIRE(session.stop().is_ok());
+}
+
+BONK_TEST(android_adb, returns_early_when_runtime_exits_during_guest_boot_wait) {
+  FakeAdb fake;
+  REQUIRE(fake.ready());
+  android::EngineSession session;
+  REQUIRE(session.start({"/bin/sleep", {"0.25"}}).is_ok());
+
+  const Result<android::GuestStatus> status = android::wait_for_runtime_and_guest_boot(
+      session, fake.config(), std::chrono::seconds{2}, std::chrono::milliseconds{5}, std::chrono::milliseconds{250});
+  REQUIRE(status.is_error());
+  CHECK_EQ(status.error().code, std::string("android.runtime_exited_during_boot"));
+  CHECK(status.error().message.find("exit code: 0") != std::string::npos);
+  CHECK(session.snapshot().state == android::ProcessState::Exited);
+}
+
 BONK_TEST(android_adb, decodes_a_bounded_png_screenshot_and_checks_chunk_checksums) {
   const std::string png = read_binary("tests/fixtures/logo.png");
   REQUIRE(!png.empty());

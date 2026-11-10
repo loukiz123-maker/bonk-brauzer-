@@ -46,7 +46,7 @@ APP_OBJ    := $(APP_SRC:%.cpp=$(BUILD_DIR)/obj/%.o)
 TEST_OBJ   := $(TEST_SRC:%.cpp=$(BUILD_DIR)/obj/%.o)
 DEP        := $(LIB_OBJ:.o=.d) $(APP_OBJ:.o=.d) $(TEST_OBJ:.o=.d)
 
-.PHONY: all test verify run docs docs-check selftest clean info help
+.PHONY: all test verify run docs docs-check selftest waydroid-cli-test clean info help
 
 all: $(BIN) $(TESTS_BIN)
 
@@ -80,7 +80,10 @@ docs-check: $(BIN)
 	@diff -u docs/modules.generated.md $(BUILD_DIR)/modules.generated.md || \
 	  (echo "docs/modules.generated.md is stale: run 'make docs'"; exit 1)
 
-verify: test selftest docs-check
+waydroid-cli-test: $(BIN)
+	./tests/waydroid_cli_test.sh ./$(BIN)
+
+verify: test selftest docs-check waydroid-cli-test
 	@echo "verify: OK"
 
 info:
