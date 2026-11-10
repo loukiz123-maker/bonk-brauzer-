@@ -68,7 +68,11 @@ class EngineSession final {
   [[nodiscard]] SessionStatus poll();
 
   /// Gracefully stops the owned process group, escalating to SIGKILL on timeout.
-  /// Calling stop when there is no owned child is a no-op.
+  /// The grace period applies to the runtime process itself; once it is gone,
+  /// anything left in its process group is killed, so a successful stop never
+  /// leaves helper processes behind. Calling stop when there is no owned child
+  /// is a no-op (members of a group whose runtime exited on its own are not
+  /// tracked any more).
   [[nodiscard]] Status stop(std::chrono::milliseconds grace_period = std::chrono::milliseconds{1500});
 
   /// Last observed status; call poll() to refresh a running process.

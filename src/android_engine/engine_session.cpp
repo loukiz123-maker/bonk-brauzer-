@@ -28,6 +28,22 @@ std::string system_error_message(std::string_view action, int error_number) {
   return message;
 }
 
+/// True once the process-group leader has terminated, without reaping it.
+///
+/// WNOWAIT leaves the leader as a zombie, so its PID -- which is also the ID of
+/// the process group this session created -- cannot be recycled yet. That keeps
+/// a follow-up kill(-pid, ...) aimed at our own group and nobody else's.
+/// A wait error also returns true so the caller's poll() reports it.
+bool leader_exit_is_pending(int process_id) noexcept {
+  siginfo_t info{};
+  int result = -1;
+  do {
+    info.si_pid = 0;
+    result = ::waitid(P_PID, static_cast<id_t>(process_id), &info, WEXITED | WNOHANG | WNOWAIT);
+  } while (result < 0 && errno == EINTR);
+  return result < 0 || info.si_pid != 0;
+}
+
 }  // namespace
 
 Result<RuntimeCommand> make_emulator_command(const EmulatorConfig& config) {
@@ -219,44 +235,43 @@ Status EngineSession::stop(std::chrono::milliseconds grace_period) {
 
   const int term_error = send_to_process_group(SIGTERM);
   const auto term_deadline = std::chrono::steady_clock::now() + grace_period;
-  while (child_pid_ > 0 && std::chrono::steady_clock::now() < term_deadline) {
-    (void)poll();
-    if (child_pid_ <= 0) {
-      return status_.state == ProcessState::Failed
-                 ? Status::failure(Error::make("android.wait_failed", status_.message))
-                 : Status::success();
-    }
+
+  // Wait for the leader without reaping it (see leader_exit_is_pending).
+  bool leader_exited = leader_exit_is_pending(process_id);
+  while (!leader_exited && std::chrono::steady_clock::now() < term_deadline) {
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    leader_exited = leader_exit_is_pending(process_id);
   }
 
-  if (child_pid_ <= 0) {
-    return status_.state == ProcessState::Failed
-               ? Status::failure(Error::make("android.wait_failed", status_.message))
-               : Status::success();
-  }
-
+  // Nothing in the owned group may outlive stop(). Either the grace period ran
+  // out, or the leader is gone and only helpers that ignored SIGTERM (or were
+  // still shutting down) can remain. Returning "stopped" while they keep
+  // running would leak runtime processes that nothing owns any more.
   const int kill_error = send_to_process_group(SIGKILL);
-  if (kill_error != 0) {
+  if (kill_error != 0 && !leader_exited) {
     const std::string message = system_error_message("cannot force-stop runtime process group", kill_error);
     (void)fail("android.stop_failed", message);
     return Status::failure(Error::make("android.stop_failed", message));
   }
 
   const auto kill_deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  (void)poll();
   while (child_pid_ > 0 && std::chrono::steady_clock::now() < kill_deadline) {
-    (void)poll();
-    if (child_pid_ <= 0) {
-      return status_.state == ProcessState::Failed
-                 ? Status::failure(Error::make("android.wait_failed", status_.message))
-                 : Status::success();
-    }
     std::this_thread::sleep_for(std::chrono::milliseconds{5});
+    (void)poll();
   }
 
   if (child_pid_ <= 0) {
-    return status_.state == ProcessState::Failed
-               ? Status::failure(Error::make("android.wait_failed", status_.message))
-               : Status::success();
+    if (status_.state == ProcessState::Failed) {
+      return Status::failure(Error::make("android.wait_failed", status_.message));
+    }
+    if (kill_error != 0) {
+      const std::string message =
+          system_error_message("runtime exited, but the rest of its process group could not be stopped", kill_error);
+      (void)fail("android.stop_failed", message);
+      return Status::failure(Error::make("android.stop_failed", message));
+    }
+    return Status::success();
   }
 
   std::string message = "runtime process did not exit within 2 seconds after SIGKILL";
