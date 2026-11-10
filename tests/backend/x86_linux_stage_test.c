@@ -24,6 +24,8 @@ int main(void) {
     image[0x211] = 1;
     le16(image + 0x236, 1);
     le32(image + 0x238, 2048);
+    le32(image + 0x230, 0x1000);
+    image[0x234] = 1; /* relocatable */
     le32(image + 0x260, 65536);
     memset(image + setup, 0xa5, code);
     assert(lynx_linux_inspect(image, image_size, &info) == 0);
@@ -37,6 +39,13 @@ int main(void) {
     assert(lynx_linux_stage(&ram, image, image_size, &info) == -1);
     assert(backing[LYNX_LINUX_SETUP_ADDRESS] == 0 && backing[LYNX_LINUX_KERNEL_ADDRESS] == 0);
     le32(image + 0x260, 65536);
+    le32(image + 0x258, 0x1f8000); /* runtime extends beyond RAM */
+    assert(lynx_linux_stage(&ram, image, image_size, &info) == -1);
+    assert(backing[LYNX_LINUX_SETUP_ADDRESS] == 0);
+    le32(image + 0x258, 0);
+    le32(image + 0x230, 3); /* invalid alignment */
+    assert(lynx_linux_stage(&ram, image, image_size, &info) == -1);
+    le32(image + 0x230, 0x1000);
     assert(lynx_linux_stage(&ram, image, image_size - 1, &info) == -1);
     assert(backing[LYNX_LINUX_SETUP_ADDRESS] == 0);
     assert(lynx_linux_stage(&ram, backing, ram.size, &info) == -1);

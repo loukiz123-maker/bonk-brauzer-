@@ -20,6 +20,9 @@ struct lynx_linux_image {
     uint16_t xloadflags;
     uint32_t cmdline_max;
     uint32_t init_size;
+    uint32_t kernel_alignment;
+    uint64_t preferred_address;
+    uint8_t relocatable;
     size_t setup_bytes;
     size_t kernel_bytes;
 };
@@ -31,6 +34,10 @@ static inline uint16_t lynx_le16(const uint8_t *p) {
 static inline uint32_t lynx_le32(const uint8_t *p) {
     return (uint32_t)p[0] | ((uint32_t)p[1] << 8) |
            ((uint32_t)p[2] << 16) | ((uint32_t)p[3] << 24);
+}
+
+static inline uint64_t lynx_le64(const uint8_t *p) {
+    return (uint64_t)lynx_le32(p) | ((uint64_t)lynx_le32(p + 4) << 32);
 }
 
 /* Recognize a deliberately narrow subset, without asserting authenticity. */
@@ -53,6 +60,9 @@ static inline int lynx_linux_inspect(const uint8_t *image, size_t length,
         .xloadflags = lynx_le16(image + 0x236),
         .cmdline_max = lynx_le32(image + 0x238),
         .init_size = lynx_le32(image + 0x260),
+        .kernel_alignment = lynx_le32(image + 0x230),
+        .preferred_address = lynx_le64(image + 0x258),
+        .relocatable = image[0x234],
         .setup_bytes = setup_bytes,
         .kernel_bytes = (size_t)kernel_bytes,
     };
@@ -75,10 +85,19 @@ static inline int lynx_linux_stage(struct lynx_guest_memory *ram, const uint8_t 
                                    size_t length, struct lynx_linux_image *info) {
     struct lynx_linux_image parsed;
     if (!ram || !ram->host || !info || lynx_linux_inspect(image, length, &parsed) < 0) return -1;
-    size_t kernel_reservation = parsed.kernel_bytes;
-    if (parsed.init_size > kernel_reservation) kernel_reservation = parsed.init_size;
-    if (!lynx_guest_range_valid(ram, LYNX_LINUX_SETUP_ADDRESS, parsed.setup_bytes) ||
-        !lynx_guest_range_valid(ram, LYNX_LINUX_KERNEL_ADDRESS, kernel_reservation) ||
+    /* init_size applies at the kernel runtime address, not necessarily 1 MiB. */
+    uint64_t runtime = parsed.preferred_address;
+    if (parsed.relocatable) {
+        uint64_t alignment = parsed.kernel_alignment;
+        if (!alignment || (alignment & (alignment - 1))) return -1;
+        if (runtime < LYNX_LINUX_KERNEL_ADDRESS) runtime = LYNX_LINUX_KERNEL_ADDRESS;
+        if (runtime > UINT64_MAX - (alignment - 1)) return -1;
+        runtime = (runtime + alignment - 1) & ~(alignment - 1);
+    }
+    if (runtime < LYNX_LINUX_KERNEL_ADDRESS || !parsed.init_size ||
+        !lynx_guest_range_valid(ram, LYNX_LINUX_SETUP_ADDRESS, parsed.setup_bytes) ||
+        !lynx_guest_range_valid(ram, LYNX_LINUX_KERNEL_ADDRESS, parsed.kernel_bytes) ||
+        !lynx_guest_range_valid(ram, runtime, parsed.init_size) ||
         lynx_ranges_overlap((uintptr_t)ram->host, ram->size, (uintptr_t)image, length) ||
         lynx_ranges_overlap((uintptr_t)ram->host, ram->size, (uintptr_t)info, sizeof(*info)) ||
         lynx_ranges_overlap((uintptr_t)image, length, (uintptr_t)info, sizeof(*info)) ||
