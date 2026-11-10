@@ -52,7 +52,7 @@ These layers are now represented explicitly in `include/bonk/android/engine_stat
 - **Runtime adapter:** Waydroid-specific status/start/UI/install/launch commands. It does not own Android boot semantics or change host configuration.
 - **Guest bridge:** ADB transport selection, guest boot polling, package and input operations. ADB server auto-start remains a separate explicit consent boundary.
 - **Frame provider:** future source of frames with width, height, pixel format, stride, rotation, sequence, and monotonic timestamp. Keep frame bytes separate from control messages; don't base64 a video stream into JSON.
-- **Input provider:** future abstract actions (tap, path/gesture, key-down/up, cancellation, pointer identity). The current ADB shell implementation is a coarse prototype, not a low-latency game-control transport.
+- **Input provider:** validated, typed actions (`input_action.hpp`): tap, straight-line swipe with bounded duration, single key code. Each action carries the guest viewport it was captured against and a caller-assigned sequence. Still coarse: no path gestures, key-down/up, pointer identity, or cancellation, and `observed_in_guest` stays false until an in-guest witness reports the action.
 - **Profile storage/UI:** package-ID-based profiles and safe persistence/deletion are a separate layer. Do not edit the QA-owned profile validation, web preview persistence, or agent file-deletion areas in this branch.
 - **IPC:** a private local Unix-domain transport is a candidate only. Before defining or connecting a protocol, agree versioning, message schema, socket namespace/address, peer authentication, limits, timeout/reconnect rules, and ownership. No unauthenticated TCP listener.
 

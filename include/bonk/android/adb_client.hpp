@@ -106,6 +106,13 @@ struct PixelPoint {
     const AdbConfig& config, std::string_view package_name,
     std::chrono::milliseconds command_timeout = std::chrono::milliseconds{15000});
 
+/// Runs one already-validated ADB command through the same consent, timeout,
+/// truncation and exit-status checks as the typed helpers. Callers must obtain
+/// consent through `config.allow_adb_server_autostart` exactly like the typed
+/// helpers do. Use a typed helper where one exists.
+[[nodiscard]] Status run_adb(const AdbConfig& config, const RuntimeCommand& command,
+                            std::chrono::milliseconds command_timeout);
+
 /// Builds `adb -s SERIAL shell dumpsys activity activities`. The output is a
 /// dump, so callers must not treat a nonzero exit as "app not running".
 [[nodiscard]] Result<RuntimeCommand> make_adb_foreground_activity_command(const AdbConfig& config);

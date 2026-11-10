@@ -260,6 +260,24 @@ start-session -> wait-for-session -> [probe-guest] -> open-ui
 
 Синтетический CLI-тест проверяет оба исхода (resumed — игра, resumed — лаунчер) и мутационная проверка подтвердила, что тест падает, если парсер начинает подтверждать без свидетеля. Это всё ещё **не** live-проверка: fake ADB не является Android-гостем.
 
+## Input provider: валидированные действия
+
+Ввод моделируется как типизированное действие (`include/bonk/android/input_action.hpp`), а не как набор координат и пауз:
+
+| Действие | Требует | Отклоняется |
+|---|---|---|
+| `make_tap(viewport, x, y)` | захваченный viewport 1..16384 px; `x,y` конечные в `[0,1]` | нулевой/полузаданный/огромный viewport (`android.invalid_viewport`), NaN/∞ или выход за `[0,1]` (`android.invalid_coordinates`) |
+| `make_swipe(viewport, start, end, duration)` | то же плюс `duration` 1 ms..30 s | те же коды плюс `android.invalid_gesture_duration` |
+| `make_key(code)` | `code` 1..65535 | `android.invalid_key_code` |
+
+- Действие несёт **viewport, против которого оно было снято**. При смене разрешения/поворота нужно построить новое действие; старая нормализованная точка не «переедет» молча в другое место.
+- `build_input_command()` сам валидирует действие, поэтому обойти проверку, собрав команду напрямую, нельзя.
+- `send_input_action()` возвращает структуру с `command_sent` и `observed_in_guest`. После успешного `adb shell input` `command_sent=yes`, а `observed_in_guest` **остаётся `false`**: транспорт принял запрос, но никто внутри Android его не подтвердил.
+- Отправка требует ADB-consent, как и остальные ADB-вызовы; без него процесс не запускается.
+- `sequence` передаётся вызывающим кодом, чтобы позже сопоставить принятое действие со свидетельством из гостя.
+
+Таким образом слой `input` в engine snapshot — про транспорт, а не про доставку в игру. Gate «событие ввода внутри Android» остаётся открытым до появления test-app/agent, который запишет полученный tap/swipe/key.
+
 ## Runbook: первый live smoke test на целевом Linux-хосте
 
 Этот сценарий **не запускался в sandbox**. На тестовом ПК Waydroid должен быть установлен и инициализирован отдельно; выполнять команды от desktop-пользователя внутри его Wayland/D-Bus-сессии. Сначала проверять на выбранном безопасном приложении, затем на конкретной лицензированной игре.
@@ -314,7 +332,7 @@ make waydroid-cli-test  # synthetic CLI flow; does not require Waydroid
 make verify
 ```
 
-Текущая host-side проверка после добавления foreground-подтверждения: `make -j2 verify` — **365 тестов, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **365/365**; полный `-Werror verify` (приложение и тесты) — **365/365**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
+Текущая host-side проверка после добавления input provider: `make -j2 verify` — **377 тестов, 0 ошибок**, selftest PASS, synthetic CLI end-to-end PASS, `verify: OK`; ASan/UBSan — **377/377**; полный `-Werror verify` (приложение и тесты) — **377/377**. Fake Waydroid/ADB, synthetic APK и PNG fixtures не являются live Android или game compatibility tests.
 
 Исправленная гонка в bounded boot wait: при исчерпанном общем бюджете ожидание больше не запускает ADB-процесс с ~1 ms и не сообщает `android.adb_timeout` вместо `android.guest_boot_timeout`. Если remaining budget меньше 20 ms, ожидание сразу возвращает session/boot timeout; если таймаут вызван общим deadline (`query_command_timeout < command_timeout`), он также классифицируется как expiration ожидания. Тест `android_adb.exhausted_budget_reports_boot_timeout_not_a_transport_error` и повторные прогоны под CPU-нагрузкой это закрепляют.
 

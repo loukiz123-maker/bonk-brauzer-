@@ -451,6 +451,17 @@ Result<GuestStatus> wait_for_guest_boot_impl(EngineSession* session, const AdbCo
 
 }  // namespace
 
+Status run_adb(const AdbConfig& config, const RuntimeCommand& command, std::chrono::milliseconds command_timeout) {
+  const Status timeout_valid = validate_timeout(command_timeout);
+  if (timeout_valid.is_error()) return timeout_valid;
+  const Status config_valid = validate_adb_executable(config);
+  if (config_valid.is_error()) return config_valid;
+  const Status consent = require_server_consent(config);
+  if (consent.is_error()) return consent;
+  const Result<CommandOutput> output = run_adb(command, command_timeout);
+  return output.status();
+}
+
 std::string_view to_string(GuestState state) noexcept {
   switch (state) {
     case GuestState::NotConnected:
